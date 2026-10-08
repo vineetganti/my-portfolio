@@ -1,0 +1,70 @@
+@import "tailwindcss";
+@config "../../tailwind.config.mts";
+@plugin "@tailwindcss/typography";
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #f5f0e8;
+  color: #1a1a1a;
+}
+
+::selection {
+  background-color: #c44d2b;
+  color: #f5f0e8;
+}
+
+/* Prose overrides for blog posts */
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--font-dm-serif), Georgia, serif;
+  color: #1a1a1a;
+}
+
+.prose a {
+  color: #c44d2b;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose a:hover {
+  color: #a33d20;
+}
+
+.prose code {
+  font-family: var(--font-space-mono), "Courier New", monospace;
+  background-color: #ebe5da;
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  font-size: 0.875em;
+}
+
+.prose pre {
+  background-color: #1a1a1a !important;
+  border: 1px solid #d9d3c7;
+  border-radius: 6px;
+}
+
+.prose pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+.prose blockquote {
+  border-left-color: #c44d2b;
+  color: #6b6560;
+  font-style: italic;
+}
+
+.prose img {
+  border-radius: 6px;
+  border: 1px solid #d9d3c7;
+}
+
+.prose hr {
+  border-color: #d9d3c7;
+}

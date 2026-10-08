@@ -1,0 +1,42 @@
+---
+title: "Building My First LLM Scheduler"
+description: "A deep dive into how I built a simple task scheduler powered by a large language model, and what I learned along the way."
+date: "2024-12-15"
+tags: ["AI", "Python", "Projects"]
+---
+
+Building something with LLMs for the first time felt like stepping into a new world. Here's how I approached building a simple task scheduler that uses natural language to create and manage tasks.
+
+## The Idea
+
+I wanted a tool where I could type something like "remind me to call the dentist next Tuesday at 3pm" and have it just work — no forms, no dropdowns, just plain English.
+
+## How It Works
+
+The architecture is straightforward:
+
+1. **Parse** the natural language input using an LLM
+2. **Extract** the structured data (task, date, time, priority)
+3. **Store** it in a simple SQLite database
+4. **Notify** when the time comes
+
+```python
+def parse_task(user_input: str) -> dict:
+    """Use an LLM to extract task details from natural language."""
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_input}
+        ]
+    )
+    return json.loads(response.choices[0].message.content)
+```
+
+## What I Learned
+
+The biggest lesson was that **prompt engineering matters more than code complexity**. Getting the LLM to consistently return well-structured JSON took more iteration than writing the scheduler logic itself.
+
+> Start simple, iterate fast, and don't over-engineer on the first pass.
+
+I'll share more about the notification system in a follow-up post. If you're interested in the code, check out the project on GitHub.
