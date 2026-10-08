@@ -3,12 +3,12 @@ import { Code2, ExternalLink, Mail } from "lucide-react";
 const SOCIAL_LINKS = [
   {
     label: "GitHub",
-    href: "https://github.com/yourusername",
+    href: "https://github.com/vineetganti",
     icon: Code2,
   },
   {
     label: "LinkedIn",
-    href: "https://linkedin.com/in/yourusername",
+    href: "https://linkedin.com/in/vineetganti",
     icon: ExternalLink,
   },
   {
