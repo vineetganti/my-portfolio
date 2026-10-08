@@ -39,7 +39,7 @@ export default function AboutPage() {
             vineetganti@gmail.com
           </a>
           <a
-            href="https://github.com/yourusername"
+            href="https://github.com/vineetganti"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 font-mono text-sm text-ink-muted hover:text-accent transition-colors"
@@ -48,7 +48,7 @@ export default function AboutPage() {
             GitHub
           </a>
           <a
-            href="https://linkedin.com/in/yourusername"
+            href="https://linkedin.com/in/vineetganti"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 font-mono text-sm text-ink-muted hover:text-accent transition-colors"
