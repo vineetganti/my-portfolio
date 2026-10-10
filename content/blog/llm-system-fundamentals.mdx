@@ -1,34 +1,31 @@
 ---
-title: "My learning experience with Mentiforce - Fundamentals of LLMs - 01"
+title: "LLM Architecture with Mentiforce - Python Internals - 01"
 description: "A walkthrough of what I learnt during Phase 1 of learning about LLM architectures."
-date: "2026-10-08"
+date: "2026-10-10"
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 ## Why this post
 During mid 2025, i started my journey learning about LLM internals and that is when i stumbled upon Mentiforce through a reddit post.
-Through these series of blog posts mentioning Mentiforce, I intend to walk though my learnings covering basics from Python language internals 
+Through these series of blog posts mentioning Mentiforce in the title, I intend to walk though my learnings covering basics from Python language internals
 to vLLM framework and inference engine design. Part of the content would be AI generated supporting the notes i have written. 
 
 The first post (this one) covers the following topics:
-1. Python
+Python
     - What is Python? Why do inference frameworks choose it?
     - Python and the OS: process, memory, syscalls
     - Python–CPU interaction: where does computation happen?
     - How Python calls the GPU
-2. Neural network fundamentals and hardware execution
-    - What are the basic components of a neural network?
-    - How does a model run during inference?
-    - Do optimizer and gradients matter for inference?
-    - Memory usage and VRAM allocation during inference
 
 # Python
 
 ## What is Python? Why do inference frameworks choose it?
 
-###How is a Python program executed?
+### How is a Python program executed?
+
 **How is the python3 command found and executed?**
-OS searches for an executable file named python3 from the environment path variable. Post that, since python is an interpreted language, the interpreter reads,
-parses and executes the script line by line, a series of well-defined steps unfold to execute the program.
+- OS searches for an executable file named python3 from the environment path variable. 
+- Post that, since python is an interpreted language, the interpreter reads, parses and executes the script line by line, a series of well-defined steps
+unfold to execute the program.
 
 **What does Python do when parsing app.py? What are the stages (compile, eval)**
 - When parsing the app.py, the source code is broken down into a stream of tokens and they are the fundamental building blocks of the language, such as keywords,
@@ -40,7 +37,251 @@ Bytecode is then encapsulated into code objects which can be cached in .pyc file
 - PVM takes bytecode instructions from code objects and executes them. eval() function specifically allows for dynamic evaluation of expressions at runtime,
 either by parsing and compiling a string or directly executing a pre-compiled code object.
 
-Regular paragraphs go here. You can write as much as you want.
+**What is Python bytecode? Is there an intermediate language?**
+- Bytecode is a low-level, platform independent representation of Python source code. Interpreter first compiles source code into bytecode which is then executed by PVM. 
+- Bytecode is an intermediate language and serves as a bridge between high level Python source code and machine-specific instructions that a computer's CPU can execute. 
+- It's a crucial step for Python's portability, allowing the same bytecode to run on different OS and architectures as long as a compatible PVM is available.
+
+### What is Python's relationship with C?
+
+**What is CPython? Why is it written in C?**
+- CPython is mostly the reference implementation of the Python programming language. When refered to 'Python', it is typically being refered to 'CPython'. It is primarily written in C and Python.
+- The core interpreter, parser, bytecode interpreter and runtime system, is implemented in C.
+- CPython -> bytecode -> C-implemented VM. Manages Python's objects, memory, and calls to the OS.
+- Performance and execution speed with access to low level memory management and direct hardware access with more abstarction overhead.
+- System Integration and portability with direct interaction of OS's APIs enabling essential functionalities like file I/O, networking and threading.
+- Extensibility and Interoperability with it's wide access to different libraries.
+- C provides fine grained control which helps in memory allocation, deallocation, and garbage collection which prevents memory leaks or fragmentation.
+- Self containment and not relying on another high-level language runtime. 
+- Understanding CPython's C foundation helps explain Global Interpreter Lock (GIL) which protects access to Python objects, prevents multiple threads from executing bytecodes at once.
+
+**When we use torch or numpy, who is actually running the code?**
+- Commands like np.array(...) or torch.matmul(...) are more of an high level interface and orchestrator. 
+- NumPy backends are linked back to Basic Linear Algebra Subprograms (BLAS) and Linear Algebra Package (LAPACK) implementations like OpenBLAS, Intel MKL( Math Kernel Library), or ATLAS that are highly optimised C, C++ and Fortran libraries which leverage AVX, AVX-512 instruction sets.
+- PyTorch backends for CPU use Intel MKL or OpenBLAS. On GPU, NVIDIA's CUDA toolkit libraries like cuBLAS, cuDNN come into picture.
+- The ability of CPython to integrate with highly efficient C/C++ libraries provides one of most powerful advantages for high performance computing.
+
+**How does Python call low-level C functions from high-level APIs?**
+- C API, ctypes module, and specialised extension modules. C API directly interacts as a fundamental interface with Python objects and the interpreter.
+- C functions designed for python are complied into .so or .pyd. Upon using the import statement, PyInit_mymodule is invoked which registers C-implemented functions and data structures with the Python Interpreter.
+
+### Where does Python’s “slowness” come from?
+
+**What is the GIL, and why does it limit multithreading?**
+- Mutex that protects access to Python's objects to ensure thread safety for it's internal memory management. Python bytecode is executed one at a time.
+- Simplifies implementation of CPython by making object management thread safe.
+- Ensures C extensions which often directly manipulate Python objects do not corrupt the interpreter's state.
+- Limits true paralellism for CPU bound tasks
+
+**Why can’t CPU-bound Python code scale up?**
+- Fundamentally due to the presence of  Global Interpreter Lock (GIL). For CPU bound tasks, GIL dedicates that one thread which can hold the lock and execute bytecode at any given instant.
+- On an I/O bound operation, the Python thread can release the GIL while it waits for the I/O to complete making multithreading effective for improving concurrency in I/O bound scenarios.
+- Strategies like multiprocessing, which utilize multiple CPU cores in parallell, C/C++ extensions and Asynchronous Programming help in bypassing GIL limitations.
+
+**Why is GPU code almost unaffected by the GIL?**
+- Computationally intensive parts are offloaded to exteernal, low-level C/C++ libraries that explicitly release the GIL during their execution.
+- Mechanism of GIL Bypass:
+    - Delegation to native code - high level Python code makes a call to it's underlying C/C++ extension.
+    - Explicit GIL release: - Dispatch the actual kernel to GPU software using CPython API functions.
+    - Asynchronous GPU Execution: Python GIL freed while performing GPU computation.
+    - GIL Re-acquisition - To ensure thread-safe access to Python objects and the interpreter state.
+
+
+## Python and the OS: process, memory, syscalls
+
+### What is a Python program inside the OS?
+
+**To the OS, is a Python program a process or a thread?**
+- Fundamentally a process. The OS launches CPython interpreter as a distinct process. Interpreter process loads script, compiles into bytecode and executes it.
+- Python programs itself can manage multiple threads. Primarily observed as a single process running the CPython interpreter, which itself may manage multiple OS threads internally, albeit with GIL-imposed limitations on true parallel execution of Python bytecode.
+
+**Why does the OS need to assign it a PID, file descriptors, and heap?**
+- Fundamental resources and identifiers essential for any OS process. Process ID (PID) is a unnique numerical identifier assigned by the kernel to each running process.
+- File descriptors (FDs): Are abstarct, non negative integer handles that the OS uses to represent open I/O resources.
+- Heap memory is a segment of the process's VM space specifically designated for dynamic memory allocation which is basically explicitly requesting memory during runtime.
+    - Crucial for allocating data structures whose size is not known at compile time or whose lifetime must extend beyond the scope of a single function call.
+    - Nearly all objects (numbers, strings, lists, dictionaries, custom calss instances, functions, modules) are allocated on the heap.
+    - Memory management system primarily operates on this heap space to manage lifecycle of these objects.
+
+**When does Python trigger a system call (syscall)?**
+- Programatic interface provided by OS kernel to application programs to access privileged resources that user-space programs cannot directly execute.
+- Not directly invoked by Python code but built-in functions but a call stack flow of open() or socket.send(), CPython Interpreter, C standard Library and then syscall()
+- Common scenarios include file I/O, network communication, process and thread management, memory allocation, system information and time.
+- Relatively expensive operations due to the overhead of a context switch from user to kernel mode.
+
+### How does Python use memory and the file system?
+
+**When Python opens a file, how does it actually call open?**
+- High level interface : open() built-in function returns a file object, which abstracts away complexities of I/O
+- Intermediate layer : CPython's 'io' module and C functions
+- Kernel gateway - fundamental mechanism for a user space to request a service from OS kernel.
+- Step 1: Python's built-in `open()`: When you call file_obj = open('my_file.txt', 'w')
+- Step 2: CPython's C-level File I/O: Inside the C implementation, functions like file_open_impl() (from Modules/_io/fileio.c or similar) are invoked.
+- Step 3: The `libc` Wrapper and `syscall`: The C standard library ( libc , e.g., glibc on Linux) acts as a wrapper. Its open() function doesn't directly implement file opening. Instead, it prepares the arguments and executes the actual system call.
+
+**If there’s a file permission error, is it blocked by the OS or by Python?**
+- Fundamentally blocked by the OS. High level file I/O operations are wrappers around system calls.
+- Role of the OS - Kernel performs access control checks like verifying Effective User ID (EUID) or Group ID (EGID) against file ownership.
+- Request denied if required permissions are not met at it's core level. OS kernel is the ultimate arbiter of resource access.
+- Summary: The Flow of Control:
+    - Python Call: Your Python code calls a file operation (e.g., open()).
+    - CPython (or interpreter) Wrapper: The Python interpreter's C implementation (for CPython) translates this into a C function call.
+    - System Call Interface: This C function then makes the actual system call to the OS kernel.
+    - OS Kernel Enforcement: The OS kernel checks permissions. If denied, it returns an error code.
+    - Python Exception: The interpreter receives the error code and raises a PermissionError.
+
+**How do Python’s memoryview and buffer map to physical memory?**
+- Object Allocation: A Python object (e.g., bytearray(100)) requests memory from the OS via C functions (e.g., malloc). The OS allocates virtual memory pages to the process.
+- Buffer Protocol Exposure: The object implements the buffer protocol, providing a Py_buffer structure containing the virtual address of its allocated data.
+- Memoryview Creation: A memoryview object is created from this object, obtaining the Py_buffer details, including the virtual address.
+- Data Access: When the memoryview is used to access data (e.g., mv), it computes a virtual address. The MMU then translates this virtual address to a physical address on-the-fly, allowing direct access to the data in physical RAM.
+
+### Multiprocessing and threading: How does Python use multiple cores?
+
+**Why fork a new process instead of opening a thread?**
+- The reason stems directly from GIL. Each new process possesses its own distinct memory space, it's own GIL.
+- Allows Python Bytecode on a separate CPU core, achieving true paralellism. The multiprocessing module typically leverages the fork() system call.
+- Although threads are lighter weight and processes are heavier weight, the process is fundamentally dictated by the nature of the workload: CPU- bound tasks benefit from multiprocessing while I/O bound tasks leverage threading effectively or explore asyncio for greater efficiency.
+
+**How does the OS allocate CPU to multiple Python processes?**
+- OS allocates CPU resources to multiple Python processes through kernel-level scheduler.
+- Each Python process is an independent execution unit or a distinct process by the OS. OS scheduler handles all such processes competing for CPU time.
+- As the Python interpreter within each process operates independently, the scheduler aims to maximise CPU utilisation, response time requirements by distributing CPU time among active processes.
+- The scheduling itself is done through preemptive scheduling algorithms along with time slicing which provides a time slice or quantum for processes and context switching which involves saving the state of currently running process and loading the state of next process.
+- For Python, multiprocessing is the standard way to utilize CPU cores, circumventing the GIL constraint that limits true paralellism. Multiple python processes each have thier own GIL and can indeed execute Python bytecode in parallel on different cores. These can be CPU or I/O bound. I/O bound often yield CPU while CPU-bound consume thier full time slice.
+
+**Do Python subprocesses share GPUs?**
+- Yes, but the nature of sharing and interaction is distinct from CPU and requires careful consideration of the underlying GPU architecture and driver mechanisms.
+- Subprocesses generally request and are allocated thier own distinct segments of VRAM.
+- Python itself does not have direct capabilities for managing GPU hardware and acts as an interface to low level libraries which are responsible for making actual API calls to GPU driver to control hardware.
+- Advanced mechanisms like explicit resource partitioning and inter-process GPU memory sharing are also part of mechanisms for coordinated GPU usage. 
+
+
+## Python–CPU interaction: where does computation happen?
+
+### How does the CPU handle Python’s inference logic?
+
+**How does the CPU execute NumPy / PyTorch operations?**
+- CPU executes though highly optimised low-level libraries written in languages like C, C++ or Fortran often leveraging vectorisation, parallelization and hardware-specific instructions.
+- NumPy delegates most of it's heavy numerical computations to highly optimised external libraries like: BLAS (Basic Linear Algebra Subprograms) and LAPACK(Linear Algebra PACKage)
+- For PyTorch, similar to NumPy like Intel MKL or OpenBLAS for CPU backend. For GPU backend, (NVIDIA CUDA): cuNLAS, cuDNN, TensorRT, NCCL.
+- This architecture avoids the Python interpreter's overhead for numerical loops, minimising costs.
+
+**Are these operations pure Python, or do they use SIMD / AVX instructions?**
+- The actual numerical computations in NumPy and PyTorch are offloaded to compiled, optimised routines that directly interact with the CPU's hardware capabilities including its SIMD/ AVX instruction sets, for maximum performance and efficiency. 
+
+**How does PyTorch’s CPU backend (MKL, OpenBLAS) get used by Python?**
+- Utilisation of MKL or OpenBLAS is a prime example of Foreign Function Interface.
+- PyTorch operates with a split architecture: high level Python API for user interaction and low level C++ core for computation. This core is known as Ten.
+- Python API call -> Data bridge -> Dispatch to ATen C++ kernel -> Backend function invocation -> Optimised CPU execution -> Result packaging.
+
+### Are Python threads truly parallel?
+
+- Not truly parallel for CPU-bound computations due to the Global Interpreter Lock (GIL). Concurrency achieved but not paralellism.
+- For CPU-bound tasks, even if you launch multiple threads, they will effectively run sequentially as they contend for the single lock.
+- For I/O, GIL is released automatically by the interpreter. Allows other Python threads to acquire the GIL and run while the first thread is waiting. Provides concurrency but not true CPU parallelism.
+- To achieve true paralellism, for CPU bound tasks, multiprocessing module can be used, circumventing the GIL or with C/C++ extensions and native libraries and asynchronous programming or by explicitly managing GIL in the CPython C API.
+
+**What operations does the GIL prevent from running in parallel?**
+- Operations that involve intensive computation purely within Python, without explicitly or implicitly releasing the GIL are serialized.
+- Pure Python arithemetic operations, manipulation of standard Data Structures, Execution of UDFs performing heavy computation that do not delegate to external C libraries or perfrom I/O.
+- Any operations involving the Python object model that are guarded by the interpreter's internal locks.
+
+**Which built-in operations automatically release the GIL?**
+- The GIL is automatically released for I/O bound operations. When a python thread performs an I/O operation, typically spends a significant amount of time waiting for the external resource rather than executing Python bytecode. During these blocking class to the OS, the GIL is released.
+
+**Can multiprocessing bypass the GIL?**
+- Yes, by enabling true parallel execution for CPU-bound workloads. Because of the Independent execution contexts, each process maintains it's own memory space, Python objects and it's own GIL and allows computationally intensive (CPU-bound) tasks to be executed in parallel across multiple CPU cores, circumventing the limitation imposed by a single GIL on multithreaded Python programs.
+
+
+## How Python calls the GPU
+
+### How does Python send data to the GPU?
+
+**What exactly does .to("cuda") do? How fast is it? Is it blocking?**
+- Method in a deep learning framework like PyTorch. Transfers a tensor or model from CPU's memory to GPU's memory to leverage parallel processing capabilities of NVIDIA's GPU's through CUDA.
+- Speed depends on the size of the data, system bus bandwidth, memory type and CUDA environment setup. By default, PyTorch's CUDA operations including to("cuda") are asynchronous. 
+- The operation is enqueued on the GPU, and the Python script can continue executing subsequent lines of code on the CPU.
+- Synchronization occurs with torch.cuda.synchronize() and when data is copied back from the GPU to the CPU.
+
+**Who decides which GPU to use? How are multiple GPUs managed?**
+- GPU Device Selection: The determination of which GPU to utilize is governed by a hierarchy of mechanisms, ensuring both flexibility and control.
+- Default Behavior: By default, frameworks such as PyTorch and TensorFlow typically target the first available GPU, usually identified as cuda:0 or device 0.
+    - Environment Variables: System-level environment variables provide a powerful means to influence GPU visibility and ordering without modifying code. The most prominent example is CUDA_VISIBLE_DEVICES.
+        - Mechanism: Setting CUDA_VISIBLE_DEVICES="1,3" makes only GPUs with physical IDs 1 and 3 visible to the application, which will then perceive them as device 0 and device 1, respectively.
+    - Explicit Code Specification: Within the application code, developers can explicitly assign tensors, models, or operations to specific GPU devices.
+        - Example (PyTorch): This is commonly achieved using methods like .to("cuda:1") or by specifying a torch.device("cuda:2") object.
+    - Multi-GPU Management Strategies: Effectively leveraging multiple GPUs is critical for scaling deep learning workloads. Several paradigms exist, each with distinct advantages and use cases.
+        - Data Parallelism: The most prevalent strategy for increasing training throughput, where the model is replicated across GPUs, and each replica processes a distinct subset of the input data.
+        - Model Parallelism: When a model is too large to fit into a single GPU's memory, its layers can be split and distributed across multiple GPUs.
+        - Pipeline Parallelism: An evolution of model parallelism designed to mitigate the GPU underutilization problem by pipelining micro-batches through the sequential model stages.
+        - Sharding (e.g., ZeRO, FSDP): For extremely large models, even model parallelism might not suffice. Sharding techniques distribute various components of the model state (parameters, gradients, optimizer states) across GPUs to dramatically reduce memory footprint per device.
+
+**Do you need to manually free CUDA memory? What does PyTorch handle for you?**
+- In PyTorch, you generally do not need to manually free CUDA memory. PyTorch provides sophisticated memory management mechanisms that handle GPU memory allocation and deallocation automatically.
+- PyTorch's CUDA Memory Management: PyTorch employs a caching allocator for CUDA memory. This is a fundamental design choice that significantly improves performance and simplifies memory management for users.
+    - Allocator Mechanism: When you request memory (e.g., creating a new tensor on the GPU), PyTorch's allocator first checks its cache for a sufficiently sized, already allocated, but currently unused memory block. If one is found, it's reused. If not, PyTorch requests a new block from the CUDA driver.
+    - Deallocation Philosophy: When a tensor goes out of scope or is explicitly deleted by Python's garbage collector, its GPU memory is not immediately returned to the CUDA driver. Instead, it's marked as free and returned to PyTorch's internal cache, making it available for future allocations without incurring the overhead of a CUDA driver call.
+- Automatic Handling by PyTorch: PyTorch handles several critical aspects of CUDA memory for you:
+    - Allocation and Deallocation: As described, PyTorch manages the lifecycle of GPU memory allocations. When a tensor is no longer referenced, its memory is returned to PyTorch's cache.
+    - Memory Pooling: The caching allocator maintains a pool of free memory blocks. This is a key feature that distinguishes it from direct calls to cudaMalloc and cudaFree.
+    - CUDA Context Management: Memory is allocated within the active CUDA context. PyTorch ensures that operations occur within the correct device context.
+    - Error Handling: PyTorch provides high-level error reporting for out-of-memory (OOM) situations, rather than cryptic CUDA driver errors.
+- When Manual Intervention is Considered (Rare): While not typically needed for 'freeing' memory, you might interact with the caching mechanism in specific scenarios:
+    - torch.cuda.empty_cache() : This function clears PyTorch's internal memory cache, releasing all currently unused cached memory to the CUDA driver. This is useful when you suspect memory fragmentation, after deleting large intermediate tensors you no longer need, or to get an accurate measurement of current GPU memory usage.
+    - This does not free memory currently held by active tensors; it only empties the cache of previously allocated but now unreferenced memory blocks.
+    - Monitoring: Functions like torch.cuda.memory_allocated() and torch.cuda.memory_reserved() allow you to inspect how much memory PyTorch is actively using and how much it has reserved from the CUDA driver (including cached free blocks), respectively.
+- Underlying CUDA API Calls: At a low level, PyTorch's caching allocator still interfaces with the CUDA Driver API. The primary calls for memory management are:
+    - Allocation: cudaMalloc(void** devPtr, size_t size) : Allocates size bytes of linear memory on the device and returns a pointer to it in devPtr. PyTorch's allocator calls this when its cache is exhausted.
+    - Deallocation: cudaFree(void* devPtr) : Frees the memory space pointed to by devPtr. PyTorch's allocator calls this when empty_cache() is invoked or when the overall memory requested by PyTorch exceeds a certain threshold (less common during normal operation for individual tensor deallocations).
+
+### How is computation on the GPU triggered?
+
+**Does calling model() execute on the GPU immediately, or is there lazy evaluation?**
+- model() calls on a GPU from Python is a nuanced blend of graph based execution and optimised kernel launches rather than atomic.
+- In an immediate execution model, eeach operation is performed as soon as it is called  and. the. result is available immediately. More interactive and imperative. 
+- In lazy evaluation, operations define a computational graph without immediately executing them. Computation is deferred until a execution trigger is encountered.
+- By default, PyTorch operates in an eager execution mode, the forward pass operations are performed sequentially.
+- For TensorFlow 2.x, the default here too is eager execution but strongly encourages use of tf.function to compile Python code into static TensorFlow graphs, the entire computation graph for that function is traced once to build a static graph and subsequent calls execute the compiled graph directly on the GPU, leading to significant performance gains due to global optimizations, memory pre-allocation, and reduced Python overhead.
+
+**How is a GPU kernel registered and launched?**
+- Kernels are typically defined in low-level, paralell-aware languages like CUDA C/C++ for NVIDIA GPUs or OpenCL C.
+- Kernel source code undergoes a specialized compilation process to translate it into a device-specific binary format.
+- Compiled kernel library is loaded by the GPU driver into GPU memory space which makes the kernel function accessible and ready for execution by the device.
+- From the CPU (host), a specific API call is made to initiate the kernel's execution on the GPU (device).
+- Pointers to data residing in device memory and scalar parameters are passed from the host to the kernel function executing on the device.
+- The runtime API call translates into commands submitted by the GPU driver to the GPU's internal command queue for asynchronous execution.
+
+**How can you check which kernel an operation uses?**
+- This involves delving into the runtime execution environment and leveraging framework specific introspection tools. or low-level profilers.
+- For PyTorch, the most comprehensive tool is Torch Profiler which can capture detailed execution traces with names and durations.
+- For TensorFlow, the TensorBoard profiler offers a robust profiler that allows capturing execution traces on both CPU and GPU with compelling visualizations of the operations, launches and usage.
+- Low level NVIDIA profilers provide a detailed timeline view of CPU and GPU activities including every CUDA kerneel launch, API calls, memory transfers and sync events and kernel level analysis with. Nsight systems and Nsight Compute.
+
+### How do the CPU and GPU synchronize?
+
+**Is .cuda() and .cpu() data transfer synchronous or asynchronous?**
+- .cuda() and .cpu() are synchronous by default which means the CPU thread will block until the data transfer operation is fully completed.
+- By default, operations like tensor.cuda() or tensor.cpu() are blocking. The execution is halted until the entire memory on the host device or vice-versa is finalised, simplifying control flow but potentially introducing latency.
+
+**When does PyTorch force synchronization?**
+- Where the CPU requires the results of GPU computations or when execution order of operations across the host and device must be strictly enforced for correctness or resource management.
+- Implicit by introducing a synchronization barrier, blocking the CPU until the relevant GPU computations are complete.
+- Explicit where developeers can manually insert synchronization points for fine-grained control, performance profiling or debugging.
+
+**What is torch.cuda.synchronize(), and when should you call it manually?**
+- Blocking call that ensures all GPU operations on the current CUDA device initiated by host(CPU) have completed before the CPU proceeds. 
+- Fundamental purpose is to enforce synchronization between CPU and GPU. Since GPU operations are asynchronous, CPU often queues operations and continues execution without waiting for GPU to finish.
+- Call the function manually to accurately measure the execution time of GPU operations. Calling torch.cuda.synchronize() can force the error to occur immediately at the point of synchronization, making it easier to pinpoint the origin of the issue.
+- To access data on CPU that was recently modified on GPU, synchronize to guarantee the GPU has finished writing the data to. Memory before CPU attempts to read it. Especially true when using .cpu() on a tensor that has just been computed on the GPU. 
+
+
+
+
+
+
+
+
 
 **Bold text** looks like this. *Italic text* looks like this.
 
