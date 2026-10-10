@@ -6,17 +6,17 @@ tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 ## Why this post
 During mid 2025, i started my journey learning about LLM internals and that is when i stumbled upon Mentiforce through a reddit post.
-Through these series of blog posts mentioning Mentiforce in the title, I intend to walk though my learnings covering basics from Python language internals
+Through these series of blog posts mentioning Mentiforce in the title, I intend to walkthrough my learnings covering basics from Python language internals
 to vLLM framework and inference engine design. Part of the content would be AI generated supporting the notes i have written. 
 
 The first post (this one) covers the following topics:
+
 Python
     - What is Python? Why do inference frameworks choose it?
     - Python and the OS: process, memory, syscalls
     - Python–CPU interaction: where does computation happen?
     - How Python calls the GPU
 
-# Python
 
 ## What is Python? Why do inference frameworks choose it?
 
@@ -28,19 +28,25 @@ Python
 unfold to execute the program.
 
 **What does Python do when parsing app.py? What are the stages (compile, eval)**
-- When parsing the app.py, the source code is broken down into a stream of tokens and they are the fundamental building blocks of the language, such as keywords,
-identifiers, operators and literals.
-- Stream of tokens then checked against Python's grammar rules to ensure code is syntactically correct. Constructs a parse tree or Abstract Syntax tree. 
-AST represents hierarchical structure of the program, capturing relationships between different parts of the code. 
-- Further stages involve compilation and execution where AST is converted into Python bytecode consisting of instructions for Python Virtual Machine (PVM).
-Bytecode is then encapsulated into code objects which can be cached in .pyc files for faster loading and subsequent runs.
-- PVM takes bytecode instructions from code objects and executes them. eval() function specifically allows for dynamic evaluation of expressions at runtime,
-either by parsing and compiling a string or directly executing a pre-compiled code object.
+- When parsing the app.py, the source code is broken down into a stream of tokens and they are the fundamental building blocks of the language, such as keywords, identifiers, operators and literals.
+    - The lexer (or scanner) reads the source code character by character and groups them into meaningful sequences called tokens. Each token represents a distinct unit, such as an identifier, keyword, operator, or literal value.
+    - This stage effectively converts a raw string of characters into a structured sequence that the parser can then process.
+- Stream of tokens then checked against Python's grammar rules to ensure code is syntactically correct. Constructs a parse tree or Abstract Syntax tree. AST represents hierarchical structure of the program, capturing relationships between different parts of the code.
+    - Each node in the tree represents a construct in the source code, such as an expression, statement, or declaration.
+    - It is 'abstract' because it omits concrete syntax details like parentheses and semicolons, focusing solely on the structural elements relevant to semantic interpretation.
+    - It explicitly captures the relationships and dependencies between different parts of the code, making it an ideal intermediate representation for further processing.
+- Further stages involve compilation and execution where AST is converted into Python bytecode consisting of instructions for Python Virtual Machine (PVM). Bytecode is then encapsulated into code objects which can be cached in .pyc files for faster loading and subsequent runs.
+    - Bytecode consists of a sequence of low-level, platform-independent instructions designed to be executed by the Python Virtual Machine (PVM).
+    - It's a form of intermediate representation, more abstract than machine code but more concrete than the source code or AST.
+    - It provides a layer of abstraction that enables Python's 'write once, run anywhere' capability.
+- PVM takes bytecode instructions from code objects and executes them. eval() function specifically allows for dynamic evaluation of expressions at runtime, either by parsing and compiling a string or directly executing a pre-compiled code object.
+    - The built-in eval() function provides a powerful mechanism for dynamic code execution within a running Python program. It allows a Python expression (as a string) to be parsed, compiled into a code object, and then executed by the PVM at runtime.
 
 **What is Python bytecode? Is there an intermediate language?**
 - Bytecode is a low-level, platform independent representation of Python source code. Interpreter first compiles source code into bytecode which is then executed by PVM. 
 - Bytecode is an intermediate language and serves as a bridge between high level Python source code and machine-specific instructions that a computer's CPU can execute. 
 - It's a crucial step for Python's portability, allowing the same bytecode to run on different OS and architectures as long as a compatible PVM is available.
+- When the PVM 'executes' bytecode, it doesn't typically translate each bytecode instruction into machine-specific instructions on-the-fly (i.e., just-in-time compilation). Instead, the PVM's pre-compiled native code performs the operations dictated by the bytecode instructions.
 
 ### What is Python's relationship with C?
 
@@ -56,35 +62,41 @@ either by parsing and compiling a string or directly executing a pre-compiled co
 - Understanding CPython's C foundation helps explain Global Interpreter Lock (GIL) which protects access to Python objects, prevents multiple threads from executing bytecodes at once.
 
 **When we use torch or numpy, who is actually running the code?**
-- Commands like np.array(...) or torch.matmul(...) are more of an high level interface and orchestrator. 
+- Commands like np.array(...) or torch.matmul(...) are more of an high level interface and orchestrator. It handles object creation, memory management (at the Python level), and the dispatching of calls to the actual computational routines.
 - NumPy backends are linked back to Basic Linear Algebra Subprograms (BLAS) and Linear Algebra Package (LAPACK) implementations like OpenBLAS, Intel MKL( Math Kernel Library), or ATLAS that are highly optimised C, C++ and Fortran libraries which leverage AVX, AVX-512 instruction sets.
 - PyTorch backends for CPU use Intel MKL or OpenBLAS. On GPU, NVIDIA's CUDA toolkit libraries like cuBLAS, cuDNN come into picture.
 - The ability of CPython to integrate with highly efficient C/C++ libraries provides one of most powerful advantages for high performance computing.
 
 **How does Python call low-level C functions from high-level APIs?**
 - C API, ctypes module, and specialised extension modules. C API directly interacts as a fundamental interface with Python objects and the interpreter.
+- Python employs a reference counting mechanism for automatic memory management. C extension code must meticulously manage reference counts, incrementing (Py_INCREF) when ownership is taken and decrementing (Py_DECREF) when ownership is relinquished, to prevent memory leaks, dangling pointers, or premature object deallocation.
+- For CPU-intensive C extensions, the GIL can be explicitly released (Py_BEGIN_ALLOW_THREADS) during long-running C computations and reacquired (Py_END_ALLOW_THREADS) before interacting with Python objects to facilitate genuine parallelism for non-Python-API-intensive C code within a multi-threaded Python application.
 - C functions designed for python are complied into .so or .pyd. Upon using the import statement, PyInit_mymodule is invoked which registers C-implemented functions and data structures with the Python Interpreter.
 
 ### Where does Python’s “slowness” come from?
 
 **What is the GIL, and why does it limit multithreading?**
 - Mutex that protects access to Python's objects to ensure thread safety for it's internal memory management. Python bytecode is executed one at a time.
+    - It's a single process-wide lock. Before any thread can execute Python bytecode, it must acquire this lock. When a thread performs I/O operations, or makes calls to external C libraries that explicitly release the GIL, other threads can acquire it. Otherwise, threads will yield the GIL periodically based on a configurable instruction count or time slice.
 - Simplifies implementation of CPython by making object management thread safe.
 - Ensures C extensions which often directly manipulate Python objects do not corrupt the interpreter's state.
 - Limits true paralellism for CPU bound tasks
+    - Since only one thread can hold the GIL at any given time, only one thread can execute Python bytecode at any given moment. This means that even if you have multiple CPU cores, a Python program using multiple threads for CPU-intensive work will effectively run sequentially, albeit with context switching overhead. The system scheduler might schedule Python threads on different cores, but only one will be actively running Python code.
 
 **Why can’t CPU-bound Python code scale up?**
 - Fundamentally due to the presence of  Global Interpreter Lock (GIL). For CPU bound tasks, GIL dedicates that one thread which can hold the lock and execute bytecode at any given instant.
+    - The primary purpose of the GIL is to simplify CPython's memory management and ensure thread-safety for internal C data structures and C extension modules. This design choice avoids complex, fine-grained locking mechanisms that would be required for every Python object.
 - On an I/O bound operation, the Python thread can release the GIL while it waits for the I/O to complete making multithreading effective for improving concurrency in I/O bound scenarios.
 - Strategies like multiprocessing, which utilize multiple CPU cores in parallell, C/C++ extensions and Asynchronous Programming help in bypassing GIL limitations.
 
 **Why is GPU code almost unaffected by the GIL?**
-- Computationally intensive parts are offloaded to exteernal, low-level C/C++ libraries that explicitly release the GIL during their execution.
+- Computationally intensive parts are offloaded to external, low-level C/C++ libraries that explicitly release the GIL during their execution.
 - Mechanism of GIL Bypass:
     - Delegation to native code - high level Python code makes a call to it's underlying C/C++ extension.
     - Explicit GIL release: - Dispatch the actual kernel to GPU software using CPython API functions.
     - Asynchronous GPU Execution: Python GIL freed while performing GPU computation.
     - GIL Re-acquisition - To ensure thread-safe access to Python objects and the interpreter state.
+- The GIL primarily acts as a mutex for the Python interpreter's internal state and Python bytecode execution. Since the vast majority of the work in GPU-accelerated computing involves native code executing on the GPU, outside the interpreter's direct control, it does not contend for the GIL. The Python thread merely initiates the operation and then releases the GIL, becoming a waiting observer rather than an active Python bytecode executor during the GPU's workload.
 
 
 ## Python and the OS: process, memory, syscalls
@@ -169,10 +181,16 @@ either by parsing and compiling a string or directly executing a pre-compiled co
 
 **Are these operations pure Python, or do they use SIMD / AVX instructions?**
 - The actual numerical computations in NumPy and PyTorch are offloaded to compiled, optimised routines that directly interact with the CPU's hardware capabilities including its SIMD/ AVX instruction sets, for maximum performance and efficiency. 
+- SIMD refers to a class of instruction sets that allow a single CPU instruction to perform the same operation on multiple data points simultaneously.
+    - This is fundamental for scientific computing and machine learning, where operations like vector additions, matrix multiplications, and element-wise functions are applied to large arrays or tensors.
+- AVX (Advanced Vector Extensions): AVX is a set of SIMD instruction extensions developed by Intel (and supported by AMD) that expands the width of vector registers and introduces new instructions for floating-point and integer operations.
+    - These extensions are critical for performance in highly parallelizable workloads, which are ubiquitous in deep learning and high-performance computing.
 
 **How does PyTorch’s CPU backend (MKL, OpenBLAS) get used by Python?**
 - Utilisation of MKL or OpenBLAS is a prime example of Foreign Function Interface.
-- PyTorch operates with a split architecture: high level Python API for user interaction and low level C++ core for computation. This core is known as Ten.
+- PyTorch operates with a split architecture: high level Python API for user interaction and low level C++ core for computation. This core is known as ATen.
+    - ATen (A Tensor Library) is PyTorch's C++ tensor library, providing the foundational data structures and operations. It serves as an abstraction layer for tensor manipulations, independent of the underlying hardware (CPU, GPU).
+    - For CPU-bound operations, ATen does not re-implement optimized linear algebra routines from scratch. Instead, it links against highly tuned, external libraries like Intel Math Kernel Library (MKL) or OpenBLAS. These libraries provide optimized implementations of BLAS (Basic Linear Algebra Subprograms) and LAPACK (Linear Algebra Package)functions, which are the building blocks for most deep learning operations (e.g., matrix multiplication, convolutions, reductions).
 - Python API call -> Data bridge -> Dispatch to ATen C++ kernel -> Backend function invocation -> Optimised CPU execution -> Result packaging.
 
 ### Are Python threads truly parallel?
