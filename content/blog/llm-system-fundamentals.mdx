@@ -1,0 +1,63 @@
+---
+title: "My learning experience with Mentiforce - Fundamentals of LLMs - 01"
+description: "A walkthrough of what I learnt during Phase 1 of learning about LLM architectures."
+date: "2026-10-08"
+tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
+---
+## Why this post
+During mid 2025, i started my journey learning about LLM internals and that is when i stumbled upon Mentiforce through a reddit post.
+Through these series of blog posts mentioning Mentiforce, I intend to walk though my learnings covering basics from Python language internals 
+to vLLM framework and inference engine design. Part of the content would be AI generated supporting the notes i have written. 
+
+The first post (this one) covers the following topics:
+1. Python
+    - What is Python? Why do inference frameworks choose it?
+    - Python and the OS: process, memory, syscalls
+    - Python–CPU interaction: where does computation happen?
+    - How Python calls the GPU
+2. Neural network fundamentals and hardware execution
+    - What are the basic components of a neural network?
+    - How does a model run during inference?
+    - Do optimizer and gradients matter for inference?
+    - Memory usage and VRAM allocation during inference
+
+# Python
+
+## What is Python? Why do inference frameworks choose it?
+
+###How is a Python program executed?
+**How is the python3 command found and executed?**
+OS searches for an executable file named python3 from the environment path variable. Post that, since python is an interpreted language, the interpreter reads,
+parses and executes the script line by line, a series of well-defined steps unfold to execute the program.
+
+**What does Python do when parsing app.py? What are the stages (compile, eval)**
+- When parsing the app.py, the source code is broken down into a stream of tokens and they are the fundamental building blocks of the language, such as keywords,
+identifiers, operators and literals.
+- Stream of tokens then checked against Python's grammar rules to ensure code is syntactically correct. Constructs a parse tree or Abstract Syntax tree. 
+AST represents hierarchical structure of the program, capturing relationships between different parts of the code. 
+- Further stages involve compilation and execution where AST is converted into Python bytecode consisting of instructions for Python Virtual Machine (PVM).
+Bytecode is then encapsulated into code objects which can be cached in .pyc files for faster loading and subsequent runs.
+- PVM takes bytecode instructions from code objects and executes them. eval() function specifically allows for dynamic evaluation of expressions at runtime,
+either by parsing and compiling a string or directly executing a pre-compiled code object.
+
+Regular paragraphs go here. You can write as much as you want.
+
+**Bold text** looks like this. *Italic text* looks like this.
+
+### Subheading
+
+- Bullet point one
+- Bullet point two
+
+1. Numbered item one
+2. Numbered item two
+
+> This is a blockquote — great for highlighting a key idea.
+
+You can add code like this:
+
+```python
+print("Hello, world!")
+```
+
+And [links look like this](https://example.com).
