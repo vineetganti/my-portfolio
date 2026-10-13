@@ -1,5 +1,5 @@
 ---
-title: "LLM Architectures - Python Internals - 01"
+title: "LLM Architectures - 01 - Python Internals"
 description: "A walkthrough of what I learnt during Phase 1 of learning about LLM architectures."
 date: "2026-10-10"
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
@@ -292,31 +292,3 @@ unfold to execute the program.
 - Fundamental purpose is to enforce synchronization between CPU and GPU. Since GPU operations are asynchronous, CPU often queues operations and continues execution without waiting for GPU to finish.
 - Call the function manually to accurately measure the execution time of GPU operations. Calling torch.cuda.synchronize() can force the error to occur immediately at the point of synchronization, making it easier to pinpoint the origin of the issue.
 - To access data on CPU that was recently modified on GPU, synchronize to guarantee the GPU has finished writing the data to. Memory before CPU attempts to read it. Especially true when using .cpu() on a tensor that has just been computed on the GPU. 
-
-
-
-
-
-
-
-
-
-**Bold text** looks like this. *Italic text* looks like this.
-
-### Subheading
-
-- Bullet point one
-- Bullet point two
-
-1. Numbered item one
-2. Numbered item two
-
-> This is a blockquote — great for highlighting a key idea.
-
-You can add code like this:
-
-```python
-print("Hello, world!")
-```
-
-And [links look like this](https://example.com).
