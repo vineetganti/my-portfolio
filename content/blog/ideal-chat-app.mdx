@@ -1,11 +1,74 @@
 ---
 title: "My idea of an ideal chat app"
 description: "A one or two sentence summary of what this post is about."
-date: "2026-10-08"
-tags: ["Rust", "Shell", "Core Engineering"]
+date: "2026-09-01"
+tags: ["Messaging", "Communications", "Cryptography"]
 ---
 
-Your blog content starts here. Write in plain English.
+A while ago, as I was reminiscing about how Blackberry created such an important dent in the mobile communication space. It had a loyal userbase just as how it is today with the iPhone. As I use my iPhone today, I low key love how the ecosystem was built so well around the iPhone which reminds me of how Blackberry also did have similar philosophy when it came to it’s tight device and OS coupling.
+
+Great design language, software that stood out and had a uniform form and function, layout and app
+support across all it's device range and though it was tightly controlled and coupled with it's hardware, it had it's own character that made it the market leader for many years until the iPhone came along.
+
+Blackberrys always had the iconic qwerty keyboard with what standing out and what made users stick to their blackberrys especially in a pure consumer setting was the Blackberry Messenger. I seriously think if this app was not developed, Blackberry would never have got the market share it got at the time. Truly one of a kind that had almost like a cult like crowd purely how it made you feel exclusive that you are part of the Blackberry gang. Way before the times of cloud tech, BBM had it’s memory and identity tied to it’s device. As much it sounds scary today that losing your phone meant really losing all of your data, as an enthusiast, it had it’s own sense of security knowing that I am solely responsible for my own device and it’s data and nobody else, not even the company had an idea of what am doing with my phone. True ownership. 
+
+Going further in this article, I’ll post in the conversation I’ve had with Claude on the possibility of designing such an app in today’s time and how this idea can still be made possible today with of course no way of getting volume as WhatsApp or iMessage but have it’s own character that uses the tech behind BBM partially and improve on it. Any good chat app with a great base function can go on to become a super app and as someone from India, there is definitely scope for one for which it’s data can never be compromised for monetization. Something of a foundation work like Signal. As the world’s largest democracy, this kind of communication medium which is probably one of the fundamental rights can truly be of the people, for the people and by the people.
+
+Prompt: Think keenly on all of the apps or platforms present today similar to blackberry messenger and give me a summary of how BBM did actually work.
+
+Answer: Here’s how BBM actually worked under the hood, and then a look at how today’s messengers compare.
+
+**How BlackBerry Messenger (BBM) worked**
+
+BBM was built around a single core idea: instead of using phone numbers or email addresses to identify users, everyone got a **PIN** — a unique 8-character hexadecimal code tied to the device, not a SIM card. Adding a contact meant exchanging PINs, which gave BBM a built-in sense of privacy and exclusivity.
+
+Messages were routed through BlackBerry’s own relay infrastructure, called the **BlackBerry Infrastructure (BIS/BES)**. Every message you sent traveled from your device, encrypted over a compressed data channel, to BlackBerry’s servers in Waterloo, Canada, and then out to the recipient’s device. This is why BBM was remarkably efficient even on 2G networks — BlackBerry compressed data aggressively.
+
+The crown jewel was the **delivery and read receipt system** — the iconic D (delivered) and R (read) markers. This was genuinely novel in 2005 and the entire messaging world eventually copied it. You could see the exact moment your message hit the recipient’s inbox and the exact moment they opened it.
+
+BBM also introduced **typing indicators** (seeing the three dots appear), group chats, and broadcast messages — features we now take for granted on every platform.
+
+The weakness was that the whole system was tightly coupled to BlackBerry hardware. When BlackBerry’s market share collapsed between 2012 and 2014, BBM tried going cross-platform on iOS and Android, but by then iMessage and WhatsApp had already filled the gap.
+
+Here’s how that architecture compares to today’s major platforms:
+
+!bbm_vs_modern_messengers.svg
+
+**The BBM legacy in one line**: every feature in that table’s “Key BBM DNA” column that says “receipts,” “typing,” or “group chat” was either directly borrowed from or pushed into existence by BBM. WhatsApp’s double blue ticks, iMessage’s “Read 9:41 AM,” Signal’s minimal metadata philosophy — BBM planted those seeds.
+
+The biggest structural difference across all modern platforms is **where encryption lives**. BBM encrypted in transit through BlackBerry’s own servers (meaning BlackBerry could theoretically read your messages). Signal and WhatsApp (post-2016) encrypt end-to-end, so even the server operator sees only ciphertext. WeChat and Discord still sit closer to the BBM model — encrypted in transit but accessible to the platform. Signal sits furthest from it, treating even metadata as sensitive. iMessage is somewhere in between — true E2E between Apple devices, but falls back to unencrypted SMS when the other person isn’t on Apple.
+
+Prompt: Which of these messaging apps would be closest to being as secure as BBM? Or has the tech surpassed in BBM strictly security and privacy wise? What would you say would be the missing piece if there will ever be a need for something as tightly coupled as BBM?
+
+Answer: **Has the tech surpassed BBM in security?**
+
+Absolutely, and it’s not close. BBM’s security was *tight* for its time but had a fundamental ceiling: BlackBerry held the keys. Governments (India, UAE, Saudi Arabia, the UK) literally threatened to ban BlackBerry unless they handed over access to BBM traffic — and BlackBerry complied in several cases. So BBM was secure against *other users* and casual interception, but not against the platform operator itself.
+
+Modern Signal-Protocol-based apps broke that ceiling entirely. The server mathematically *cannot* read your messages even if it wants to. That’s a qualitative leap, not just an improvement.
+
+**Which app comes closest to BBM’s security philosophy today?**
+
+The honest ranking:
+
+!image.png
+
+**Signal** is the clear winner, and the closest spiritual successor — but it actually goes far beyond what BBM ever achieved. The key difference is philosophical: BBM asked you to *trust BlackBerry*. Signal is architected so you *don’t need to* trust Signal.
+
+---
+
+**1. Verified identity without a phone number**
+
+BBM’s PIN system was elegant — you knew exactly who you were talking to without handing over your phone number. Signal now has usernames, but the broader ecosystem still largely revolves around phone numbers as identity anchors. A future platform that uses cryptographic keypairs (think passkeys, but for messaging identity) stored on-device — with no central directory — would be genuinely new ground. Your identity would be mathematically provable and phone-number-free.
+
+**2. Decentralization with usability**
+
+Matrix (the protocol powering the Element app) is trying to do this — federated servers, no single point of failure or control. But it’s rough around the edges and fragmented. The missing piece is a protocol that achieves BBM-level smoothness and reliability on a decentralized backbone. Nobody has cracked that UX problem yet at scale.
+
+**3. Hardware-bound trust**
+
+BBM’s PIN was tied to the device, not an account in the cloud. Modern phones have **Secure Enclaves** (Apple) and **Titan chips** (Google) that can hold cryptographic keys that never leave the hardware. A messaging app that roots its identity entirely in the Secure Enclave — making keys physically unextractable — would combine BBM’s device-bound philosophy with modern cryptography. No server, no cloud backup, no fallback. Your device *is* your identity. If you lose it, you regenerate. That’s the trade-off nobody has been willing to force users into because it’s commercially uncomfortable — but it would be the most secure messaging system ever built for consumers.
+
+The honest summary: Signal has beaten BBM on every technical dimension. The gap that remains isn’t cryptographic — it’s about identity, decentralization, and the courage to remove the fallback mechanisms that make people feel safe but quietly become the biggest vulnerabilities.
 
 ## Use Headings Like This
 
