@@ -39,6 +39,8 @@ Here’s how that architecture compares to today’s major platforms:
 
 The biggest structural difference across all modern platforms is **where encryption lives**. BBM encrypted in transit through BlackBerry’s own servers (meaning BlackBerry could theoretically read your messages). Signal and WhatsApp (post-2016) encrypt end-to-end, so even the server operator sees only ciphertext. WeChat and Discord still sit closer to the BBM model — encrypted in transit but accessible to the platform. Signal sits furthest from it, treating even metadata as sensitive. iMessage is somewhere in between — true E2E between Apple devices, but falls back to unencrypted SMS when the other person isn’t on Apple.
 
+---
+
 Prompt: Which of these messaging apps would be closest to being as secure as BBM? Or has the tech surpassed in BBM strictly security and privacy wise? What would you say would be the missing piece if there will ever be a need for something as tightly coupled as BBM?
 
 Answer: **Has the tech surpassed BBM in security?**
@@ -51,11 +53,9 @@ Modern Signal-Protocol-based apps broke that ceiling entirely. The server mathem
 
 The honest ranking:
 
-!image.png
+![messaging_security_spectrum](/messaging_security_spectrum.png)
 
 **Signal** is the clear winner, and the closest spiritual successor — but it actually goes far beyond what BBM ever achieved. The key difference is philosophical: BBM asked you to *trust BlackBerry*. Signal is architected so you *don’t need to* trust Signal.
-
----
 
 **1. Verified identity without a phone number**
 
@@ -71,26 +71,54 @@ BBM’s PIN was tied to the device, not an account in the cloud. Modern phones h
 
 The honest summary: Signal has beaten BBM on every technical dimension. The gap that remains isn’t cryptographic — it’s about identity, decentralization, and the courage to remove the fallback mechanisms that make people feel safe but quietly become the biggest vulnerabilities.
 
-## Use Headings Like This
+---
 
-Regular paragraphs go here. You can write as much as you want.
+Prompt: How would be broadly go about in building something that encompasses the architecture of Signal with BBM PIN methodology without coupling it to hardware and also not having to give away user info like phone number or email in accounts?
 
-**Bold text** looks like this. *Italic text* looks like this.
+Answer: The core insight is: BBM used a PIN as a *pointer* to a device. We want a PIN that’s a pointer to a *cryptographic keypair* — one that lives with the user, not on any server.
 
-### Subheading
+Let’s break this into three layers — identity, messaging, and transport — because getting all three right simultaneously is what makes this genuinely hard.
 
-- Bullet point one
-- Bullet point two
+**Layer 1 — Identity: the PIN reinvented**
 
-1. Numbered item one
-2. Numbered item two
+The fundamental problem is: how do you give someone a short, shareable handle that points to a cryptographic identity, without any server knowing who that person is?
 
-> This is a blockquote — great for highlighting a key idea.
+The answer is to generate a keypair locally on first launch. The public key becomes the source of truth. From that public key, you derive a PIN — something like a base-32 encoded hash of the first 40 bits of the public key — so it’s short (8 characters, like BBM), human-readable, and mathematically tied to the key. Nobody assigns it. No server registers it. It just falls out of math.
 
-You can add code like this:
+The private key never leaves the device, but it can be exported as an encrypted backup phrase (12-24 words, like a crypto wallet seed) so the user can restore their identity on a new device without coupling to hardware.
 
-```python
-print("Hello, world!")
-```
+![identity_generation_flow](/identity_generation_flow.png)
 
-And [links look like this](https://example.com).
+**Layer 2 — Messaging: Signal’s protocol underneath**
+
+Once two parties have each other’s public keys, the actual message encryption is straightforward to specify — you use the Double Ratchet Algorithm exactly as Signal does. Each message gets a fresh encryption key derived from a ratcheting chain, so even if one key is compromised, past and future messages stay protected. This layer is essentially solved technology. You don’t reinvent it; you adopt it.
+
+What you add on top is the BBM-style receipt system, but implemented without the server ever seeing who is messaging whom.
+
+![message_send_flow](/message_send_flow.png)
+
+Layer 3 — Transport: the hardest unsolved piece
+
+This is where most systems fail. The relay server above is still a central choke point — it knows which IP addresses are talking to it, even if it can’t read the messages. The full stack for solving this looks like:
+
+A federated relay network (like Matrix) so no single company controls the infrastructure
+Onion routing for the transport layer (like Tor, but lighter) so the relay doesn’t even know the IP of who’s sending
+Rate-limiting and spam prevention without identity, done via anonymous proof-of-work tokens (similar to how zcash handles shielded transactions)
+
+The last problem — spam and abuse prevention without any identity — is the genuinely unsolved design challenge. BBM solved it by coupling to hardware (a spammer needed physical devices). Signal solves it by requiring a phone number. Remove both, and you need a third mechanism. The current best answer is cryptographic rate-limiting: each PIN gets a quota of tokens that regenerate slowly, and sending a message burns a token. Spam at scale becomes computationally expensive. But this is still an active research area, not a production-ready solution.
+
+Here’s the full architecture stitched together:
+
+![full_system_architecture](/full_system_architecture.png)
+
+The practical build order
+
+If you were actually building this, you wouldn’t tackle all four layers at once. The realistic sequence is:
+
+Start with layers 1 and 2 — keygen, PIN derivation, and the Double Ratchet on top of a conventional (but minimal) central relay. This alone gives you something better than Signal in terms of privacy ergonomics, because there’s no phone number or email anywhere in the flow. The relay at this stage knows IP addresses but nothing else — that’s acceptable for an early product.
+
+Layer 3 (federated relays + onion routing) is an engineering project that adds significant latency and complexity. You’d introduce it in stages — federation first so no single company is the chokepoint, transport anonymity later when you have the user base to justify the infrastructure.
+
+Layer 4 (anonymous anti-spam) is where you’d want to collaborate with cryptography researchers, because no consumer messaging app has cracked this cleanly yet. The proof-of-work token approach is workable but burns battery. Zero-knowledge proof based rate limiting (where you prove “I haven’t sent more than N messages this hour” without revealing how many you’ve sent) is theoretically cleaner but computationally heavier still.
+
+The honest summary of where the frontier sits: layers 1, 2, and the beginning of layer 3 are buildable today with existing open-source primitives — libsodium for crypto, the Signal Protocol library for the ratchet, Matrix’s Synapse for federation reference. Layer 4 remains the genuinely open research problem that separates “very private messaging app” from “fully anonymous messaging system.”
