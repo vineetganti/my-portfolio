@@ -143,9 +143,11 @@ The agent streams it's answer and generates it. The returned object holds the fu
 print("Stop reason:", response.stop_reason)
 print("Tokens used:", response.metrics.accumulated_usage)
 ```
-Stop reason: end_turn
 
+```text
+Stop reason: end_turn
 Tokens used: {'inputTokens': 81, 'outputTokens': 145, 'totalTokens': 226}
+```
 
 
 ### Step 4: Give the agent a tool
