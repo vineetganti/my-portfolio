@@ -1,0 +1,135 @@
+---
+title: "How I built my first agent"
+description: "Trial and error guided learning on building my first agent using groq"
+date: "2026-10-25"
+tags: ["Agentic AI", "LLMs", "AI Engineering"]
+---
+
+### What is an agent?
+Speaking in terms of LLM world, the basic level interaction with an LLM happens through chat. User types in a prompt and LLM spits out an answer based on user's input or prompt.
+Under the hood, the model predicts the response one token at a time, drawing on what it learned during training and on whatever context you put in the prompt. Depending on the 
+model's size and compute power, this can significantly vary in terms of the quality of the output.
+
+The limitation is that a chat is a single round trip: one prompt in, one answer out. The model can't go and check something, run code, look up fresh data or fix its own mistake. 
+If the task needs five steps, I am the one doing the stitching, copying the output of step one into the prompt for step two, and so on.
+
+An agent takes over that stitching. It automates repeated prompting with the LLM and runs multiple jobs behind the scenes to provide a holistic solution in place rather than just 
+an answer which may not be the end solution to the user's request. In practice, it is a loop: the model decides what to do next, calls a tool (a search, a calculator, an API, a function 
+I wrote), reads the result, and decides again, until it judges that the task is done. The LLM is the brain, the tools are the hands, and the loop is what ties them together.
+
+This also explains why speed matters. One user request can turn into many model calls, so a slow model makes an agent painfully slow, and that is part of why I picked Groq for this build.
+
+Agentic AI has been around for more than a couple of years and finally i wanted to give it a try in not just being a user of it but rather as a builder to understand a deeper technical 
+perspective. Through pure coincidence, i came across Scaler's AI Bootcamp that has a guided plan to production of AI agents that should help me get my game into building Agentic AI 
+workflows and i will be documenting my learnings.  
+
+### What is the Strands Agents SDK?
+Strands Agents is an open-source Python SDK for building AI agents. It was originally released by AWS. Its main idea is that you let the language model do the planning, instead of writing a rigid workflow yourself. You give the model a prompt and a set of tools. It decides which tool to call, reads the result, and keeps going until the task is done. This cycle is called the agent loop.
+
+Why it suits a first agent:
+
+- Small API. The core is one class, Agent. You can build a working agent in a handful of lines.
+- Model-agnostic. Strands works with Amazon Bedrock, OpenAI, Anthropic, Ollama and others. Any OpenAI-compatible API also works. That includes Groq, which this post uses because it has a free tier.
+- Tools are plain Python. Decorate a function with @tool and the agent can call it. Strands also ships a ready-made tools package (strands-agents-tools).
+- Grows with you. The same SDK supports memory, multi-agent patterns, MCP and A2A, and deployment to AWS. You don't need to switch frameworks later.
+
+The whole agent, in about 10 lines
+
+
+```python
+import os
+from strands import Agent
+from strands.models.openai import OpenAIModel
+
+model = OpenAIModel(
+    client_args={
+        "api_key": os.environ["GROQ_API_KEY"],
+        "base_url": "https://api.groq.com/openai/v1",
+    },
+    model_id="openai/gpt-oss-120b",
+)
+
+agent = Agent(model=model)
+agent("Hello! Tell me a fun fact about AI agents.")
+```
+
+**What each part does**
+
+- OpenAIModel tells Strands which model to talk to. Pointing base_url at Groq is the only change needed to swap providers.
+- Agent(model=model) creates the agent and its loop. With no tools, it behaves like a chat model. Adding tools is what makes it act.
+- Calling agent("...") sends your prompt through the loop and returns the response.
+
+Takeaway: a first agent in Strands is a model plus an Agent wrapper. You add tools, memory and deployment on top of that as you need them.
+
+### What is groq?
+Groq is a company that runs open-source LLMs very fast. Groq doesn't train it's own frontier models. It hosts models like Open AI's gpt-oss, Llama and Qwen on custom chips and sells through an API called GroqCloud.
+
+**Key Concepts:**
+- LPU (Language Processing Unit): Groq's custom chip, built for inference, meaning running a trained model, not training one. It keeps model weights in on-chip memory, which is why responses come back so quickly. Speed is the selling point.
+- GroqCloud: The hosted service. Call models over HTTP after creating an API key.
+- OpenAI-compatible API: Groq's endpoint speaks the same protocol as OpenAI's. That's why the Strand's code only needs a different base_url and api_key. It's also why swapping providers later is easy.
+- Free tier: no credit card is needed, and you are never charged on it. If you go over the limits, you get an HTTP 429 error. Limits apply per organization and per model.
+    - Limits: sources disagree on the exact numbers. One recent page cites about 30 requests/min, 1,000 requests/day and 200,000 tokens/day for models like gpt-oss-120b. Check your own limits in the console before quoting figures in the post.
+    - Developer tier: pay-as-you-go. It gives up to 10x higher limits and unlocks the Batch API.
+
+**Why it fits a first agent**
+- Agents call the model many times per task: plan, call a tool, read the result, repeat.
+- Fast inference makes that loop feel responsive, and the free tier lets us experiement without spening money. The catch is the free tier limits.
+- A looping agent can hit them quickly, so expect a 429 or two while we learn.
+
+
+### Step 1: Install dependencies
+```python
+%pip install -q 
+"strands-agents[openai]>=1.60.0,<2.0.0" 
+"strands-agents-tools>=0.8.9,<0.9.0" 
+"langchain>=1.4.0,<2.0.0" 
+"langchain-groq>=1.1.0,<2.0.0" 
+"langgraph>=1.2.0,<2.0.0" 
+"python-dotenv>=1.0.0"
+"rich<14" 
+"opentelemetry-api<=1.42.1" 
+"opentelemetry-sdk<=1.42.1"
+```
+
+### Step 2: Choose the model
+- Below code block instantiates a groq model id along with the API key that was generated from [groq keys](https://console.groq.com/keys)
+- Set it as `GROQ_API_KEY` in your environment or in a `.env` file (this folder or the repo root)
+```python
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()  # reads GROQ_API_KEY from a .env file, if present
+
+MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
+
+print(f"Model  : {MODEL_ID}")
+print(f"API key: {'set' if os.getenv('GROQ_API_KEY') else 'MISSING - set GROQ_API_KEY'}")
+```
+
+### Step 3: The first agent
+```python
+from strands import Agent
+from strands.models.openai import OpenAIModel
+
+model = OpenAIModel(
+    client_args={
+        "api_key": os.environ["GROQ_API_KEY"],
+        "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),  # or a local OpenAI-compatible server
+        "max_retries": 5,  # retry dropped connections (the client default is 2)
+    },
+    model_id=MODEL_ID,
+    # Groq reasoning models stream their thinking by default; hide it so only the answer prints.
+    params={"extra_body": {"include_reasoning": False}},
+)
+
+# An agent = a model + (optional) tools + (optional) system prompt
+agent = Agent(model=model)
+
+response = agent("Explain Amazon Bedrock AgentCore in three sentences.")
+```
+
+This would give us answer:
+Amazon Bedrock AgentCore is the underlying runtime that powers **agents**—self‑directed AI workflows you can build on the Bedrock platform. It orchestrates calls to multiple foundation models (e.g., Claude, Titan, Llama 3), manages tool integrations, maintains conversation state, and handles error recovery, all while abstracting the infrastructure so developers focus on logic rather than scaling or networking. By exposing a simple SDK and API, AgentCore lets you define prompts, actions, and branching rules, then executes them reliably at scale within a secure, fully managed AWS environment.
+

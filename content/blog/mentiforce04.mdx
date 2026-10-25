@@ -1,0 +1,40 @@
+---
+title: "LLM Architectures - 04 - Transformer Inference Optimization Strategies"
+description: "A walkthrough of what I learnt on Transformer Inference Optimization Strategies with emphasis on inference efficiency, KV cache, flash attention and quantization methods with a broader scope on learning about LLM architectures."
+date: "2026-10-24"
+tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
+---
+
+## Why Is Inference Efficiency So Critical?
+
+### Where are the main bottlenecks in LLM inference — computation or memory?
+- LLM inference is predominantly memory-bound, rather than compute-bound. This bottleneck primarily stems from the immense data movement required, especially memory bandwidth limitations.
+- Core Distinction: Memory-Bound vs. Compute-Bound:
+    - Memory-Bound: A process is memory-bound if its performance is limited by the speed at which data can be fetched from memory. For LLMs, this involves moving billions of model parameters and activations between High Bandwidth Memory (HBM) on the GPU and the compute units.
+    - Compute-Bound: A process is compute-bound if its performance is limited by the raw processing speed (FLOPs). Modern GPUs and specialized AI accelerators possess tremendous computational throughput. While LLM operations are highly arithmetic, the challenge is often in feeding these compute units with data fast enough, rather than the units themselves being too slow to perform the calculations once data is present.
+- Mathematical Formulation: The Roofline Model Perspective: This understanding can be formally viewed through the Roofline Model, which characterizes the performance of a computational kernel based on its operational intensity and the hardware's peak performance.
+    - Performance Equation: Performance = min(Peak Compute, Peak Memory Bandwidth x Operational Intensity)
+    - Operational Intensity I: Operational intensity I is the ratio of floating-point operations (FLOPs) to bytes transferred from memory. For LLM inference, especially with large models, the number of bytes moved (weights, activations, KV cache) relative to computations per byte can be high, driving down the effective operational intensity for the core matrix multiplications if memory access is slow. (I = FLOPS/Bytes Moved)
+    - LLM Inference Profile: Due to the vast number of parameters and the sequential nature of token generation (each token requiring parameter loads and KV cache access), LLM inference often operates in the memory-bound region of the roofline chart. This means increasing FLOPs alone will not yield significant speedups unless memory bandwidth also scales proportionally.
+- Implications for Optimization: Recognizing this memory bottleneck guides current research and engineering efforts towards strategies that reduce memory footprint or improve memory access patterns.
+    - Quantization: Reduces the precision of weights and activations, thereby decreasing memory footprint and bandwidth requirements.
+    - Sparsity and Pruning: Reduces the number of active parameters, decreasing data movement.
+    - Efficient Attention Mechanisms (e.g., FlashAttention): Optimizes memory access patterns for attention computation, reducing HBM read/write operations.
+    - KV Cache Optimization: Techniques like PagedAttention or multi-query attention reduce KV cache size and access overheads.
+
+### How is the latency per token related to sequence length?
+- The relationship between latency per token and sequence length in LLM inference is non-trivial and primarily driven by the autoregressive generation process and the computational demands of the attention mechanism.
+    - Autoregressive Generation and KV Cache: LLMs operate autoregressively, generating tokens one at a time. Each new token depends on all previously generated tokens (the context).
+        - To significantly reduce redundant computation, a Key-Value (KV) cache is maintained. The KV cache stores the (Key) K and (Value) V matrices for all previously processed tokens across all attention layers. This prevents recomputing these values for the context window at each generation step.
+        - While the KV cache is crucial for efficiency, its size grows linearly with the sequence length. Accessing and managing this growing cache can become a significant memory bandwidth bottleneck, especially for very long sequences where data transfer rates limit performance.
+    - Computational Complexity of Attention: The multi-head self-attention mechanism within the Transformer architecture is a key driver of computational cost, directly impacting latency per token.
+        - During Autoregressive Inference (with KV Cache): When generating the t-th token, the latency is primarily governed by computing attention for the new token against all t-1 previous tokens. This operation scales approximately linearly with the current sequence length T (where T ~ t).
+        - Important to distinguish from the initial prompt processing phase, where the full prompt of length Lp is processed in parallel. While this phase is quadratic, it's a one time cost, whereas the cost incurred for each subsequent genrated token.
+    - Memory Bandwidth Constraints: Beyond arithmetic operations, memory access speed is a critical bottleneck for LLM inference, especially for longer sequences. For very long sequences, the sheer volume of data (KV cache entries and model weights) that needs to be transferred from VRAM to compute units becomes the limiting factor. This scenario is known as memory-bound computation, where the speed of data transfer, rather than raw FLOPs, dictates the latency.
+- In summary, the latency per token for LLM inference generally increases linearly with the current sequence length. This is due to the computational cost of attention at each step and the growing memory bandwidth requirements of the KV cache. Initially, computation may dominate, but for longer sequences, memory bandwidth typically becomes the primary bottleneck.
+
+### Why does inference memory usage grow in proportion to prompt length?
+- As prompt tokens are processed, thier respective key and value representations are computed and immediately stored in the KV cache. Therefore, size of the KV cache directly scales with the length of the input prompt.
+    - Furthermore, as the model generates subsequent tokens in an auto-regressive manner, each newly generated token's KV pair is also added to this cache, extending its size further.
+- It is because of this linear growth of KV Cache memory, it is a critical factor limiting the maximum context window (prompt + generated tokens) that can be handled by an LLM on a given GPU.
+- It is often the primary bottleneck for VRAM usage during inference, particularly for applications requiring very long contexts, such as document summarization or long-form dialogue systems.
