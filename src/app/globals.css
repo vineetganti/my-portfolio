@@ -239,9 +239,13 @@ body {
   font-style: normal;
 }
 
+/* Diagrams are transparent PNGs drawn for white; a white backing keeps their
+   dark text and grey lines readable on the olive themes. */
 .prose img {
   border-radius: 12px;
   border: 1px solid var(--rule);
+  background-color: #ffffff;
+  padding: 12px;
 }
 
 .prose hr {
