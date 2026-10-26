@@ -3,35 +3,34 @@
 @plugin "@tailwindcss/typography";
 
 /* ---------- Tokens ---------- */
-/* Burnt orange on olive. Light mode uses #BE5103 text on a near-white olive
-   ground (the only grounds where it passes AA). Dark mode lifts it to #FF8A3D,
-   the same hue at a lighter value, on deep olive. --strong is the darker/brighter
+/* Vanilla and olive. Dark mode sets #F3E5AB text on deep olive; light mode is
+   its inverse, deep olive text on a #F3E5AB ground. --strong is the darker/brighter
    text used on tinted surfaces where the base text colour would fail contrast. */
 :root {
-  --paper: #f8faee;
-  --card: #ffffff;
-  --card-2: #fbfcf4;
-  --ink: #be5103;
-  --ink-2: #be5103;
-  --strong: #8a3d05;
-  --muted: #8a4a1c;
-  --muted-2: #c9a27e;
-  --rule: #e2e7c8;
-  --rule-2: #e2e7c8;
-  --accent: #be5103;
-  --accent-ink: #8a3d05;
-  --accent-t: #fbe8d6;
-  --tool: #be5103;
+  --paper: #f3e5ab;
+  --card: #fbf6df;
+  --card-2: #f7edc4;
+  --ink: #2c361c;
+  --ink-2: #2c361c;
+  --strong: #1f2714;
+  --muted: #4f5d36;
+  --muted-2: #8a8f62;
+  --rule: #ddcf8e;
+  --rule-2: #ddcf8e;
+  --accent: #2c361c;
+  --accent-ink: #1f2714;
+  --accent-t: #e6d68f;
+  --tool: #2c361c;
   --tool-t: #e9efcf;
   --brain: #8a5a00;
   --brain-t: #f6ebc4;
   --risk: #a3283f;
   --risk-t: #f8e1d6;
-  --user: #8a4a1c;
+  --user: #4f5d36;
   --code-bg: #2c361c;
-  --code-ink: #fbe3cc;
+  --code-ink: #dfe3c8;
   --code-mute: #a3ae7c;
-  --focus: #8a3d05;
+  --focus: #1f2714;
   --header-h: 64px;
   --toc-bar-h: 0px;
   color-scheme: light;
@@ -42,17 +41,17 @@
     --paper: #2c361c;
     --card: #36422a;
     --card-2: #313c22;
-    --ink: #ff8a3d;
-    --ink-2: #ff8a3d;
-    --strong: #ffb27a;
-    --muted: #e8a27a;
-    --muted-2: #9c7a5a;
+    --ink: #f3e5ab;
+    --ink-2: #f3e5ab;
+    --strong: #faf3d6;
+    --muted: #cfc496;
+    --muted-2: #8f8a64;
     --rule: #4f5d36;
     --rule-2: #445030;
-    --accent: #ff8a3d;
-    --accent-ink: #ffb27a;
-    --accent-t: #4a3a22;
-    --tool: #ff8a3d;
+    --accent: #f3e5ab;
+    --accent-ink: #faf3d6;
+    --accent-t: #4d5530;
+    --tool: #f3e5ab;
     --tool-t: #3a4a26;
     --brain: #f0b43a;
     --brain-t: #3a3414;
@@ -60,9 +59,9 @@
     --risk-t: #4a2a22;
     --user: #9aa46e;
     --code-bg: #1f2714;
-    --code-ink: #fbe3cc;
+    --code-ink: #dfe3c8;
     --code-mute: #a3ae7c;
-    --focus: #ffb27a;
+    --focus: #faf3d6;
     color-scheme: dark;
   }
 }
@@ -71,17 +70,17 @@
   --paper: #2c361c;
   --card: #36422a;
   --card-2: #313c22;
-  --ink: #ff8a3d;
-  --ink-2: #ff8a3d;
-  --strong: #ffb27a;
-  --muted: #e8a27a;
-  --muted-2: #9c7a5a;
+  --ink: #f3e5ab;
+  --ink-2: #f3e5ab;
+  --strong: #faf3d6;
+  --muted: #cfc496;
+  --muted-2: #8f8a64;
   --rule: #4f5d36;
   --rule-2: #445030;
-  --accent: #ff8a3d;
-  --accent-ink: #ffb27a;
-  --accent-t: #4a3a22;
-  --tool: #ff8a3d;
+  --accent: #f3e5ab;
+  --accent-ink: #faf3d6;
+  --accent-t: #4d5530;
+  --tool: #f3e5ab;
   --tool-t: #3a4a26;
   --brain: #f0b43a;
   --brain-t: #3a3414;
@@ -89,9 +88,9 @@
   --risk-t: #4a2a22;
   --user: #9aa46e;
   --code-bg: #1f2714;
-  --code-ink: #fbe3cc;
+  --code-ink: #dfe3c8;
   --code-mute: #a3ae7c;
-  --focus: #ffb27a;
+  --focus: #faf3d6;
   color-scheme: dark;
 }
 
@@ -325,22 +324,23 @@ body {
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-meta .hljs-keyword {
-  color: #ff8a3d;
+  color: #f3e5ab;
+  font-weight: 600;
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-meta .hljs-string {
-  color: #d4de95;
+  color: #9fd3c7;
 }
 .hljs-number,
 .hljs-literal,
 .hljs-symbol {
-  color: #f2b880;
+  color: #d4de95;
 }
 .hljs-title,
 .hljs-title.function_,
 .hljs-section {
-  color: #ffb27a;
+  color: #ffffff;
   font-weight: 600;
 }
 .hljs-built_in,
@@ -353,7 +353,7 @@ body {
 .hljs-variable,
 .hljs-template-variable,
 .hljs-params {
-  color: #fbe3cc;
+  color: #dfe3c8;
 }
 .hljs-meta,
 .hljs-subst {
