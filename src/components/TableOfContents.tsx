@@ -172,7 +172,7 @@ export default function TableOfContents({
 
       {/* Mobile: slide-out drawer */}
       <div
-        className={`lg:hidden fixed inset-0 z-[60] bg-[rgba(10,14,30,0.45)] transition-opacity ${
+        className={`lg:hidden fixed inset-0 z-[60] bg-[rgba(20,26,12,0.55)] transition-opacity ${
           open ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         onClick={close}

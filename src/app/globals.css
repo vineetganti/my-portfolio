@@ -3,30 +3,32 @@
 @plugin "@tailwindcss/typography";
 
 /* ---------- Tokens ---------- */
+/* Olive palette: light mode is the inverse of dark mode
+   (#D4DE95 ground with deep olive text vs deep olive ground with #D4DE95 text). */
 :root {
-  --paper: #f2f4f8;
-  --card: #ffffff;
-  --card-2: #f8f9fc;
-  --ink: #19203f;
-  --ink-2: #3a4266;
-  --muted: #586082;
-  --muted-2: #9aa1bd;
-  --rule: #d7dce8;
-  --rule-2: #e6e9f1;
-  --accent: #2958c4;
-  --accent-ink: #1c3f8f;
-  --accent-t: #e1e9fc;
-  --tool: #0b7f73;
-  --tool-t: #d6f2ee;
-  --brain: #b07600;
-  --brain-t: #fff1cc;
-  --risk: #c4344f;
-  --risk-t: #fbe3e8;
-  --user: #4a5170;
-  --code-bg: #1b2136;
-  --code-ink: #e4e8f6;
-  --code-mute: #8e97b8;
-  --focus: #2958c4;
+  --paper: #d4de95;
+  --card: #e2e9b0;
+  --card-2: #dce4a3;
+  --ink: #2c361c;
+  --ink-2: #3b4726;
+  --muted: #4a5530;
+  --muted-2: #7c8750;
+  --rule: #b3bf6b;
+  --rule-2: #c6d184;
+  --accent: #2c361c;
+  --accent-ink: #1c2410;
+  --accent-t: #bfcb78;
+  --tool: #2c361c;
+  --tool-t: #c9d488;
+  --brain: #8a5a00;
+  --brain-t: #efe2a8;
+  --risk: #a3283f;
+  --risk-t: #ecd3b8;
+  --user: #4a5530;
+  --code-bg: #2c361c;
+  --code-ink: #d4de95;
+  --code-mute: #a3ae7c;
+  --focus: #2c361c;
   --header-h: 64px;
   --toc-bar-h: 0px;
   color-scheme: light;
@@ -34,53 +36,57 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #121830;
-    --card: #1a2142;
-    --card-2: #1e2649;
-    --ink: #e9ecf7;
-    --ink-2: #c5cbe3;
-    --muted: #a1a8c6;
-    --muted-2: #6c7499;
-    --rule: #2f3863;
-    --rule-2: #283058;
-    --accent: #7099ff;
-    --accent-ink: #a9c1ff;
-    --accent-t: #18284f;
-    --tool: #2ec2ae;
-    --tool-t: #0f3530;
+    --paper: #2c361c;
+    --card: #36422a;
+    --card-2: #3d4a2e;
+    --ink: #d4de95;
+    --ink-2: #c2cc86;
+    --muted: #b4be7c;
+    --muted-2: #7f8a57;
+    --rule: #4f5d36;
+    --rule-2: #3f4b2c;
+    --accent: #d4de95;
+    --accent-ink: #e6edbb;
+    --accent-t: #46532c;
+    --tool: #d4de95;
+    --tool-t: #3a4a26;
     --brain: #f0b43a;
-    --brain-t: #3a2e12;
-    --risk: #ff6e86;
-    --risk-t: #3f1b27;
-    --user: #b3b9d6;
-    --code-bg: #0e1328;
-    --focus: #8fb0ff;
+    --brain-t: #3a3414;
+    --risk: #ff8a8a;
+    --risk-t: #4a2a22;
+    --user: #9aa46e;
+    --code-bg: #1f2714;
+    --code-ink: #d4de95;
+    --code-mute: #a3ae7c;
+    --focus: #e6edbb;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --paper: #121830;
-  --card: #1a2142;
-  --card-2: #1e2649;
-  --ink: #e9ecf7;
-  --ink-2: #c5cbe3;
-  --muted: #a1a8c6;
-  --muted-2: #6c7499;
-  --rule: #2f3863;
-  --rule-2: #283058;
-  --accent: #7099ff;
-  --accent-ink: #a9c1ff;
-  --accent-t: #18284f;
-  --tool: #2ec2ae;
-  --tool-t: #0f3530;
+  --paper: #2c361c;
+  --card: #36422a;
+  --card-2: #3d4a2e;
+  --ink: #d4de95;
+  --ink-2: #c2cc86;
+  --muted: #b4be7c;
+  --muted-2: #7f8a57;
+  --rule: #4f5d36;
+  --rule-2: #3f4b2c;
+  --accent: #d4de95;
+  --accent-ink: #e6edbb;
+  --accent-t: #46532c;
+  --tool: #d4de95;
+  --tool-t: #3a4a26;
   --brain: #f0b43a;
-  --brain-t: #3a2e12;
-  --risk: #ff6e86;
-  --risk-t: #3f1b27;
-  --user: #b3b9d6;
-  --code-bg: #0e1328;
-  --focus: #8fb0ff;
+  --brain-t: #3a3414;
+  --risk: #ff8a8a;
+  --risk-t: #4a2a22;
+  --user: #9aa46e;
+  --code-bg: #1f2714;
+  --code-ink: #d4de95;
+  --code-mute: #a3ae7c;
+  --focus: #e6edbb;
   color-scheme: dark;
 }
 
@@ -269,8 +275,8 @@ body {
   align-items: center;
   gap: 6px;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #dde3f7;
+  border: 1px solid color-mix(in srgb, var(--code-ink) 35%, transparent);
+  color: var(--code-ink);
   border-radius: 8px;
   padding: 3px 10px;
   font: 600 0.78rem var(--font-body), system-ui, sans-serif;
@@ -279,7 +285,7 @@ body {
 }
 
 .code-block .copy-btn:hover {
-  border-color: #fff;
+  border-color: var(--code-ink);
 }
 
 .prose .code-block pre {
@@ -301,47 +307,48 @@ body {
   color: var(--code-ink);
 }
 
-/* highlight.js tokens, tuned for the dark code surface */
+/* highlight.js tokens, tuned for the olive code surface */
 .hljs-comment,
 .hljs-quote {
-  color: #8e97b8;
+  color: var(--code-mute);
   font-style: italic;
 }
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-meta .hljs-keyword {
-  color: #c4a7ff;
+  color: #ffd08a;
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-meta .hljs-string {
-  color: #8fe3c8;
+  color: #b7e08a;
 }
 .hljs-number,
 .hljs-literal,
 .hljs-symbol {
-  color: #ffc178;
+  color: #f2b880;
 }
 .hljs-title,
 .hljs-title.function_,
 .hljs-section {
-  color: #8fb8ff;
+  color: #e8f0b8;
+  font-weight: 600;
 }
 .hljs-built_in,
 .hljs-type,
 .hljs-title.class_ {
-  color: #7fd9f2;
+  color: #9fd3c7;
 }
 .hljs-attr,
 .hljs-attribute,
 .hljs-variable,
 .hljs-template-variable,
 .hljs-params {
-  color: #f2c6de;
+  color: #e6edbb;
 }
 .hljs-meta,
 .hljs-subst {
-  color: #c9d2f2;
+  color: var(--code-ink);
 }
 
 /* ---------- Tables ---------- */
@@ -391,7 +398,7 @@ body {
   display: grid;
   place-items: center;
   flex: none;
-  color: #fff;
+  color: var(--card);
   background: var(--user);
 }
 
