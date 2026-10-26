@@ -3,32 +3,35 @@
 @plugin "@tailwindcss/typography";
 
 /* ---------- Tokens ---------- */
-/* Olive palette: light mode is the inverse of dark mode
-   (#D4DE95 ground with deep olive text vs deep olive ground with #D4DE95 text). */
+/* Burnt orange on olive. Light mode uses #BE5103 text on a near-white olive
+   ground (the only grounds where it passes AA). Dark mode lifts it to #FF8A3D,
+   the same hue at a lighter value, on deep olive. --strong is the darker/brighter
+   text used on tinted surfaces where the base text colour would fail contrast. */
 :root {
-  --paper: #d4de95;
-  --card: #e2e9b0;
-  --card-2: #dce4a3;
-  --ink: #2c361c;
-  --ink-2: #3b4726;
-  --muted: #4a5530;
-  --muted-2: #7c8750;
-  --rule: #b3bf6b;
-  --rule-2: #c6d184;
-  --accent: #2c361c;
-  --accent-ink: #1c2410;
-  --accent-t: #bfcb78;
-  --tool: #2c361c;
-  --tool-t: #c9d488;
+  --paper: #f8faee;
+  --card: #ffffff;
+  --card-2: #fbfcf4;
+  --ink: #be5103;
+  --ink-2: #be5103;
+  --strong: #8a3d05;
+  --muted: #8a4a1c;
+  --muted-2: #c9a27e;
+  --rule: #e2e7c8;
+  --rule-2: #e2e7c8;
+  --accent: #be5103;
+  --accent-ink: #8a3d05;
+  --accent-t: #fbe8d6;
+  --tool: #be5103;
+  --tool-t: #e9efcf;
   --brain: #8a5a00;
-  --brain-t: #efe2a8;
+  --brain-t: #f6ebc4;
   --risk: #a3283f;
-  --risk-t: #ecd3b8;
-  --user: #4a5530;
+  --risk-t: #f8e1d6;
+  --user: #8a4a1c;
   --code-bg: #2c361c;
-  --code-ink: #d4de95;
+  --code-ink: #fbe3cc;
   --code-mute: #a3ae7c;
-  --focus: #2c361c;
+  --focus: #8a3d05;
   --header-h: 64px;
   --toc-bar-h: 0px;
   color-scheme: light;
@@ -38,17 +41,18 @@
   :root:not([data-theme="light"]) {
     --paper: #2c361c;
     --card: #36422a;
-    --card-2: #3d4a2e;
-    --ink: #d4de95;
-    --ink-2: #c2cc86;
-    --muted: #b4be7c;
-    --muted-2: #7f8a57;
+    --card-2: #313c22;
+    --ink: #ff8a3d;
+    --ink-2: #ff8a3d;
+    --strong: #ffb27a;
+    --muted: #e8a27a;
+    --muted-2: #9c7a5a;
     --rule: #4f5d36;
-    --rule-2: #3f4b2c;
-    --accent: #d4de95;
-    --accent-ink: #e6edbb;
-    --accent-t: #46532c;
-    --tool: #d4de95;
+    --rule-2: #445030;
+    --accent: #ff8a3d;
+    --accent-ink: #ffb27a;
+    --accent-t: #4a3a22;
+    --tool: #ff8a3d;
     --tool-t: #3a4a26;
     --brain: #f0b43a;
     --brain-t: #3a3414;
@@ -56,9 +60,9 @@
     --risk-t: #4a2a22;
     --user: #9aa46e;
     --code-bg: #1f2714;
-    --code-ink: #d4de95;
+    --code-ink: #fbe3cc;
     --code-mute: #a3ae7c;
-    --focus: #e6edbb;
+    --focus: #ffb27a;
     color-scheme: dark;
   }
 }
@@ -66,17 +70,18 @@
 :root[data-theme="dark"] {
   --paper: #2c361c;
   --card: #36422a;
-  --card-2: #3d4a2e;
-  --ink: #d4de95;
-  --ink-2: #c2cc86;
-  --muted: #b4be7c;
-  --muted-2: #7f8a57;
+  --card-2: #313c22;
+  --ink: #ff8a3d;
+  --ink-2: #ff8a3d;
+  --strong: #ffb27a;
+  --muted: #e8a27a;
+  --muted-2: #9c7a5a;
   --rule: #4f5d36;
-  --rule-2: #3f4b2c;
-  --accent: #d4de95;
-  --accent-ink: #e6edbb;
-  --accent-t: #46532c;
-  --tool: #d4de95;
+  --rule-2: #445030;
+  --accent: #ff8a3d;
+  --accent-ink: #ffb27a;
+  --accent-t: #4a3a22;
+  --tool: #ff8a3d;
   --tool-t: #3a4a26;
   --brain: #f0b43a;
   --brain-t: #3a3414;
@@ -84,9 +89,9 @@
   --risk-t: #4a2a22;
   --user: #9aa46e;
   --code-bg: #1f2714;
-  --code-ink: #d4de95;
+  --code-ink: #fbe3cc;
   --code-mute: #a3ae7c;
-  --focus: #e6edbb;
+  --focus: #ffb27a;
   color-scheme: dark;
 }
 
@@ -141,7 +146,7 @@ body {
   --tw-prose-headings: var(--ink);
   --tw-prose-lead: var(--ink-2);
   --tw-prose-links: var(--accent-ink);
-  --tw-prose-bold: var(--ink);
+  --tw-prose-bold: var(--strong);
   --tw-prose-counters: var(--muted);
   --tw-prose-bullets: var(--muted-2);
   --tw-prose-hr: var(--rule);
@@ -216,7 +221,7 @@ body {
 .prose :not(pre) > code {
   font-family: var(--font-mono), ui-monospace, monospace;
   background-color: var(--rule-2);
-  color: var(--ink);
+  color: var(--strong);
   padding: 0.08em 0.38em;
   border-radius: 5px;
   font-size: 0.88em;
@@ -316,12 +321,12 @@ body {
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-meta .hljs-keyword {
-  color: #ffd08a;
+  color: #ff8a3d;
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-meta .hljs-string {
-  color: #b7e08a;
+  color: #d4de95;
 }
 .hljs-number,
 .hljs-literal,
@@ -331,7 +336,7 @@ body {
 .hljs-title,
 .hljs-title.function_,
 .hljs-section {
-  color: #e8f0b8;
+  color: #ffb27a;
   font-weight: 600;
 }
 .hljs-built_in,
@@ -344,7 +349,7 @@ body {
 .hljs-variable,
 .hljs-template-variable,
 .hljs-params {
-  color: #e6edbb;
+  color: #fbe3cc;
 }
 .hljs-meta,
 .hljs-subst {
@@ -388,7 +393,13 @@ body {
   gap: 10px;
   margin: 0 0 4px;
   font-weight: 700;
-  color: var(--ink);
+  color: var(--strong);
+}
+
+/* Tinted callout grounds need the stronger text colour to stay readable */
+.callout .prose {
+  --tw-prose-body: var(--strong);
+  --tw-prose-bold: var(--strong);
 }
 
 .callout-ico {

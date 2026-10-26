@@ -24,6 +24,7 @@ const config: Config = {
         ink: {
           DEFAULT: "var(--ink)",
           2: "var(--ink-2)",
+          strong: "var(--strong)",
           muted: "var(--muted)",
           light: "var(--muted-2)",
         },

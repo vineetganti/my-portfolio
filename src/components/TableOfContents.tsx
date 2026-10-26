@@ -46,7 +46,7 @@ function TocList({
                 entry.level === 0 ? "py-2 text-[0.93rem]" : "py-1.5 text-[0.86rem]"
               } ${
                 isActive
-                  ? "bg-accent-tint text-ink"
+                  ? "bg-accent-tint text-ink-strong"
                   : entry.level === 0
                     ? "text-ink-2 hover:bg-card-2 hover:text-ink"
                     : "text-ink-muted hover:bg-card-2 hover:text-ink"

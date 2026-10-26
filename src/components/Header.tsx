@@ -34,7 +34,7 @@ export default function Header() {
                   href={item.href}
                   className={`px-2 sm:px-3 py-1.5 rounded-lg text-sm sm:text-[0.95rem] font-semibold transition-colors ${
                     isActive
-                      ? "bg-accent-tint text-ink"
+                      ? "bg-accent-tint text-ink-strong"
                       : "text-ink-2 hover:bg-card-2 hover:text-ink"
                   }`}
                 >
