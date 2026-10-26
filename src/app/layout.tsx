@@ -1,24 +1,26 @@
 import type { Metadata } from "next";
-import { DM_Serif_Display, Space_Grotesk, Space_Mono } from "next/font/google";
+import {
+  Atkinson_Hyperlegible_Mono,
+  Atkinson_Hyperlegible_Next,
+  Bricolage_Grotesque,
+} from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 
-const dmSerif = DM_Serif_Display({
-  weight: "400",
+const bricolage = Bricolage_Grotesque({
   subsets: ["latin"],
-  variable: "--font-dm-serif",
+  variable: "--font-heading",
 });
 
-const spaceGrotesk = Space_Grotesk({
+const atkinson = Atkinson_Hyperlegible_Next({
   subsets: ["latin"],
-  variable: "--font-space-grotesk",
+  variable: "--font-body",
 });
 
-const spaceMono = Space_Mono({
-  weight: ["400", "700"],
+const atkinsonMono = Atkinson_Hyperlegible_Mono({
   subsets: ["latin"],
-  variable: "--font-space-mono",
+  variable: "--font-mono",
 });
 
 export const metadata: Metadata = {
@@ -34,6 +36,9 @@ export const metadata: Metadata = {
   },
 };
 
+// Applies a saved theme before first paint so there is no light/dark flash.
+const themeScript = `try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}`;
+
 export default function RootLayout({
   children,
 }: {
@@ -42,11 +47,15 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${dmSerif.variable} ${spaceGrotesk.variable} ${spaceMono.variable}`}
+      suppressHydrationWarning
+      className={`${bricolage.variable} ${atkinson.variable} ${atkinsonMono.variable}`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="font-body antialiased min-h-screen flex flex-col">
         <Header />
-        <main className="flex-1 w-full max-w-content mx-auto px-4 py-10">
+        <main className="flex-1 w-full max-w-wide mx-auto px-4 sm:px-6 lg:px-10 py-10">
           {children}
         </main>
         <Footer />

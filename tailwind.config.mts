@@ -1,5 +1,7 @@
 import type { Config } from "tailwindcss";
 
+// Colours point at CSS variables defined in globals.css so light/dark
+// themes swap without touching any component classes.
 const config: Config = {
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
@@ -9,25 +11,41 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        heading: ["var(--font-dm-serif)", "Georgia", "serif"],
-        body: ["var(--font-space-grotesk)", "system-ui", "sans-serif"],
-        mono: ["var(--font-space-mono)", '"Courier New"', "monospace"],
+        heading: ["var(--font-heading)", "system-ui", "sans-serif"],
+        body: ["var(--font-body)", "system-ui", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "Menlo", "monospace"],
       },
       colors: {
-        cream: "#f5f0e8",
+        cream: "var(--paper)",
+        card: {
+          DEFAULT: "var(--card)",
+          2: "var(--card-2)",
+        },
         ink: {
-          DEFAULT: "#1a1a1a",
-          muted: "#6b6560",
-          light: "#b5afa6",
+          DEFAULT: "var(--ink)",
+          2: "var(--ink-2)",
+          muted: "var(--muted)",
+          light: "var(--muted-2)",
         },
         accent: {
-          DEFAULT: "#c44d2b",
-          hover: "#a33d20",
+          DEFAULT: "var(--accent)",
+          hover: "var(--accent-ink)",
+          tint: "var(--accent-t)",
         },
-        border: "#d9d3c7",
+        tool: "var(--tool)",
+        border: {
+          DEFAULT: "var(--rule)",
+          2: "var(--rule-2)",
+        },
       },
       maxWidth: {
-        content: "720px",
+        // Comfortable line length for reading
+        content: "46rem",
+        // Page frame for header, footer and two-column layouts
+        wide: "76rem",
+      },
+      spacing: {
+        header: "var(--header-h)",
       },
     },
   },

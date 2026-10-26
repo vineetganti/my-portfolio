@@ -10,20 +10,20 @@ export default function BlogPage() {
   const posts = getAllPosts();
 
   return (
-    <div>
+    <div className="max-w-[52rem]">
       <header className="mb-10">
-        <h1 className="font-heading text-4xl text-ink mb-2">Blog</h1>
-        <p className="font-body text-ink-muted">
+        <h1 className="font-heading font-extrabold text-5xl sm:text-6xl tracking-[-0.03em] text-ink mb-3">
+          Blog
+        </h1>
+        <p className="text-lg text-ink-2">
           Thoughts on technology, learning, and building things.
         </p>
       </header>
 
       {posts.length === 0 ? (
-        <p className="font-mono text-sm text-ink-muted">
-          No posts yet. Check back soon!
-        </p>
+        <p className="text-ink-muted">No posts yet. Check back soon!</p>
       ) : (
-        <div>
+        <div className="grid gap-4">
           {posts.map((post) => (
             <PostCard key={post.slug} post={post} />
           ))}

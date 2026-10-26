@@ -12,18 +12,16 @@ export default function ProjectsPage() {
   return (
     <div>
       <header className="mb-10">
-        <h1 className="font-heading text-4xl text-ink mb-2">Projects</h1>
-        <p className="font-body text-ink-muted">
-          Things I&apos;ve built and worked on.
-        </p>
+        <h1 className="font-heading font-extrabold text-5xl sm:text-6xl tracking-[-0.03em] text-ink mb-3">
+          Projects
+        </h1>
+        <p className="text-lg text-ink-2">Things I&apos;ve built and worked on.</p>
       </header>
 
       {projects.length === 0 ? (
-        <p className="font-mono text-sm text-ink-muted">
-          No projects yet. Check back soon!
-        </p>
+        <p className="text-ink-muted">No projects yet. Check back soon!</p>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (
             <ProjectCard key={project.slug} project={project} />
           ))}

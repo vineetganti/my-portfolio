@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import ThemeToggle from "@/components/ThemeToggle";
 
 const NAV_ITEMS = [
   { label: "Blog", href: "/blog" },
@@ -13,34 +14,37 @@ export default function Header() {
   const pathname = usePathname();
 
   return (
-    <header className="sticky top-0 z-50 bg-cream/90 backdrop-blur-sm border-b border-border">
-      <div className="max-w-content mx-auto px-4 py-4 flex items-center justify-between">
+    <header className="sticky top-0 z-50 h-header bg-cream/85 backdrop-blur-md border-b border-border">
+      <div className="h-full max-w-wide mx-auto px-4 sm:px-6 lg:px-10 flex items-center justify-between gap-4">
         <Link
           href="/"
-          className="font-heading text-2xl text-ink hover:text-accent transition-colors"
+          className="font-heading font-extrabold text-lg sm:text-xl tracking-tight whitespace-nowrap text-ink hover:text-accent transition-colors"
         >
           Vineet Ganti
         </Link>
 
-        <nav className="flex items-center gap-6">
-          {NAV_ITEMS.map((item) => {
-            const isActive =
-              pathname === item.href || pathname.startsWith(item.href + "/");
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`font-mono text-sm uppercase tracking-wider transition-colors ${
-                  isActive
-                    ? "text-accent"
-                    : "text-ink-muted hover:text-ink"
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+        <div className="flex items-center gap-2 sm:gap-4">
+          <nav className="flex items-center gap-1">
+            {NAV_ITEMS.map((item) => {
+              const isActive =
+                pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`px-2 sm:px-3 py-1.5 rounded-lg text-sm sm:text-[0.95rem] font-semibold transition-colors ${
+                    isActive
+                      ? "bg-accent-tint text-ink"
+                      : "text-ink-2 hover:bg-card-2 hover:text-ink"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );

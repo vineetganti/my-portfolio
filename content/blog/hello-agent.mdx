@@ -5,6 +5,10 @@ date: "2026-10-25"
 tags: ["Agentic AI", "LLMs", "AI Engineering"]
 ---
 
+Following are the resources from Scaler Academy that helped me get this learning going:
+[Your first AI agent] (https://scaler-content.github.io/your-first-agent/#agents)
+
+
 ### What is an agent?
 Speaking in terms of LLM world, the basic level interaction with an LLM happens through chat. User types in a prompt and LLM spits out an answer based on user's input or prompt.
 Under the hood, the model predicts the response one token at a time, drawing on what it learned during training and on whatever context you put in the prompt. Depending on the 
@@ -241,6 +245,8 @@ agent("What is the difference between an LLM and an AI agent?")
 ```
 
 ---
+
+[Giving agents tools](https://scaler-content.github.io/giving-agents-tools/)
 
 Further on using @tool, we will use the function to build a tip calculator, a multi-tool sales assistant and a custom inventory checker
 
@@ -541,3 +547,18 @@ Key Lessons
 - Tools return facts, and the model turns them into replies. The function returns a plain sentence, and the model then phrases the final answer in its own words. You keep the logic (the lookup) in code and let the model handle the conversation.
 - Handle the missing case in the tool. inventory.get(product_id, 0) means an unknown ID counts as out of stock instead of crashing. Notice what this costs you: a typo like PROD-12 says "out of stock", which is misleading. Returning "Product not found" would be more honest. This is a good beginner lesson, because the agent will repeat whatever your tool says, true or not.
 - The agent is only as accurate as its tools. The model didn't know the stock level. The tool supplied it. That is the pattern: the model handles language, and tools supply real data.
+
+---
+
+[Agents that remember](https://scaler-content.github.io/Agents-that-remember/)
+
+LLMs by default are stateless. That means if we opt out of a working session with a regular LLM chat conversation, it will not have any memory of that converstation as it's default behaviour.
+Memory is how the agent gets that information back into the prompt. Without memory, every interaction feels transactional. With memory, agent can keep track of what we asked a while ago, keep important facts across sessions and adapt to our preferences and stay on track in long-running work.
+
+
+
+
+
+[Agents that work together](https://pulkit-scaler.github.io/agents-that-work-together/)
+[How Agents Talk](https://scaler-content.github.io/How-agents-talk/#glossary)
+[Shipping Agents to Production](https://scaler-content.github.io/shipping-agents-to-production/)

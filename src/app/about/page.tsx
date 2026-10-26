@@ -5,16 +5,24 @@ export const metadata = {
   description: "Learn more about me.",
 };
 
+const CONTACTS = [
+  { label: "vineetganti@gmail.com", href: "mailto:vineetganti@gmail.com", icon: Mail },
+  { label: "GitHub", href: "https://github.com/vineetganti", icon: Code2 },
+  { label: "LinkedIn", href: "https://linkedin.com/in/vineetganti", icon: ExternalLink },
+];
+
 export default function AboutPage() {
   return (
-    <div>
+    <div className="max-w-content">
       <header className="mb-10">
-        <h1 className="font-heading text-4xl text-ink mb-2">About</h1>
+        <h1 className="font-heading font-extrabold text-5xl sm:text-6xl tracking-[-0.03em] text-ink">
+          About
+        </h1>
       </header>
 
-      <div className="space-y-6 font-body text-ink-muted leading-relaxed max-w-lg">
+      <div className="space-y-5 text-lg text-ink-2 leading-relaxed">
         <p>
-          Hi, I&apos;m <span className="text-ink font-medium">Vineet Ganti</span>.
+          Hi, I&apos;m <span className="text-ink font-bold">Vineet Ganti</span>.
           Welcome to my little space on the internet.
         </p>
         <p>
@@ -28,34 +36,26 @@ export default function AboutPage() {
         </p>
       </div>
 
-      <div className="mt-12 pt-8 border-t border-border">
-        <h2 className="font-heading text-2xl text-ink mb-4">Get in Touch</h2>
+      <div className="mt-12 rounded-2xl border border-border bg-card p-6">
+        <h2 className="font-heading font-extrabold text-2xl tracking-tight text-ink mb-4">
+          Get in Touch
+        </h2>
         <div className="flex flex-col gap-3">
-          <a
-            href="mailto:vineetganti@gmail.com"
-            className="inline-flex items-center gap-2 font-mono text-sm text-ink-muted hover:text-accent transition-colors"
-          >
-            <Mail size={16} />
-            vineetganti@gmail.com
-          </a>
-          <a
-            href="https://github.com/vineetganti"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 font-mono text-sm text-ink-muted hover:text-accent transition-colors"
-          >
-            <Code2 size={16} />
-            GitHub
-          </a>
-          <a
-            href="https://linkedin.com/in/vineetganti"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 font-mono text-sm text-ink-muted hover:text-accent transition-colors"
-          >
-            <ExternalLink size={16} />
-            LinkedIn
-          </a>
+          {CONTACTS.map((c) => {
+            const Icon = c.icon;
+            const external = c.href.startsWith("http");
+            return (
+              <a
+                key={c.href}
+                href={c.href}
+                {...(external && { target: "_blank", rel: "noopener noreferrer" })}
+                className="inline-flex items-center gap-2.5 font-semibold text-ink-2 hover:text-accent transition-colors"
+              >
+                <Icon size={17} />
+                {c.label}
+              </a>
+            );
+          })}
         </div>
       </div>
     </div>

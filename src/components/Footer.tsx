@@ -22,13 +22,13 @@ export default async function Footer() {
   "use cache";
 
   return (
-    <footer className="border-t border-border mt-16">
-      <div className="max-w-content mx-auto px-4 py-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <p className="font-mono text-xs text-ink-muted">
+    <footer className="border-t border-border mt-16 bg-card">
+      <div className="max-w-wide mx-auto px-4 sm:px-6 lg:px-10 py-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <p className="text-sm text-ink-muted">
           &copy; {new Date().getFullYear()} Vineet Ganti
         </p>
 
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-2">
           {SOCIAL_LINKS.map((link) => {
             const Icon = link.icon;
             return (
@@ -37,10 +37,10 @@ export default async function Footer() {
                 href={link.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-ink-muted hover:text-accent transition-colors"
+                className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-accent hover:border-accent transition-colors"
                 aria-label={link.label}
               >
-                <Icon size={18} />
+                <Icon size={17} />
               </a>
             );
           })}

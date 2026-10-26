@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { format } from "date-fns";
-import { getAllPosts, getPostBySlug } from "@/lib/blog";
+import { getAllPosts, getHeadings, getPostBySlug } from "@/lib/blog";
 import MdxContent from "@/components/MdxContent";
+import TableOfContents from "@/components/TableOfContents";
 import { ArrowLeft } from "lucide-react";
 
 export function generateStaticParams() {
@@ -32,42 +33,61 @@ export default async function BlogPostPage({
   const post = getPostBySlug(slug);
   if (!post) notFound();
 
+  const headings = post.toc ? getHeadings(post.content) : [];
+  const hasToc = headings.length > 1;
+
   return (
-    <article>
-      <Link
-        href="/blog"
-        className="inline-flex items-center gap-1.5 font-mono text-xs text-ink-muted hover:text-accent transition-colors uppercase tracking-wider mb-8"
-      >
-        <ArrowLeft size={14} />
-        Back to blog
-      </Link>
+    <div
+      id="top"
+      className={
+        hasToc
+          ? "lg:grid lg:grid-cols-[17rem_minmax(0,1fr)] lg:gap-12 xl:gap-16"
+          : "max-w-content mx-auto"
+      }
+    >
+      {hasToc && <TableOfContents headings={headings} title={post.title} />}
 
-      <header className="mb-10 border-b border-border pb-8">
-        <h1 className="font-heading text-4xl sm:text-5xl text-ink mb-4">
-          {post.title}
-        </h1>
-        <div className="flex items-center gap-3 mb-4">
-          <time className="font-mono text-xs text-ink-muted uppercase tracking-wide">
-            {format(new Date(post.date), "MMMM dd, yyyy")}
-          </time>
-          <span className="font-mono text-xs text-ink-light">·</span>
-          <span className="font-mono text-xs text-ink-muted">
+      <article className="min-w-0 max-w-[48rem]">
+        <Link
+          href="/blog"
+          className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink-muted hover:text-accent transition-colors mb-8"
+        >
+          <ArrowLeft size={15} />
+          All posts
+        </Link>
+
+        <header className="mb-10 border-b border-border pb-8">
+          <p className="font-bold text-ink-muted mb-4">
+            <time dateTime={post.date}>
+              {format(new Date(post.date), "MMMM d, yyyy")}
+            </time>
+            <span className="mx-2 text-ink-light">·</span>
             {post.readingTime}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {post.tags.map((tag) => (
-            <span
-              key={tag}
-              className="font-mono text-xs px-2 py-0.5 bg-cream border border-border rounded text-ink-muted"
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      </header>
+          </p>
+          <h1 className="font-heading font-extrabold text-4xl sm:text-5xl lg:text-6xl tracking-[-0.03em] leading-[1.02] text-ink">
+            {post.title}
+          </h1>
+          {post.description && (
+            <p className="mt-5 text-lg sm:text-xl text-ink-2 leading-relaxed">
+              {post.description}
+            </p>
+          )}
+          {post.tags.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-6">
+              {post.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center rounded-full border border-border bg-card px-3.5 py-1 text-sm text-ink-2"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </header>
 
-      <MdxContent source={post.content} />
-    </article>
+        <MdxContent source={post.content} />
+      </article>
+    </div>
   );
 }
