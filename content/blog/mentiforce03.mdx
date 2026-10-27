@@ -88,6 +88,8 @@ print(tok.decode(ids))                 # IDs -> text again (detokenization)
 - From the embedding matrix E, the vector e for token t is retrieved by selecting the t-th row of E.
 - The matrix is often initialised randomly and adjusted step by step to minimise the loss function. Pre-trained embeddings can initialise it, or the embeddings can be learned as an integral part of larger, context-aware language models that capture richer, dynamic, contextualised meanings for tokens.
 
+![Token ids 15, 2201 and 7 select rows 15, 2201 and 7 of the V by D embedding matrix, which are stacked into a 3 by D tensor](/llm-transformer-basics/embedding-lookup.svg)
+
 ```python
 import torch
 from torch import nn
@@ -155,6 +157,8 @@ The order above, with layer norm after each residual addition, is the layout of 
 - A special `[CLS]` token is prepended to the input sequence. Its final state is taken as the aggregate representation of the entire input, designed to capture the contextual information that summarises the sentence or document for the classification task.
 - That aggregate hidden state is fed to a task-specific **classification head**: a simple feed-forward neural network followed by a softmax activation. It turns the high-dimensional hidden state into a lower-dimensional vector whose entries are the unnormalised scores for each target class.
 - The `[CLS]` approach is the most common (for example in BERT), but some architectures or fine-tuning strategies use a **pooled output** instead. A pooling operation (mean or max pooling) over all the token hidden states of the sequence gives a single aggregate vector, which then goes through a classification head in the same way.
+
+![A CLS token is prepended to the sentence. After the encoder, the hidden vector of CLS goes through a linear layer and softmax to give class probabilities](/llm-transformer-basics/cls-head.svg)
 
 #### Embedding extraction: How is the final hidden state used directly without projection?
 
@@ -227,6 +231,8 @@ sampled = torch.multinomial(probs, 1)         # one random draw, weighted by the
 | **Vision (images)** | The most common approach treats an image as a sequence of **patches**, analogous to the words in a sentence |
 | **Audio (sound)** | Audio, typically a 1D time-series signal, is also converted into a sequence of embeddings suitable for Transformers |
 
+![A 224 by 224 image is cut into 196 patches of 16 by 16 pixels, each flattened to 768 numbers, projected to the model dimension and given a position embedding before entering the Transformer](/llm-transformer-basics/vision-patches.svg)
+
 - The concept extends to **multimodal models**, where different modalities (text, image, audio) are each processed by their own modality-specific embedding layers, then concatenated, fused or integrated at different stages of a single Transformer, often with shared or specialised cross-attention.
 - **The core advantage:** by turning diverse modalities into one unified sequence-embedding format, Transformers can use their self-attention to capture complex, long-range dependencies within and across modalities, without redesigning the core attention and feed-forward layers for every new data type.
     - The Transformer block itself becomes largely modality-agnostic. It relies on the embedding layer to supply a suitable, semantically rich input representation that keeps the essential information of the original data.
@@ -280,6 +286,8 @@ It comes from a combination of parallelisability, robust architectural component
 | **Model parallelism** | The model is partitioned across devices, each holding a portion of the model's layers, or part of a layer (for example by sharding the weights of a large linear layer) |
 | **Pipeline parallelism** | Different layers go to different devices, forming a pipeline. Batches are split into micro-batches to keep the pipeline full and the devices busy |
 
+![Data parallelism replicates the model and averages gradients, tensor parallelism splits a layer's weights, pipeline parallelism streams micro-batches through layer groups, and sharding gives each GPU a slice of the training state](/llm-python-internals/parallelism.svg)
+
 - **Optimisation.** Adaptive optimizers with dynamic learning-rate schedules are crucial for navigating the complex loss landscapes of enormous models and ensuring stable convergence.
 - **Data-driven inductive bias.** A Transformer's ability to learn patterns from massive datasets lets it generalise effectively.
 
@@ -290,6 +298,8 @@ It comes from a combination of parallelisability, robust architectural component
 - Matrix multiplication is the bedrock, but attention is more accurately a **structured sequence of matrix operations** that together implement one specific functional transformation.
 - At its core, self-attention projects the input embeddings into query, key and value matrices, then applies a scaled dot-product operation and a weighted summation, implemented with matrix multiplication or related linear algebra.
 - The main source of the memory blow-up is the explicit **materialisation and storage of the attention score matrix** produced by the query-key-transpose product. That product is itself a critical matrix multiplication, computing the raw attention score (compatibility) between every query vector and every key vector.
+
+![Square grids for lengths 4, 8 and 16 show that doubling the sequence length quadruples the number of attention scores, which in FP16 is 8 MiB per head at 2048 tokens and 128 MiB at 8192](/llm-transformer-basics/score-matrix-growth.svg)
 
 ### How do Query / Key / Value determine the output?
 
@@ -351,6 +361,8 @@ Techniques like layer normalization are often applied to the logits or to interm
 - The outputs of the individual heads are **concatenated** into the final multi-head output, combining the different perspectives each head learned.
 - **The efficiency side.** It isn't the main semantic driver, but multi-head attention does help parallel computation. Each head can compute its output independently and at the same time, which is a big advantage for efficient use of modern GPUs and TPUs.
 
+![The input is projected into 8 heads of 64 dimensions, each head runs attention on its own, the outputs are concatenated back to 512 dimensions, and a final linear projection mixes them](/llm-transformer-basics/multi-head.svg)
+
 ## Positional Encoding Methods
 
 ### Why does the vanilla Transformer have no sense of sequence order?
@@ -384,6 +396,8 @@ First, their shared goal: to give the Transformer's attention mechanism a sense 
 | **Generalisation** | Excellent for sequence lengths it hasn't seen, because the functional form is universal | Limited to the maximum sequence length seen in training, and struggles to extrapolate to much longer sequences |
 | **Flexibility and adaptability** | Less flexible: the pattern is fixed and independent of the data distribution | Highly flexible: it can adapt to intricate, possibly non-linear positional relationships in the specific dataset |
 | **Parameters and training** | Adds no trainable parameters and no training cost beyond the initial computation | Adds trainable parameters (an embedding matrix) and computation during optimisation |
+
+![A grid of positions by embedding dimensions coloured by sine and cosine values: low dimensions oscillate fast and high dimensions slowly, so every position has a unique pattern](/llm-transformer-basics/sinusoidal.svg)
 
 ### What problem does Rotary Position Embedding (RoPE) solve?
 

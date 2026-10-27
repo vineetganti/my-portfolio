@@ -5,36 +5,544 @@ date: "2026-10-24"
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
-## Why Is Inference Efficiency So Critical?
+The third post covered the architecture of a Transformer. This one is about running it fast. Generating text is dominated by moving bytes, not by arithmetic, and almost every optimisation in this post is a way of moving fewer bytes or moving them less often: the KV cache, FlashAttention and quantization.
 
-### Where are the main bottlenecks in LLM inference — computation or memory?
-- LLM inference is predominantly memory-bound, rather than compute-bound. This bottleneck primarily stems from the immense data movement required, especially memory bandwidth limitations.
-- Core Distinction: Memory-Bound vs. Compute-Bound:
-    - Memory-Bound: A process is memory-bound if its performance is limited by the speed at which data can be fetched from memory. For LLMs, this involves moving billions of model parameters and activations between High Bandwidth Memory (HBM) on the GPU and the compute units.
-    - Compute-Bound: A process is compute-bound if its performance is limited by the raw processing speed (FLOPs). Modern GPUs and specialized AI accelerators possess tremendous computational throughput. While LLM operations are highly arithmetic, the challenge is often in feeding these compute units with data fast enough, rather than the units themselves being too slow to perform the calculations once data is present.
-- Mathematical Formulation: The Roofline Model Perspective: This understanding can be formally viewed through the Roofline Model, which characterizes the performance of a computational kernel based on its operational intensity and the hardware's peak performance.
-    - Performance Equation: Performance = min(Peak Compute, Peak Memory Bandwidth x Operational Intensity)
-    - Operational Intensity I: Operational intensity I is the ratio of floating-point operations (FLOPs) to bytes transferred from memory. For LLM inference, especially with large models, the number of bytes moved (weights, activations, KV cache) relative to computations per byte can be high, driving down the effective operational intensity for the core matrix multiplications if memory access is slow. (I = FLOPS/Bytes Moved)
-    - LLM Inference Profile: Due to the vast number of parameters and the sequential nature of token generation (each token requiring parameter loads and KV cache access), LLM inference often operates in the memory-bound region of the roofline chart. This means increasing FLOPs alone will not yield significant speedups unless memory bandwidth also scales proportionally.
-- Implications for Optimization: Recognizing this memory bottleneck guides current research and engineering efforts towards strategies that reduce memory footprint or improve memory access patterns.
-    - Quantization: Reduces the precision of weights and activations, thereby decreasing memory footprint and bandwidth requirements.
-    - Sparsity and Pruning: Reduces the number of active parameters, decreasing data movement.
-    - Efficient Attention Mechanisms (e.g., FlashAttention): Optimizes memory access patterns for attention computation, reducing HBM read/write operations.
-    - KV Cache Optimization: Techniques like PagedAttention or multi-query attention reduce KV cache size and access overheads.
+<Callout type="note" title="The LLM Architectures series">
+
+1. [01 · Python Internals](/blog/mentiforce01)
+2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
+3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
+4. **04 · Transformer Inference Optimization Strategies** (this post)
+
+</Callout>
+
+The fourth post covers four topics:
+
+- Why inference efficiency is so critical
+- How the KV cache speeds up inference
+- FlashAttention's low-level implementation and limitations
+- Quantization and other model compression techniques
+
+Every question has a diagram, and every formula that matters is written out with a worked example. The numbers use an A100-class GPU (312 TFLOP/s in FP16, about 2 TB/s of HBM bandwidth) and Llama-2-7B unless said otherwise.
+
+## Why is inference efficiency so critical?
+
+### Where are the main bottlenecks in LLM inference: computation or memory?
+
+LLM inference is mostly **memory-bound**, not compute-bound. A GPU has far more arithmetic throughput than the memory system can feed.
+
+| | Memory-bound | Compute-bound |
+| --- | --- | --- |
+| **What limits speed** | How fast data can be fetched from memory | How fast the arithmetic units can work |
+| **In an LLM** | Moving billions of weights and the KV cache from HBM (High Bandwidth Memory) to the compute units | Large matrix multiplications with plenty of reuse per byte |
+| **When it happens** | Decoding: one token at a time | Prefill: a long prompt processed in parallel |
+
+The **Roofline model** makes this precise. It describes a kernel by its **operational intensity** `I`, the FLOPs it performs per byte it moves from memory:
+
+```text
+P(I) = min( P_peak , BW × I )          where  I = FLOPs / bytes moved
+
+ridge point:  I* = P_peak / BW = 312 TFLOP/s ÷ 2 TB/s ≈ 156 FLOPs per byte
+```
+
+Below the ridge point, speed is set by bandwidth (`BW × I`). Above it, speed is capped by the arithmetic peak.
+
+![A log-log roofline chart for an A100-class GPU: performance rises along a bandwidth-limited slope up to a ridge point near 156 FLOPs per byte and then flattens. Decode at batch size 1 sits far down the slope, batch 32 sits higher, and prefill sits in the compute-bound region](/llm-inference-optimization/roofline.svg)
+
+Why decoding sits so far to the left:
+
+- To produce one token, every weight is read from HBM once. An FP16 weight is 2 bytes, and it takes part in one multiply-add, which is 2 FLOPs. So `I ≈ 2 FLOPs ÷ 2 bytes = 1`.
+- If `B` sequences are decoded together, each weight is still read once but used `B` times, so `I ≈ B`. At batch 1 the GPU runs at about 0.6% of its peak.
+- Prefill processes the whole prompt as one big matrix multiplication, so its intensity is in the hundreds and it is compute-bound.
+
+Here is the same fact in time units, for one decode step of a 7B FP16 model:
+
+![For a 7 billion parameter FP16 model, moving the weights from HBM takes about 7 milliseconds per token, while the arithmetic takes about 0.045 milliseconds, roughly 155 times less](/llm-inference-optimization/decode-time.svg)
+
+```text
+memory time  = 14 GB ÷ 2 TB/s            ≈ 7 ms
+compute time = 14 GFLOP ÷ 312 TFLOP/s   ≈ 0.045 ms        (2 FLOPs per parameter)
+```
+
+<Callout type="analogy" title="A fast chef with a slow pantry">
+
+The GPU's arithmetic units are a chef who can cook almost instantly. The weights are ingredients in a pantry across the room. At batch size 1 the chef cooks one dish, walks across the room for every ingredient, and spends nearly all the time walking. Cooking for many customers at once (a bigger batch) uses each trip for more dishes.
+
+</Callout>
+
+This is why the optimisations in this post target **bytes**, not FLOPs:
+
+| Lever | What it reduces |
+| --- | --- |
+| **Quantization** | Bytes per weight and per activation, so less bandwidth per token |
+| **Sparsity and pruning** | The number of weights that have to be moved |
+| **Efficient attention (FlashAttention)** | HBM reads and writes during attention |
+| **KV cache optimisation** (PagedAttention, GQA/MQA, KV quantization) | The size of the cache and the cost of reading it |
+| **Batching** | Raises intensity: one weight read serves many sequences |
 
 ### How is the latency per token related to sequence length?
-- The relationship between latency per token and sequence length in LLM inference is non-trivial and primarily driven by the autoregressive generation process and the computational demands of the attention mechanism.
-    - Autoregressive Generation and KV Cache: LLMs operate autoregressively, generating tokens one at a time. Each new token depends on all previously generated tokens (the context).
-        - To significantly reduce redundant computation, a Key-Value (KV) cache is maintained. The KV cache stores the (Key) K and (Value) V matrices for all previously processed tokens across all attention layers. This prevents recomputing these values for the context window at each generation step.
-        - While the KV cache is crucial for efficiency, its size grows linearly with the sequence length. Accessing and managing this growing cache can become a significant memory bandwidth bottleneck, especially for very long sequences where data transfer rates limit performance.
-    - Computational Complexity of Attention: The multi-head self-attention mechanism within the Transformer architecture is a key driver of computational cost, directly impacting latency per token.
-        - During Autoregressive Inference (with KV Cache): When generating the t-th token, the latency is primarily governed by computing attention for the new token against all t-1 previous tokens. This operation scales approximately linearly with the current sequence length T (where T ~ t).
-        - Important to distinguish from the initial prompt processing phase, where the full prompt of length Lp is processed in parallel. While this phase is quadratic, it's a one time cost, whereas the cost incurred for each subsequent genrated token.
-    - Memory Bandwidth Constraints: Beyond arithmetic operations, memory access speed is a critical bottleneck for LLM inference, especially for longer sequences. For very long sequences, the sheer volume of data (KV cache entries and model weights) that needs to be transferred from VRAM to compute units becomes the limiting factor. This scenario is known as memory-bound computation, where the speed of data transfer, rather than raw FLOPs, dictates the latency.
-- In summary, the latency per token for LLM inference generally increases linearly with the current sequence length. This is due to the computational cost of attention at each step and the growing memory bandwidth requirements of the KV cache. Initially, computation may dominate, but for longer sequences, memory bandwidth typically becomes the primary bottleneck.
+
+Generation has two phases with different costs:
+
+- **Prefill.** The prompt of `Lp` tokens is processed in parallel. Attention here is quadratic in `Lp`, but it happens once per request.
+- **Decode.** Tokens come out one at a time. Each step is paid again for every generated token, so it dominates the total time.
+
+With a KV cache, each decode step needs two things from HBM: the **weights** (a fixed cost) and the **KV cache of every earlier token** (a cost that grows with the context). That gives the idealised model:
+
+```text
+t_token ≈ ( W_bytes + B × T × c_kv ) ÷ BW
+
+W_bytes = weight bytes (14 GB for 7B in FP16)       B = sequences in the batch
+T       = tokens already in the cache               c_kv = KV bytes per token (0.5 MiB for Llama-2-7B)
+```
+
+So latency per token is **linear in the context length**, on top of a constant floor set by the weights:
+
+![A stacked chart of the idealised time per decode step: reading the weights costs a constant 7 milliseconds, reading the KV cache adds time that grows linearly with context length and overtakes the weight cost at about 27 thousand tokens](/llm-inference-optimization/decode-latency.svg)
+
+- For short contexts, the weights dominate and latency is almost flat.
+- At batch 1 the two costs meet at `T ≈ 14 GB ÷ 0.5 MiB ≈ 27,000` tokens. With a larger batch `B`, the KV term grows `B` times and takes over much earlier.
+- The attention arithmetic itself is also linear per step, `O(T · d)`, but it is cheap next to the bytes it has to read.
 
 ### Why does inference memory usage grow in proportion to prompt length?
-- As prompt tokens are processed, thier respective key and value representations are computed and immediately stored in the KV cache. Therefore, size of the KV cache directly scales with the length of the input prompt.
-    - Furthermore, as the model generates subsequent tokens in an auto-regressive manner, each newly generated token's KV pair is also added to this cache, extending its size further.
-- It is because of this linear growth of KV Cache memory, it is a critical factor limiting the maximum context window (prompt + generated tokens) that can be handled by an LLM on a given GPU.
-- It is often the primary bottleneck for VRAM usage during inference, particularly for applications requiring very long contexts, such as document summarization or long-form dialogue systems.
+
+Every token the model has seen leaves a key and a value vector in every layer, and those vectors must stay in memory to be attended to later. Prompt tokens add their entries during prefill, and every generated token adds one more.
+
+![Stacked bars of VRAM for Llama-2-7B in FP16 at batch size 1: the weights take a fixed 12.6 GiB, the KV cache adds 0.5, 2, 8, 16, 32 and 64 GiB at 1k, 4k, 16k, 32k, 64k and 128k tokens, and at 128k the total passes the capacity of an 80 GB GPU](/llm-inference-optimization/kv-memory-growth.svg)
+
+- KV cache memory grows **linearly** with prompt plus generated length, and also linearly with the batch size.
+- The weights are a fixed cost. The KV cache is the part that changes with traffic.
+- On long-context workloads (document summarisation, long chats) the KV cache, not the weights, is usually what runs the GPU out of VRAM.
+
+## How the KV cache speeds up inference
+
+### What are the dimensions of the Key/Value cache? How is it stored?
+
+**Dimensions.** For each layer, the cache holds one K tensor and one V tensor:
+
+```text
+[batch, num_kv_heads, seq_len, head_dim]
+```
+
+- `num_kv_heads` equals `num_heads` in standard multi-head attention (MHA). It is smaller in grouped-query attention (GQA), and 1 in multi-query attention (MQA).
+- `head_dim = d_model / num_heads`.
+- `seq_len` grows by one with each generated token. Prefill writes the whole prompt at once.
+- Some implementations put `seq_len` before `num_kv_heads`. The layout varies, but the content is the same.
+
+![Every Transformer layer keeps one K tensor and one V tensor, each shaped batch by KV heads by sequence length by head dimension, where the sequence axis grows by one row per generated token](/llm-inference-optimization/kv-shape.svg)
+
+The attention variant decides how many KV heads there are, and so how big the cache is:
+
+![Eight query heads in three layouts: in multi-head attention each has its own KV head, in grouped-query attention four share each of two KV heads, and in multi-query attention all eight share one KV head](/llm-inference-optimization/kv-heads.svg)
+
+**How it is stored.** There are three common strategies:
+
+| Strategy | How it works | Trade-off |
+| --- | --- | --- |
+| **Grow by concatenation** (the classic Hugging Face `past_key_values`) | One `(K, V)` pair per layer. Every step does `torch.cat` along the sequence axis | Allocates a new buffer and copies the whole cache every step. Fragments memory |
+| **Preallocated static cache** | A fixed `[batch, kv_heads, max_seq_len, head_dim]` buffer per layer. New K/V are written in place | No copies, fixed shapes (good for `torch.compile` and CUDA graphs), but it reserves memory for `max_seq_len` even if it is never used |
+| **Paged** (vLLM PagedAttention) | The cache is split into fixed-size blocks, for example 16 tokens each. A per-sequence block table maps logical blocks to physical ones anywhere in memory | Almost no fragmentation, and sequences can share blocks |
+
+![Left: growing by concatenation allocates a new, larger buffer every step and copies the old cache into it. Right: a static cache reserves the maximum length once and writes each new token in place](/llm-inference-optimization/kv-storage.svg)
+
+![Two sequences each see their KV cache as logical blocks of 16 tokens. A block table maps each logical block to a physical block anywhere in GPU memory, so blocks of different sequences interleave and only the last block of a sequence can be partly empty](/llm-inference-optimization/paged-attention.svg)
+
+Other ways to shrink the cache:
+
+- **Lower precision.** Store K and V in FP8 or INT8 (even INT4) instead of FP16.
+- **Fewer or smaller entries.** GQA and MQA (above), sliding-window attention, or evicting old tokens.
+- **MLA** (multi-head latent attention, used by DeepSeek) caches a small compressed latent vector per token instead of full keys and values.
+
+### How does attention for a prefix prompt avoid redundant computation?
+
+Without a cache, producing the next token means running the model over the **whole** sequence again, because the new token's query must be compared with the keys and values of every earlier token. Those keys and values did not change since the last step, so recomputing them is pure waste.
+
+The KV cache removes the waste:
+
+1. **Prefill.** The prompt goes through the model once. In every layer the keys and values of every prompt token are computed and **stored**.
+2. **Decode.** Each step feeds in only the newest token. Its `K` and `V` are computed, **appended** to the cache, and its query attends to the whole cache.
+
+![Rows are decoding steps and columns are tokens. Without a cache every step recomputes keys and values for every token, 18 computations over four steps. With a cache only the prefill and the one new token per step are computed, 6 computations, and the rest are read from the cache](/llm-inference-optimization/decode-cache.svg)
+
+In the attention score matrix this means that only **one row** is new at each step:
+
+![Left: during prefill the whole lower triangle of the score matrix is computed at once as a matrix times matrix product. Right: during a decode step only the newest row is needed, a vector times matrix product against the cached keys](/llm-inference-optimization/prefill-decode.svg)
+
+The cost per decode step, for a context of `T` tokens and model width `d`:
+
+| Part of a step | Without a KV cache | With a KV cache |
+| --- | --- | --- |
+| K, V projections and the MLP | `O(T · d²)`: all `T` tokens again | `O(d²)`: only the new token |
+| Attention scores and weighted sum | `O(T² · d)` | `O(T · d)` |
+| Over a whole generation of `N` tokens, attention | `O(N³ · d)` | `O(N² · d)` |
+
+The cache is a trade: it buys a large amount of compute for `2 × L × H_kv × T × d × bytes` of memory (next question). It also changes which side of the roofline decode lives on, because each step now reads a long cache instead of recomputing it.
+
+```python
+# Hugging Face: the cache is explicit
+out = model(input_ids, use_cache=True)             # prefill: processes the prompt, fills the cache
+past = out.past_key_values                          # K and V of every layer
+next_id = out.logits[:, -1].argmax(-1, keepdim=True)
+
+out = model(next_id, past_key_values=past, use_cache=True)  # decode: one token in, cache grows by one
+```
+
+The same idea works **across requests**. If two requests start with the same system prompt, the keys and values of that prefix are identical, so they can be computed once and shared. This is **prefix caching**:
+
+![Two requests with the same system prompt point to the same three physical blocks, which carry a reference count of two, so request two skips the prefill for those tokens. Only the blocks that differ are private to each request](/llm-inference-optimization/prefix-sharing.svg)
+
+- Blocks are identified by a hash of their tokens and everything before them, so equal prefixes find equal blocks.
+- A request that hits the cache skips the prefill work for those tokens, which lowers the time to first token.
+
+### How large can the cache get? Can it cause out-of-memory? Does it need to be manually cleared?
+
+**How large.** The size is a product of seven factors:
+
+```text
+KV bytes = 2 × L × B × H_kv × T × d × b
+
+2    one K and one V            L    number of layers          B   batch size
+H_kv number of KV heads         T    tokens in the cache       d   head dimension
+b    bytes per element (2 for FP16/BF16, 1 for FP8/INT8)
+```
+
+For full multi-head attention `H_kv × d = d_model`, so the formula simplifies to `2 × L × B × T × d_model × b`. For GQA or MQA, use the real number of KV heads, not the number of query heads.
+
+![The KV cache size is the product of two for K and V, the number of layers, batch size, number of KV heads, sequence length, head dimension and bytes per element. For Llama-2-7B in FP16 with 4096 tokens at batch size 1 this is 2 GiB. A bar chart compares bytes per token for multi-head, grouped-query and multi-query layouts](/llm-inference-optimization/kv-formula.svg)
+
+```python
+def kv_cache_bytes(n_layers, batch, seq_len, n_kv_heads, head_dim, bytes_per_elem=2):
+    return 2 * n_layers * batch * seq_len * n_kv_heads * head_dim * bytes_per_elem
+
+kv_cache_bytes(32, 1, 4096, 32, 128, 2)   # Llama-2-7B, FP16: 2,147,483,648 bytes = 2 GiB
+kv_cache_bytes(32, 1, 4096, 8, 128, 2)    # Llama-3-8B, 8 KV heads: 536,870,912 bytes = 512 MiB
+```
+
+Per token that is 512 KiB for Llama-2-7B and 128 KiB for Llama-3-8B. Both grow linearly with the batch size and the length, so a batch of 32 sequences of 2048 tokens needs `32 × 2048 × 512 KiB = 32 GiB` for Llama-2-7B, on top of the 13 GiB of weights.
+
+**Can it cause an out-of-memory error?** Yes, and it is the usual cause in serving. Each new token appends K and V to every layer, so the cache grows steadily, and with many concurrent long requests it can exhaust VRAM. That caps the maximum context length and the maximum batch size, and with them the throughput.
+
+**Does it need to be cleared manually?** No. Inference engines manage it for you. When a request ends (an `[EOS]` token, the maximum length, or a cancellation), the blocks it held go back to a pool and are reused by other requests.
+
+![The engine owns a pool of free KV blocks. A request takes blocks for its prompt at prefill and one more each time its generation fills a block. When it ends, all its blocks go back to the pool automatically. If the pool is empty, new requests wait or a running request is preempted](/llm-inference-optimization/kv-lifecycle.svg)
+
+- With **PagedAttention**, blocks are small and need not be contiguous, so the cache is allocated on demand instead of reserving the maximum length up front. The vLLM paper measured that earlier systems used only about 20–38% of their KV memory for real token states.
+- If the pool runs out, the scheduler stops admitting new requests and, if needed, **preempts** a running one: it swaps that request's blocks to CPU memory, or drops them and recomputes the prefill later.
+- In your own code with a Hugging Face model, the cache lives inside the `past_key_values` object, so it is freed when you drop the reference (and call `torch.cuda.empty_cache()` only if you need the memory back for another process).
+
+## FlashAttention's low-level implementation and limitations
+
+### How does FlashAttention fuse memory access with computation?
+
+Standard attention runs as three separate steps. Each one writes its result to HBM, and the next one reads it back:
+
+```text
+S = Q · Kᵀ / √d        # N × N scores        -> written to HBM
+P = softmax(S)         # N × N probabilities -> read from and written to HBM
+O = P · V              # output              -> read P from HBM
+```
+
+The `N × N` matrices `S` and `P` are the expensive part: they are large, and they travel across the slow memory twice each. FlashAttention computes the **exact same result** but never builds them in HBM.
+
+![Standard attention runs three kernels, and the N by N score and probability matrices are written to and read back from HBM. FlashAttention runs one fused kernel that loads tiles of Q, K and V into SRAM, computes scores, softmax and the weighted sum there, and writes only the output back](/llm-inference-optimization/standard-vs-flash.svg)
+
+It relies on two ideas:
+
+- **Tiling.** Split `Q`, `K` and `V` into blocks sized to fit in the GPU's fast on-chip **SRAM**. For one block of queries `Q_i`, sweep across the blocks `K_j`, `V_j`, doing all the work on the tile that is currently in SRAM.
+- **Kernel fusion.** The matmul, the scaling, the softmax and the second matmul are one GPU kernel, so intermediate values stay in SRAM and registers. This also removes the launch overhead of several kernels.
+
+![The score matrix is swept tile by tile. For one block of queries, the kernel sweeps across blocks of keys and values, keeping the running maximum, running sum and output accumulator in SRAM and writing the output block to HBM once](/llm-inference-optimization/flash-tiling.svg)
+
+Why this matters is the memory hierarchy: SRAM is roughly an order of magnitude faster than HBM, but tiny.
+
+![GPU memory hierarchy: registers, shared memory or SRAM at about 19 TB/s in aggregate, a 40 MB L2 cache, HBM of 40 to 80 GB at 1.5 to 2 TB/s, and host RAM over PCIe at about 32 GB/s](/llm-nn-fundamentals/gpu-memory-hierarchy.svg)
+
+**The hard part: softmax across tiles.** A softmax needs the maximum and the sum of a whole row, but a tile only sees part of the row. FlashAttention keeps running statistics per row, the **running max** `m` and the **running sum** `l`, and **rescales** its partial results whenever the max changes (**online softmax**):
+
+```text
+m_new = max( m_old , rowmax(S_ij) )
+l_new = e^(m_old − m_new) · l_old + rowsum( e^(S_ij − m_new) )
+O_new = e^(m_old − m_new) · O_old + e^(S_ij − m_new) · V_j
+final:  O = O_new / l_new
+```
+
+A worked example, with the row of scores `[1, 3, 2, 4]` processed in two blocks:
+
+![Online softmax over the scores 1, 3, 2, 4 in two blocks: after the first block the running max is 3 and the sum is 1.135; the second block raises the max to 4, the old sum is rescaled by exp of minus one, and the final sum of 1.553 equals the single-pass result](/llm-inference-optimization/online-softmax.svg)
+
+- Block 1 gives `m = 3` and `l = e^(1−3) + e^(3−3) = 1.135`.
+- Block 2 raises the max to 4. The old sum shrinks by `e^(3−4) = 0.368`, and `l = 0.368 × 1.135 + e^(2−4) + e^(4−4) = 1.553`.
+- A single pass over all four scores gives `l = e^(−3) + e^(−1) + e^(−2) + 1 = 1.553`. Identical.
+
+<Callout type="info" title="Exact, not approximate">
+
+FlashAttention changes the order of the arithmetic and where the data lives, not the maths. The output equals standard attention up to normal floating-point rounding. That is what separates it from approximate or sparse attention methods.
+
+</Callout>
+
+In PyTorch you rarely call it directly. `scaled_dot_product_attention` picks a fused backend when the hardware and dtype allow it:
+
+```python
+import torch.nn.functional as F
+from torch.nn.attention import sdpa_kernel, SDPBackend
+
+# q, k, v: (batch, heads, seq_len, head_dim) in FP16 or BF16 on a CUDA GPU
+with sdpa_kernel(SDPBackend.FLASH_ATTENTION):          # force the FlashAttention backend
+    out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+```
+
+### What are the differences between FlashAttention v1 and v2? Which devices are supported?
+
+Both versions are exact and IO-aware. v2 reorganises the work so the GPU is kept busier:
+
+![Each grid shows the order in which score tiles are visited. Version 1 loops over key and value blocks in the outer loop, so the partial outputs for every query block are read and written to HBM repeatedly. Version 2 loops over query blocks in the outer loop and keeps the output block in SRAM, which also lets different query blocks run in parallel on different thread blocks](/llm-inference-optimization/flash-v1-v2.svg)
+
+| | FlashAttention v1 | FlashAttention v2 |
+| --- | --- | --- |
+| **Loop order** | Outer loop over K/V blocks, inner over Q blocks | Outer loop over Q blocks, inner over K/V blocks |
+| **Output block** | `O_i`, `m_i`, `l_i` are loaded and stored in HBM on every pass | Stays in SRAM until the final write |
+| **Parallelism** | Across batch and heads | Also across the sequence length: independent Q blocks run on different SMs, which helps long sequences with small batches |
+| **Work inside a block** | K is split across warps, so partial sums must be combined through shared memory | Q is split across warps, so no communication is needed |
+| **Non-matrix-multiply work** | Rescales the output at every step | Defers the rescaling, so more of the time is spent in fast Tensor Core matmuls |
+| **Speed** | 2–4× faster than standard attention (paper) | About 2× faster than v1, reaching roughly 50–70% of an A100's FP16 peak |
+| **Extras** | | Larger head dimensions, MQA and GQA, and (in later releases) sliding-window attention |
+
+**Supported devices.** The official kernels target NVIDIA GPUs with Tensor Cores:
+
+| Version | Hardware |
+| --- | --- |
+| **FlashAttention-2** | Ampere (A100, RTX 30 series), Ada Lovelace (RTX 40 series, L4) and Hopper (H100). Turing (T4, RTX 20 series) and Volta are not supported: use v1.x there |
+| **FlashAttention-3** | Hopper only (H100), with asynchronous Tensor Core and TMA use and FP8 support |
+| **AMD** | ROCm builds exist (Composable Kernel and Triton backends) |
+
+Support changes quickly, so check the project README for the current list before depending on it.
+
+### Why is FlashAttention especially effective for long sequences?
+
+The `N × N` matrix is the problem. It grows with the square of the length, in memory **and** in HBM traffic:
+
+```text
+standard attention:  HBM accesses  Θ( N·d + N² )        extra memory  O(N²)
+FlashAttention:      HBM accesses  Θ( N²·d² / M )       extra memory  O(N)       (M = SRAM size)
+```
+
+For `d` much smaller than `√M` (typical values: `d = 64–128`, `M` about 100 KB), the second line is several times smaller. The `O(N)` extra memory is one number per row (the log-sum-exp), not a matrix.
+
+The size of the matrix being avoided, per head and per sequence in FP16:
+
+![A log-log chart of the memory needed per head per sequence: standard attention stores the N by N score matrix, 2 MiB at 1k tokens, 512 MiB at 16k, 2 GiB at 32k and 32 GiB at 128k, while FlashAttention keeps one FP32 statistic per row, 128 KiB at 32k tokens](/llm-inference-optimization/attention-memory-scaling.svg)
+
+- At 32k tokens a single head's score matrix is 2 GiB, and a model has dozens of heads per layer. Standard attention simply cannot hold it.
+- Less HBM traffic means the attention step is faster too, and the GPU spends more time on arithmetic and less waiting on memory.
+- This is what makes long-context training and inference practical on a single GPU.
+
+### Can it be used for inference, or only for training?
+
+Both. The two cases use the same idea in a different way:
+
+![Four panels: in the training forward pass a fused kernel writes the output and one log-sum-exp value per row and does not save S or P; in the backward pass S and P are recomputed tile by tile in SRAM; in inference prefill the same fused kernel runs and nothing is saved; in inference decode Flash-Decoding splits the long KV cache across thread blocks and merges the partial results](/llm-inference-optimization/flash-train-infer.svg)
+
+| Phase | What FlashAttention does |
+| --- | --- |
+| **Training, forward** | Fused kernel. Saves only `O` and the per-row log-sum-exp `L`, not `S` or `P` |
+| **Training, backward** | Recomputes `S` and `P` tile by tile from `Q`, `K`, `V` and `L` in SRAM. It does extra FLOPs, but never stores an `N × N` tensor |
+| **Inference, prefill** | The same fused forward kernel. A long prompt is a big `N × N` problem, so prefill gains most |
+| **Inference, decode** | The query has one row, so there is little to tile. **Flash-Decoding** splits the KV cache along the sequence axis across many thread blocks, each computes a partial `(m, l, O)`, and a small final step merges them |
+
+Decode still reads the whole KV cache from HBM, so it stays memory-bound. FlashAttention makes that read efficient and parallel, but it does not remove it.
+
+## Quantization and other model compression techniques
+
+Quantization stores numbers with fewer bits. For a 7B-parameter model:
+
+![Weight memory of a 7 billion parameter model: 28 GB in FP32, 14 GB in FP16 or BF16, 7 GB in INT8 and 3.5 GB in INT4. A 24 GB GPU can hold the FP16, INT8 and INT4 versions but not the FP32 one](/llm-nn-fundamentals/dtype-memory.svg)
+
+Because decoding is memory-bound, fewer bytes per weight means faster tokens as well as smaller models.
+
+### What are the principles of INT8 / FP16 / GPTQ? Which ones impact precision?
+
+First, how the formats spend their bits:
+
+![Bit layouts: FP32 uses 1 sign, 8 exponent and 23 mantissa bits; BF16 keeps the 8 exponent bits but only 7 mantissa bits; FP16 uses 1, 5 and 10 bits and tops out at 65,504; INT8 has 256 evenly spaced levels and INT4 has 16](/llm-inference-optimization/number-formats.svg)
+
+**FP16 and BF16 (16-bit floats).** A float keeps a sign, an **exponent** (range) and a **mantissa** (precision):
+
+```text
+FP16:  value = (−1)^s × 2^(e − 15) × (1 + m / 1024)     5 exponent bits, 10 mantissa bits
+       largest value 65,504     smallest normal value 2^−14 ≈ 6.1 × 10⁻⁵     about 3–4 decimal digits
+BF16:  same 8 exponent bits as FP32 (range up to 3.4 × 10³⁸), only 7 mantissa bits (about 2–3 digits)
+```
+
+- Floats are spaced **logarithmically**: small numbers are represented very finely and big ones coarsely. That suits weights and activations, which span a wide range.
+- Neural networks tolerate the lost digits well. FP16 can overflow because of its small range, which is why BF16 is often preferred.
+
+**INT8 (8-bit integers).** An integer grid is spaced **evenly**, so we need a **scale** to map real values onto it. There are two schemes:
+
+![Top: symmetric quantization maps the float range minus 1.27 to 1.27 to integers minus 127 to 127 with a scale of 0.01 and zero maps to zero. Bottom: asymmetric quantization maps the float range minus 0.5 to 2.05 to 0 to 255 with a scale of 0.01 and a zero point of 50](/llm-inference-optimization/int8-quantization.svg)
+
+```text
+Symmetric:    s = α / 127                     q = clamp( round(x / s), −127, 127 )      x̂ = s · q
+Asymmetric:   s = (max − min) / 255           z = round(−min / s)
+              q = clamp( round(x / s) + z, 0, 255 )                                      x̂ = s · (q − z)
+
+rounding error per value ≤ s / 2                 typical error (uniform) = s / √12
+```
+
+Example with `α = 1.27`: `s = 0.01`, and `x = 0.347` becomes `q = round(34.7) = 35`, which dequantizes to `x̂ = 0.35`. The error, 0.003, is below `s / 2 = 0.005`.
+
+```python
+def quantize_int8(x):
+    s = x.abs().max() / 127                                  # one scale for the whole tensor
+    q = torch.clamp(torch.round(x / s), -127, 127).to(torch.int8)
+    return q, s                                              # dequantize with q.float() * s
+```
+
+- The scale can be per tensor, per output channel, or per **group** of weights (say 128 values). Finer scales cost a little memory but track the range better.
+- **Outliers** are the real enemy. One huge value inflates `α`, which inflates `s`, and every other value loses resolution. Per-channel scales, outlier handling and smoothing methods exist to deal with this. Activations have more outliers than weights, so quantizing both (W8A8) is harder than quantizing only the weights.
+
+**GPTQ (post-training weight quantization).** GPTQ (**G**enerative **P**re-trained **T**ransformer **Q**uantization) compresses the weights of a finished model to 4 or 3 bits **without retraining**. Rounding each weight independently adds error. GPTQ rounds the weights of a layer **one column at a time** and pushes each column's rounding error onto the columns that are still in full precision, so the layer's **output** stays close to the original:
+
+![GPTQ quantizes one column at a time: columns already done are INT4, the current column is rounded, and its rounding error is spread onto the columns that are still in full precision using the inverse Hessian from a small calibration set](/llm-inference-optimization/gptq.svg)
+
+```text
+per layer:   minimise  ‖ W·X − Ŵ·X ‖²      with Ŵ on a 4-bit grid       X = calibration activations
+Hessian:     H = 2 · X · Xᵀ
+for each column q:   δ = ( w_q − quant(w_q) ) / [H⁻¹]_qq
+                     w_rest ← w_rest − δ · [H⁻¹]_(q, rest)
+```
+
+- It needs only a small unlabelled **calibration set** (a few hundred samples) to measure how much each weight matters.
+- The result is weight-only quantization: the weights are stored in 4 bits, then dequantized on the fly for the matrix multiply.
+
+**Which ones impact precision?** All three lose some, in different ways:
+
+| Method | What is lost | Typical effect on LLM quality |
+| --- | --- | --- |
+| **FP16 / BF16** | Mantissa digits (and range for FP16) | Negligible. This is how most models are served |
+| **INT8** | Resolution: an even grid of 256 levels. Hurts most when outliers stretch the range | Small with per-channel scales for weights. W8A8 needs care with activation outliers |
+| **INT4 with GPTQ** | Resolution: only 16 levels per group of weights | Measurable but small thanks to error compensation. Naive 4-bit rounding would be much worse |
+
+The loss depends more on the number of bits and the method than on the format family. Fewer bits and cruder scales lose more.
+
+### If quantized models can be used for inference, can they also be used for training?
+
+Yes, with a special technique: **Quantization-Aware Training (QAT)**. It simulates quantization during the forward pass so the model learns weights that survive it.
+
+![In the forward pass the FP32 weight is quantized and de-quantized so the layer sees quantization noise. In the backward pass the rounding step has no useful gradient, so the straight-through estimator passes the gradient through as if rounding were the identity, and the optimizer updates the FP32 master weight](/llm-inference-optimization/qat-ste.svg)
+
+- **Fake quantization.** In the forward pass the weights are quantized and immediately dequantized back to full precision: `ŵ = s · clamp(round(w / s), q_min, q_max)`. The layer computes with `ŵ`, so it sees the rounding noise.
+- **The gradient problem.** `round()` is flat almost everywhere, so its true derivative is 0 and no gradient would reach `w`.
+- **Straight-through estimator (STE).** In the backward pass we pretend rounding is the identity, inside the clip range:
+
+```text
+forward:    ŵ = s · clamp( round(w / s), q_min, q_max )
+backward:   ∂ŵ/∂w ≈ 1    if  q_min ≤ w/s ≤ q_max          (0 outside the range)
+```
+
+```python
+class FakeQuant(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, w, s):
+        return torch.clamp(torch.round(w / s), -127, 127) * s   # quantize, then dequantize
+
+    @staticmethod
+    def backward(ctx, grad):
+        return grad, None     # straight-through: the gradient passes unchanged
+```
+
+- **Master weights stay in FP32.** Updates are tiny, and low-bit values would swallow them. Only the forward pass sees the quantized values.
+
+How this applies to each format:
+
+| Format | In training |
+| --- | --- |
+| **INT8** | QAT is almost essential to recover accuracy. The forward pass is simulated or runs in INT8, gradients stay in FP32 |
+| **FP16 / BF16** | Common as **mixed-precision training**: low-precision compute with an FP32 master copy of the weights |
+| **GPTQ** | **Not a training method.** It is post-training quantization of a finished model, using calibration data. Training in that setting means QAT or adapters |
+
+For fine-tuning large models there is a practical shortcut, **QLoRA**: keep the base model frozen in 4-bit, and train only small low-rank **adapters** in BF16. The quantized weights are never updated, so there is no gradient problem.
+
+### How are quantized weights executed on the GPU? Are there dedicated kernels?
+
+Yes. Modern GPUs have **Tensor Cores**, units that multiply small matrix tiles in hardware. For a tile they compute:
+
+```text
+D = A × B + C        A, B: low-precision inputs      C, D: higher-precision accumulators
+INT8:   A, B in INT8,  C, D in INT32           FP16/BF16:   A, B in FP16 or BF16,  C, D in FP32
+```
+
+There are two common execution paths:
+
+![Two lanes. W8A8: INT8 weights and activations are multiplied on Tensor Cores with INT32 accumulation, then rescaled by the product of the two scales. Weight-only INT4: packed 4-bit weights are loaded from HBM, dequantized to FP16 in registers, and multiplied on Tensor Cores in FP16 with FP32 accumulation](/llm-inference-optimization/quantized-matmul.svg)
+
+```text
+W8A8:          Y ≈ s_x · s_w · ( X_q · W_qᵀ )      integer matmul, INT32 accumulation
+weight-only:   Y ≈ X · ( s · (W_q − z) )ᵀ          dequantize W in registers, then an FP16 matmul
+```
+
+- **Why INT32 accumulation.** Each product of two INT8 values is at most `127 × 127 = 16,129`. A sum over `K = 4096` terms is at most about 6.6 × 10⁷, far below INT32's limit of about 2.1 × 10⁹. The result cannot overflow.
+- **Why weight-only is still faster.** Decoding is memory-bound, so reading 4-bit weights moves 4× fewer bytes than FP16. The dequantize step is **fused into the kernel**, so the FP16 weights never touch HBM.
+- Compute-bound phases (prefill) gain from the faster INT8 Tensor Core throughput itself. Memory-bound phases gain from the smaller footprint.
+
+The software stack that exposes this:
+
+| Layer | Examples |
+| --- | --- |
+| **Hardware** | NVIDIA Tensor Cores (INT8 from Turing, INT4 on Turing and Ampere, FP8 on Hopper and Ada) |
+| **Libraries** | cuBLASLt and CUTLASS for dense low-precision GEMMs |
+| **Specialised kernels** | Marlin, AWQ and GPTQ kernels, bitsandbytes (4-bit and 8-bit) |
+| **Inference engines** | TensorRT-LLM, vLLM, which choose and fuse the right kernels |
+| **Cross-platform** | ONNX Runtime, OpenVINO, Apache TVM |
+
+### How are operations with large dynamic range (e.g., LayerNorm, softmax) handled?
+
+They are kept in **higher precision**. Matrix multiplications hold nearly all the FLOPs and tolerate low precision. LayerNorm and softmax hold almost none, but they contain sums of squares and exponentials, which are very sensitive to rounding and overflow.
+
+![Attention: INT8 matmuls with an FP32 softmax in the middle, then a dequantize, residual add and LayerNorm in higher precision, then requantize to INT8 for the next matmul](/llm-inference-optimization/mixed-precision-block.svg)
+
+**LayerNorm** normalises each token's feature vector of size `d`:
+
+```text
+μ  = (1/d) Σ x_i
+σ² = (1/d) Σ (x_i − μ)²
+y_i = γ_i · (x_i − μ) / √(σ² + ε) + β_i
+```
+
+- The sum of squares overflows quickly in low precision. In FP16, `x² > 65,504` once `|x| > 256`, and LLM activations can have outliers that large.
+- Computing the variance as `E[x²] − μ²` can lose all its digits to cancellation.
+- So the mean and variance are computed in FP32, even when the input and output are INT8 or FP16.
+
+**Softmax** turns scores into probabilities:
+
+```text
+softmax(z)_j = e^(z_j) / Σ_k e^(z_k)  =  e^(z_j − z_max) / Σ_k e^(z_k − z_max)
+```
+
+The exponential grows so fast that it overflows low-precision formats at modest inputs. In FP16, `e^12 = 162,755` is already larger than 65,504. The fix is the second form: **subtract the maximum first**, so the largest exponent is 0 and everything is at most 1.
+
+![For the logits 12 and 14, exp gives 162,755 and 1,202,604, both above the FP16 maximum of 65,504, so they become infinity and the division gives NaN. Subtracting the maximum 14 first gives exponents minus 2 and 0, values 0.135 and 1, and the correct probabilities 0.119 and 0.881](/llm-inference-optimization/safe-softmax.svg)
+
+```python
+def softmax(z):
+    z = z - z.max()              # the largest exponent becomes 0, so exp() never overflows
+    e = torch.exp(z)
+    return e / e.sum()           # in practice, accumulate the sum in FP32
+```
+
+The strategies, in order of how often they are used:
+
+| Strategy | What it does |
+| --- | --- |
+| **Mixed precision** | Matmuls in INT8 or FP16, and LayerNorm and softmax internals in FP32 |
+| **Fused kernels** | Dequantize, softmax or LayerNorm, and requantize in one kernel, so the FP32 values stay in registers and never reach HBM |
+| **Safe formulations** | Max subtraction in softmax, a stable variance computation in LayerNorm |
+| **Look-up tables with clipping** | Used on some edge accelerators for `exp`, with careful input scaling |
+| **QAT** | Trains the model to tolerate the quantization noise, though sensitive operations still keep higher internal precision |
+
+## Key takeaways
+
+- Decoding is **memory-bound**. Per-token speed is roughly `bytes moved ÷ bandwidth`: the weights (a constant) plus the KV cache (which grows with context and batch).
+- The **KV cache** trades memory for compute: it stores `2 × L × B × H_kv × T × d × bytes`, grows linearly with the context, and is managed automatically. **Paging**, prefix sharing, GQA/MQA and KV quantization all shrink or share it.
+- **FlashAttention** computes exact attention with tiling, fusion and an online softmax. It avoids the `N × N` matrix, so extra memory drops from `O(N²)` to `O(N)`, and it helps training, prefill and (with Flash-Decoding) decode.
+- **Quantization** stores weights in fewer bits: formats spend bits on range or precision, integers need a scale, **GPTQ** compensates rounding error layer by layer, and QAT with the straight-through estimator is how quantization enters training.
+- On the GPU, low-precision **Tensor Core** matmuls accumulate in higher precision, and numerically sensitive operations (**LayerNorm**, **softmax**) stay in FP32 inside fused kernels.

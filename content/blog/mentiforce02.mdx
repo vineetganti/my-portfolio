@@ -30,6 +30,8 @@ Neurons are organised into **layers**:
 - **Hidden layers** perform complex feature extraction and transformation, through successive weighted sums and activation functions.
 - The **output layer** produces the final predictions or classifications.
 
+![One neuron computes a weighted sum of its inputs plus a bias and applies an activation function. A network arranges neurons in input, hidden and output layers, fully connected, here 4, 5 and 2 neurons with 37 parameters](/llm-nn-fundamentals/neuron-layers.svg)
+
 | Component | What it does |
 | --- | --- |
 | **Weights** | The strength of the connection between neurons in different layers. They determine how much an input influences a neuron's output, and they are adjusted during training to minimise prediction error |
@@ -70,6 +72,8 @@ print(sum(p.numel() for p in model.parameters()))  # 4*8 + 8 + 8*2 + 2 = 58 para
 
 In short, trainable parameters are the adaptive elements that encode what the network has learned. Constants (hyperparameters) are the design choices around them.
 
+![Hyperparameters such as layer sizes, learning rate and dropout rate are chosen by the designer and fixed. Trainable parameters, the weights and biases, are updated by gradient descent](/llm-nn-fundamentals/params-vs-hyperparams.svg)
+
 #### Which are used during the forward pass, and what extra is used during training?
 
 | Used in the forward pass (inference) | Added during training |
@@ -104,6 +108,8 @@ The training phase extends the forward pass with ways to learn from errors and a
 | **CPU (host)** | PyTorch's C++ backend (powered by the ATen library) uses standard system memory allocation routines (such as `malloc` or equivalent) to reserve a contiguous block of RAM. This is typically the default device |
 | **GPU (device)** | PyTorch uses the GPU's programming model, mainly CUDA for NVIDIA GPUs or ROCm for AMD GPUs. It calls low-level runtime APIs (such as `cudaMalloc`) to request dedicated video RAM (VRAM) from the GPU's memory controller, and the tensor stores a pointer to that block |
 
+![A torch.Tensor object holds shape, strides, dtype, device and a pointer to a storage block, which lives in host RAM or in GPU VRAM and is copied across PCIe by .to cuda](/llm-nn-fundamentals/tensor-device-memory.svg)
+
 - **Device transfer.** Moving a tensor from CPU to GPU (with `tensor.to('cuda')` or `model.cuda()`) copies its data from host RAM to device VRAM. This is a crucial step for using parallel computation, and the transfer bandwidth can be a significant bottleneck.
 - **Memory layout and contiguity.** Tensors are often stored in one contiguous block to optimise access patterns and efficiency. PyTorch uses **strides** to handle non-contiguous views without copying data, and an explicit `.contiguous()` call forces contiguity when needed, possibly at the cost of a copy.
 - **Data types and precision.** The memory allocated is directly proportional to the number of elements and the size of the data type. Lower-precision types reduce the memory footprint and can speed up computation on compatible hardware.
@@ -113,6 +119,8 @@ The training phase extends the forward pass with ways to learn from errors and a
 | `torch.float32` | 4 |
 | `torch.float16`, `torch.bfloat16` | 2 |
 | `torch.int8` | 1 |
+
+![Weight memory of a 7 billion parameter model is 28 GB in FP32, 14 GB in FP16 or BF16, 7 GB in INT8 and 3.5 GB in INT4, and only the FP32 version does not fit a 24 GB GPU](/llm-nn-fundamentals/dtype-memory.svg)
 
 - **Parameter management in `nn.Module`.** When you define a network with `torch.nn.Module`, parameters are registered with `self.register_parameter()` (or implicitly through `nn.Parameter`). That lets the module track them, move them between devices, and include them in the optimizer's parameter list for gradient updates.
 
@@ -127,6 +135,8 @@ Weight memory is roughly the parameter count times the bytes per parameter. A 7-
 - PyTorch operations are device-agnostic in their definition: the same operation can run on the CPU or the GPU. But all the tensors taking part must be on the **same device**. You can't directly combine a CPU tensor with a GPU tensor.
 - Not all parameters *must* be on the GPU, but for a computation to use GPU acceleration, the relevant parameters and input data must sit on the same GPU as the operation.
 - Parameters move to the GPU when the user asks for it explicitly, or when a framework (for example for distributed training) arranges the placement. This usually happens just before or at the point of computation.
+
+![Multiplying a CPU tensor by a GPU tensor raises a RuntimeError, while moving both to cuda lets the operation run on the GPU](/llm-nn-fundamentals/same-device-rule.svg)
 
 ```python
 model = model.to("cuda")  # moves every parameter and buffer of the module
@@ -156,6 +166,8 @@ proj = nn.Linear(64, 1000, bias=False)   # its weight is also 1000 x 64
 proj.weight = embed.weight               # both now share one Parameter (weight tying)
 ```
 
+![In weight tying the embedding matrix selects rows at the input and is reused, transposed, to turn the final hidden state into logits at the output, saving about 38.6 million parameters in GPT-2 small](/llm-nn-fundamentals/weight-tying.svg)
+
 Common patterns:
 
 | Pattern | How parameters are shared |
@@ -179,6 +191,8 @@ A Linear layer transforms an input matrix (or a batch of vectors) **X** into an 
 | **W**, the weights | (out_features, in_features) |
 | **B**, the bias | (out_features) |
 | **Y**, the output | (batch_size, out_features) |
+
+![The input X, shaped batch by in_features, is multiplied by the transposed weight matrix and the bias row is added to give Y, where each output cell is a dot product of one input row and one weight column](/llm-nn-fundamentals/linear-matmul.svg)
 
 **The GPU execution paradigm is massive parallelism.** GPUs are designed for Single Instruction, Multiple Threads (SIMT) execution, which suits matrix multiplication perfectly, because each output element can be computed independently. Computation is organised in a hierarchy:
 
@@ -220,6 +234,8 @@ When a linear layer is defined and run on a GPU, PyTorch, TensorFlow and JAX aut
         - This reduces the number of kernel launches, which cuts overhead and improves memory access patterns.
         - Instead of writing intermediate results to global GPU memory and reading them back for the next operation, a fused kernel can keep the data in faster on-chip memory (registers, shared memory).
 - Advanced deep learning compilers and runtime libraries perform kernel fusion and other graph optimisations automatically.
+
+![Three small kernels leave idle gaps between launches while the CPU submits the next one. A single fused kernel runs with one launch and no gaps](/llm-nn-fundamentals/kernel-launch-gaps.svg)
 
 #### Is there kernel fusion? Can multiple layers be merged?
 
@@ -286,10 +302,14 @@ print(c.stride(), c.is_contiguous())    # (2, 1) True
 | **Shared memory (on-chip)** | A small, very fast memory shared by the threads of one thread block. It is used for tiling or blocking: sections of activations are loaded from global memory once, then reused many times by the local threads, which sharply reduces global memory traffic |
 | **Registers (on-chip)** | The fastest memory, private to each thread. Single scalar values or small fragments of activations stay in registers during computation |
 
+![GPU memory hierarchy from registers and shared memory, through the L2 cache, to HBM and host RAM, getting larger and slower at each step, with A100 figures](/llm-nn-fundamentals/gpu-memory-hierarchy.svg)
+
 Two common layouts for 4D image tensors:
 
 - **NCHW (channels-first):** Batch × Channels × Height × Width. Width varies fastest in memory, so each channel's H × W plane is stored contiguously.
 - **NHWC (channels-last):** the channels are the innermost dimension (`Activations[N, H, W, C]`). This gives better spatial locality for pixel-wise operations (element-wise additions, non-linearities), because all the channel values for one (H, W) position sit together.
+
+![A 2 by 2 image with three channels stored in NCHW order has the whole red plane first, while NHWC order keeps the three channel values of each pixel together](/llm-nn-fundamentals/nchw-nhwc.svg)
 
 Advanced buffer management techniques:
 
@@ -297,6 +317,8 @@ Advanced buffer management techniques:
 - **Buffer reuse and in-place operations.** Frameworks reuse existing buffers for intermediate results where possible, instead of allocating new ones. In-place operations (such as `relu_(x)` in PyTorch) modify the buffer directly, which reduces memory traffic and allocations.
 - **Quantization.** Storing activations at lower precision (FP16, INT8) cuts the memory footprint a lot, lets more data fit in faster caches and lowers bandwidth needs. It is a common inference optimisation on specialised hardware.
 - **Dynamic paging and virtual memory.** For extremely large models, researchers are exploring techniques where only the active parts of the model (including activations) stay in GPU memory, like CPU virtual memory, to handle models larger than the GPU's VRAM.
+
+![During inference two activation buffers alternate: each layer reads one and writes the other, so peak activation memory is two layer outputs, not the sum of all layers](/llm-nn-fundamentals/buffer-reuse.svg)
 
 ## Do optimizer and gradients matter for inference?
 
@@ -323,6 +345,8 @@ Advanced buffer management techniques:
 | **Dropout** | Randomly sets a fraction p of input units to zero at each update, to prevent overfitting. The surviving activations are scaled by 1/(1 − p). This adds noise and prevents neurons from co-adapting | Passes the inputs straight through, with no dropping and no scaling. The full learned capacity of the model is used and the results are deterministic |
 | **Batch Normalization** | Normalises inputs with the mean and variance of the current mini-batch | Uses the learned population (running) statistics instead |
 
+![In training mode dropout zeroes a random half of the activations and scales the rest, and batch norm uses the mini-batch statistics. In eval mode dropout passes everything through and batch norm uses its saved running statistics](/llm-nn-fundamentals/train-vs-eval.svg)
+
 ```python
 model.eval()               # dropout off; batch norm uses its running statistics
 with torch.no_grad():      # also skip building the autograd graph (more on this below)
@@ -347,6 +371,8 @@ opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
 # same shape: "exp_avg" (the first moment) and "exp_avg_sq" (the second moment).
 ```
 
+![AdamW keeps a first-moment and a second-moment tensor of the same shape as every parameter. Per parameter, FP32 training and mixed-precision training both need 16 bytes, while FP16 inference needs 2](/llm-nn-fundamentals/adamw-state.svg)
+
 #### How does the optimizer "scan" through all parameters?
 
 - It is a highly parallel operation, usually run efficiently on specialised hardware such as GPUs.
@@ -361,9 +387,20 @@ opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
 - Mainly because optimizers must keep extra **state variables** for every parameter, together with numerical-stability needs, especially in mixed-precision training.
     - Modern optimizers such as Adam, AdamW and RMSprop don't store only the parameter values. They keep internal state for each parameter to make updates more effective and stable.
-    - The "2–4×" range is clearest in **mixed-precision training**, a common practice that reduces memory use and speeds up computation, especially on modern GPUs (for example NVIDIA Tensor Cores).
+    - The bytes are easiest to count in **mixed-precision training**, a common practice that reduces memory use and speeds up computation, especially on modern GPUs (for example NVIDIA Tensor Cores).
         - The model's parameters may be stored in FP16 (half precision, 2 bytes) to save memory and use specialised hardware, while the optimizer's state variables (such as `m` and `v` in Adam) are typically kept in FP32 (single precision, 4 bytes).
         - In many mixed-precision setups (such as NVIDIA's Apex AMP or PyTorch's Automatic Mixed Precision), an extra FP32 **master copy** of the weights may also be kept. Gradients are typically computed in FP16, scaled, then converted to FP32 to update these master weights, which are then cast back to FP16 for the model.
+
+Counting the bytes for one parameter with AdamW:
+
+| Setup | Weights | Gradient | FP32 master copy | `m` | `v` | Total |
+| --- | --- | --- | --- | --- | --- | --- |
+| **FP32 training** | 4 B | 4 B | none | 4 B | 4 B | **16 B** |
+| **Mixed precision** (FP16 or BF16) | 2 B | 2 B | 4 B | 4 B | 4 B | **16 B** |
+| **FP16 inference** | 2 B | none | none | none | none | **2 B** |
+
+- The optimizer state alone (`m` and `v`, 8 B) is **2×** the FP32 weight size. Adding the gradients makes the total **4×**. That is where "2–4×" comes from.
+- For a 7-billion-parameter model that is `16 B × 7 × 10⁹ = 112 GB` for training, before any activations, against 14 GB to serve it in FP16.
 
 ## Memory usage and VRAM allocation during inference
 
@@ -410,6 +447,8 @@ Putting these together:
 **Total VRAM ≈ parameters + B × (input per sample) + B × (activations per sample, summed over all layers) + overhead**
 
 Only the parameters stay fixed. Everything else grows with the batch size B, so increasing B steadily raises VRAM consumption.
+
+![Stacked bars for batch sizes 1, 8, 32 and 64: weights and overhead stay constant while inputs and activations grow with the batch, crossing a 24 GB limit](/llm-nn-fundamentals/vram-vs-batch.svg)
 
 ### Differences in memory usage between inference and training
 
@@ -483,6 +522,8 @@ print(f"weights: {base / 1e9:.2f} GB, peak: {peak / 1e9:.2f} GB")
 - PyTorch's automatic differentiation engine, **Autograd**, builds a computational graph dynamically during the forward pass. That graph retains intermediate activations and the metadata needed to compute gradients in the backward pass.
 - Inside a `torch.no_grad()` block, graph construction and gradient tracking are switched off. So intermediate tensors that would otherwise be kept for backpropagation are either never allocated for gradient purposes or freed at once, and no memory is allocated for gradient storage.
 
+![With autograd every layer's output is saved for the backward pass, so memory grows with depth. Inside no_grad each output is freed once the next layer has used it](/llm-nn-fundamentals/autograd-no-grad.svg)
+
 ```python
 with torch.no_grad():                 # or torch.inference_mode(): no autograd graph is built
     y = model(x)
@@ -496,6 +537,8 @@ fast_model = torch.compile(model)     # may fuse kernels: faster, and sometimes 
 - **During inference:** there is no need to store intermediate activations. `torch.no_grad()` tells the framework explicitly not to build a computational graph for gradients.
 - **During training:** techniques like **activation checkpointing** let certain intermediate tensors be freed early even during training. The activations are recomputed during the backward pass instead of being stored, trading computation for memory.
 - Understanding and using these mechanisms is vital for deploying large models, tuning batch sizes and avoiding VRAM out-of-memory errors. Freeing memory early leaves more VRAM for larger models, bigger batch sizes, or running several models at once.
+
+![Storing all 8 activations of an 8-layer network versus keeping a checkpoint every second layer and recomputing the freed ones during the backward pass](/llm-nn-fundamentals/activation-checkpointing.svg)
 
 ### How is VRAM managed for multiple models and users on the same GPU?
 
@@ -552,6 +595,8 @@ torch.cuda.empty_cache()  # now hand the cached, unused blocks back to the CUDA 
 `torch.cuda.memory_allocated()` counts memory used by live tensors, while `torch.cuda.memory_reserved()` also counts cached blocks that PyTorch is holding. After `del`, the first number drops straight away, and the second only drops after `empty_cache()`.
 
 </Callout>
+
+![Three snapshots of PyTorch's CUDA memory pool: after del, memory_allocated drops but memory_reserved stays the same, and only empty_cache lowers memory_reserved](/llm-nn-fundamentals/allocated-reserved.svg)
 
 ## Key takeaways
 
