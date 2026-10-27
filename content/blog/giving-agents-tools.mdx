@@ -1,0 +1,460 @@
+---
+title: "Giving an AI agent tools: from a plain function to a multi-tool assistant"
+description: "How a Python function becomes a tool an agent can call, built up with a tip calculator, a three-tool sales assistant and an inventory checker, plus the lessons each one teaches."
+date: "2026-10-26"
+tags: ["Agentic AI", "LLMs", "AI Engineering"]
+---
+
+In [the first post](/blog/hello-agent) a model, one tool and a loop were enough to make an agent that acts. A tool was just a Python function with a decorator. This post slows down on that idea, because tools are where an agent stops being a chatbot and starts doing real work.
+
+We start from an ordinary function the agent can't see, turn it into a tool, and then build three small agents that each teach one lesson:
+
+| Agent | Tools | What it teaches |
+| --- | --- | --- |
+| Tip calculator | `calculate_tip` | How the model turns a sentence into arguments |
+| Sales assistant | `get_sales_data`, `analyze_sales`, `send_email` | How the model chains several tools by itself |
+| Inventory checker | `check_inventory` | How the model maps intent to a tool, and why the docstring is a contract |
+
+The material follows the course page [Giving agents tools](https://scaler-content.github.io/giving-agents-tools/). It builds on the Groq and Strands setup from the first post, so the setup code comes first.
+
+## Set up the model
+
+This is the same setup as before: read the Groq key from the environment and build a model object that Strands can talk to.
+
+```python
+import os
+
+from dotenv import load_dotenv  # loads KEY=value lines from a .env file
+from strands.models.openai import OpenAIModel  # Strands' adapter for OpenAI-compatible APIs, Groq included
+
+load_dotenv()  # reads GROQ_API_KEY from a .env file, if present
+
+# Which Groq model to use. Falls back to gpt-oss-120b if GROQ_MODEL_ID isn't set.
+MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
+
+model = OpenAIModel(
+    client_args={
+        "api_key": os.environ["GROQ_API_KEY"],  # raises an error straight away if the key is missing
+        "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),  # or a local OpenAI-compatible server
+        "max_retries": 5,  # retry dropped connections (the client default is 2)
+    },
+    model_id=MODEL_ID,
+    # Groq reasoning models stream their thinking by default; hide it so only the answer prints.
+    params={"extra_body": {"include_reasoning": False}},
+)
+print(f"Using {MODEL_ID} on Groq")
+```
+
+## From function to tool
+
+### A plain function the agent can't see
+
+Start with an ordinary Python function. It works when you call it yourself, but an agent has no way to know it exists.
+
+```python
+import requests  # a popular third-party library for making HTTP requests
+
+
+def check_server_status_plain(server_url):
+    """Check if a server is responding."""
+    try:
+        # Ask the server for its page, and give up after 5 seconds
+        response = requests.get(server_url, timeout=5)
+        return f"Server is up. Status code: {response.status_code}"
+    except requests.exceptions.RequestException:
+        # Covers timeouts, failed lookups and refused connections
+        return "Server is down or unreachable"
+
+
+print(check_server_status_plain("https://httpbin.org/get"))
+```
+
+This is a normal function that checks whether a website or server is reachable. It's called "plain" because it has no `@tool` decorator, no type hints and no `Args:` docstring. An agent only knows about functions you *register* as tools, so this one is invisible to it.
+
+### Three things that make it a tool
+
+Add three things and the function becomes a tool the agent can discover and call:
+
+| What you add | What the model uses it for |
+| --- | --- |
+| The `@tool` decorator | Registers the function, and takes the function name as the tool's name |
+| Type hints (`server_url: str`) | The input schema: which arguments to pass, and what type each one is |
+| A clear docstring with an `Args:` section | The description: when to use the tool, and what each argument means |
+
+![How the decorator, type hints and docstring of a function become the tool name, input schema and description the model sees, while the function body is never sent](/agent-tools/function-to-tool.svg)
+
+<Callout type="analogy" title="The model reads the menu, never the kitchen">
+
+The model never sees how your function works. It sees a short card: a name, a description and a list of inputs, like the menu of a restaurant. It orders from the menu and the kitchen (your code) does the cooking. That is why a clear name and docstring matter more than clever code.
+
+</Callout>
+
+```python
+from strands import Agent, tool  # Agent runs the loop; tool registers a function
+
+
+@tool  # Decorator: registers the function and builds the description the model reads
+def check_server_status(server_url: str) -> str:  # Type hints: the input and output types
+    """Check if a server is responding by making an HTTP request.
+
+    Args:
+        server_url: The URL of the server to check
+
+    Returns:
+        A message indicating whether the server is up or down
+    """
+    try:
+        response = requests.get(server_url, timeout=5)
+        return f"Server is up. Status code: {response.status_code}"
+    except requests.exceptions.RequestException:
+        return "Server is down or unreachable"
+```
+
+Now hand the tool to an agent and ask a question that needs it:
+
+```python
+# tools=[...] registers the function with the agent
+agent = Agent(model=model, tools=[check_server_status])
+response = agent("Is the staging server running? Check https://httpbin.org/get")
+```
+
+## Tool 1: A tip calculator
+
+Our first tool-enabled agent does a small piece of arithmetic that is easy to get slightly wrong in your head.
+
+```python
+@tool
+def calculate_tip(bill_amount: float, tip_percentage: float, num_people: int = 1) -> dict:
+    """Calculate tip and split the bill among people.
+
+    Args:
+        bill_amount: Total bill amount in dollars
+        tip_percentage: Tip percentage (e.g., 15, 18, 20)
+        num_people: Number of people splitting the bill (default: 1)
+    """
+    tip = bill_amount * (tip_percentage / 100)  # e.g. 85 * (20 / 100) = 17.0
+    total = bill_amount + tip                   # bill plus tip
+    per_person = total / num_people             # split evenly
+
+    # Return a dict so the model gets every number it might need
+    return {
+        "bill": bill_amount,
+        "tip": round(tip, 2),
+        "total": round(total, 2),
+        "per_person": round(per_person, 2),
+    }
+
+
+agent = Agent(model=model, tools=[calculate_tip])
+
+response = agent(
+    "The bill is $85. What's a 20% tip, and how much does each person pay if we're splitting it 4 ways?"
+)
+print("\n\nFinal answer:\n", response.message["content"][0]["text"])
+```
+
+### What the last three lines do
+
+The last three lines are where the agent is built and used, so they are worth reading slowly.
+
+**Line 1: build the agent**
+
+```python
+agent = Agent(model=model, tools=[calculate_tip])
+```
+
+- `model` is the Groq model object we set up earlier.
+- `tools=[calculate_tip]` registers the function. Because of `@tool`, Strands has already built a description from the name, the docstring and the type hints (`bill_amount: float`, `num_people: int = 1`). That description is sent to the model with every request.
+- Nothing runs yet. This only builds the agent and its loop.
+
+**Line 2: ask the question**
+
+```python
+response = agent(
+    "The bill is $85. What's a 20% tip, and how much does each person pay if we're splitting it 4 ways?"
+)
+```
+
+1. The prompt and the tool description go to the model.
+2. The model sees it needs a calculation. It pulls the values out of the sentence and requests a call: `calculate_tip(bill_amount=85, tip_percentage=20, num_people=4)`.
+3. Strands runs the Python function, and the returned dict goes back to the model as a tool result.
+4. The model writes the final answer.
+
+![The model pulls 85, 20 and 4 out of the user's sentence, calls calculate_tip with them, receives a dictionary, and words the final answer](/agent-tools/tip-arguments.svg)
+
+<Callout type="tip" title="Why the docstring says 15, 18, 20">
+
+The example in `tip_percentage: Tip percentage (e.g., 15, 18, 20)` tells the model to pass `20`, not `0.2`. A tiny hint in a docstring can decide whether the function gets the right kind of number.
+
+</Callout>
+
+**Line 3: print the answer**
+
+```python
+print("\n\nFinal answer:\n", response.message["content"][0]["text"])
+```
+
+Working from the inside out:
+
+- `response.message` is the model's last message, as a dict shaped like `{"role": "assistant", "content": [ ... ]}`.
+- `["content"]` is a list of content blocks. A message can hold several pieces, such as text, tool calls or reasoning.
+- `[0]` takes the first block.
+- `["text"]` gets the string inside a text block.
+- `"\n\nFinal answer:\n"` is only formatting: two blank lines, a label and a newline. `print` puts a space between its two arguments.
+
+![Nested layers showing response, then message, then a list of content blocks, then the first block, then its text string](/agent-tools/response-structure.svg)
+
+So the line prints the model's closing sentence, after all the tool work is done.
+
+### The output
+
+```text
+Tool #1: calculate_tip
+
+Here’s the breakdown:
+
+
+- **Bill amount:** $85.00
+- **20 % tip:** $17.00
+- **Total (bill + tip):** $102.00
+
+
+When you split the total among **4 people**:
+
+- **Each person pays:** **$25.50**.
+
+
+Final answer:
+ Here’s the breakdown:
+
+- **Bill amount:** $85.00
+- **20 % tip:** $17.00
+- **Total (bill + tip):** $102.00
+
+When you split the total among **4 people**:
+
+- **Each person pays:** **$25.50**.
+```
+
+Two things are worth noticing here:
+
+- **The answer appears twice.** The agent streams its reply to the screen while it is being generated, and then our `print` shows the same text again, with the "Final answer:" label.
+- **`Tool #1: calculate_tip` is a log line.** Strands prints it each time the agent calls a tool. The count keeps running on the same agent, so the next tool call will be `Tool #2`.
+
+The arithmetic checks out: 20% of $85 is $17, the total is $102, and $102 split four ways is $25.50.
+
+### Try different phrasings
+
+The agent understands intent, not just keywords, so the same tool handles differently worded requests:
+
+```python
+agent("What's a 15% tip on $42?")
+agent("Bill is $120, we want to tip 18%, split between 3 people")
+agent("Calculate tip for $67.50 at 20%")
+```
+
+```text
+A 15 % tip on a $42 bill is:
+
+**$42 × 0.15 = $6.30**.
+
+Tool #2: calculate_tip
+
+Here’s the calculation:
+
+- **Bill amount:** $120.00
+- **18 % tip:** $21.60
+- **Total (bill + tip):** $141.60
+
+
+Split among **3 people**:
+
+- **Each person pays:** **$47.20**.- **20 % tip on $67.50:** $13.50
+- **Total amount (bill + tip):** $81.00.
+```
+
+The three replies stream back to back, so they run together on the screen, and the third starts right after the second.
+
+<Callout type="warn" title="The model doesn't have to use your tool">
+
+The log shows a `Tool #2` line for only one of the three questions. The 15% question and the $67.50 question were answered with no tool call before them: the model did that easy arithmetic itself. The numbers happen to be right here, but nothing forced it to use the tool. If a result must come from the tool, say so in the system prompt, for example "Use the tools for every calculation". The LangGraph math agent in [How AI agents remember](/blog/how-ai-agents-remember) does exactly that.
+
+</Callout>
+
+## Tool 2: A multi-tool sales assistant
+
+Give an agent several small tools and it works out the order to call them in. One request, "pull sales data and email a summary", becomes three tool calls.
+
+```python
+@tool
+def get_sales_data(quarter: str) -> dict:
+    """Retrieve sales data for a specific quarter."""
+    # Fake data for the demo; a real tool would query a database
+    return {"revenue": 1250000, "deals": 47, "quarter": quarter}
+
+
+@tool
+def analyze_sales(revenue: int, deals: int, quarter: str) -> str:
+    """Calculate key metrics from sales data."""
+    avg_deal = revenue / deals  # average revenue per deal
+    # :, adds thousands separators; :.0f rounds to a whole number
+    return f"{quarter}: ${revenue:,} revenue, {deals} deals, ${avg_deal:,.0f} avg deal size"
+
+
+@tool
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send an email message."""
+    # A stand-in that prints the email instead of sending it
+    print(f"\n[EMAIL] to={to} | subject={subject}\n{body}\n")
+    return f"Email sent to {to}"
+
+
+# Three tools, one sentence
+agent = Agent(model=model, tools=[get_sales_data, analyze_sales, send_email])
+response = agent("Pull last quarter's sales data and email a summary to team@company.com")
+```
+
+You never wrote "first get data, then analyse it, then email". You gave the agent three tools and one sentence, and the model worked out the order itself:
+
+1. `get_sales_data(quarter="last quarter")` returns `{"revenue": 1250000, "deals": 47, ...}`.
+2. `analyze_sales(revenue=1250000, deals=47, quarter=...)` returns the summary string with the average deal size.
+3. `send_email(to="team@company.com", subject=..., body=...)` sends it.
+
+![From one request the model decides the order: get_sales_data, then analyze_sales, then send_email, each result becoming input to the next call](/agent-tools/tool-chain.svg)
+
+This is the shift from a chat to an agent. In a chat, we would be the glue between steps. Here the loop does it.
+
+### The output
+
+```text
+Tool #1: get_sales_data
+
+Tool #2: analyze_sales
+
+Tool #3: send_email
+
+[EMAIL] to=team@company.com | subject=Q3 2026 Sales Summary
+
+Hello Team,
+
+
+Here is the sales performance summary for Q3 2026:
+- Total Revenue: $1,250,000
+- Total Deals Closed: 47
+- Average Deal Size: $26,596
+
+
+Please let me know if you need any further details.
+
+
+Best regards,
+
+[Your Name]
+```
+
+The agent then closes with a plain-language confirmation:
+
+> The sales data for Q3 2026 has been retrieved, analyzed, and an email summary has been sent to **team@company.com**. Let me know if you need any additional information or a different format for the report.
+
+The average deal size checks out: $1,250,000 divided by 47 is $26,595.74, which rounds to $26,596.
+
+<Callout type="warn" title="Check what the model adds">
+
+Look closely at the email. The tool only ever saw `quarter="last quarter"`, but the subject and body say **Q3 2026**. Nothing in the code or the prompt supplied that: the model filled it in on its own. It also left a `[Your Name]` placeholder in the sign-off. Neither is harmful in a demo, but with a real `send_email` tool, details the model makes up would go out under your name.
+
+</Callout>
+
+### Key lessons
+
+- **Chaining happens through results.** The output of one tool becomes context for the next call. The model reads the dict from step 1 and copies those numbers into step 2's arguments.
+- **The model fills in arguments from our request.** "Last quarter" became the `quarter` value, and `team@company.com` became `to`. The model also wrote the subject and body itself. Tool inputs come from the model's understanding of our sentence.
+- **Each tool does one small job.** Fetching, analysing and sending are separate functions. That makes them reusable and lets the model combine them in different ways for different requests.
+- **Docstrings and names are how the model chooses.** "Retrieve sales data", "Calculate key metrics" and "Send an email message" are how it knows which tool fits each step. Clear names and descriptions matter more than clever code. The type hints (`revenue: int`, `deals: int`) also tell it what shape of data each tool expects.
+- **Tools are how the agent affects the world.** `get_sales_data` reads, `analyze_sales` computes, and `send_email` has a side effect. Real actions are the part that makes agents powerful, and also the part that needs care.
+
+## Tool 3: An inventory checker
+
+The last agent has one tool and a lookup table. It shows how a single well-described function can serve many differently worded questions.
+
+```python
+@tool
+def check_inventory(product_id: str) -> str:
+    """Check if a product is in stock.
+
+    Args:
+        product_id: The product ID to check (e.g., "PROD-123")
+    """
+    # A tiny in-memory "database": product ID -> units in stock
+    inventory = {"PROD-123": 15, "PROD-456": 0, "PROD-789": 8}
+    # .get(key, 0) returns 0 for an ID we don't know, instead of crashing
+    quantity = inventory.get(product_id, 0)
+
+    if quantity > 0:
+        return f"Product {product_id} is in stock. We have {quantity} units available."
+    return f"Product {product_id} is currently out of stock."
+
+
+agent = Agent(model=model, tools=[check_inventory])
+
+# All of these work: the agent understands intent, not just keywords
+agent("Is PROD-123 in stock?")
+agent("Do we have PROD-456 available?")
+agent("Check inventory for PROD-789")
+agent("Can I order PROD-123 right now?")
+```
+
+One function, and four differently worded questions all end up calling it:
+
+| The user says | The model calls |
+| --- | --- |
+| "Is PROD-123 in stock?" | `check_inventory("PROD-123")` |
+| "Do we have PROD-456 available?" | `check_inventory("PROD-456")` |
+| "Check inventory for PROD-789" | `check_inventory("PROD-789")` |
+| "Can I order PROD-123 right now?" | `check_inventory("PROD-123")` |
+
+![Four differently worded questions about stock all lead the model to call check_inventory with the right product ID](/agent-tools/intent-to-tool.svg)
+
+We never wrote code to match phrases like "in stock", "available" or "can I order". With traditional code we would need keyword matching or a set of rules. Here the model reads the intent, decides the tool fits, and pulls out the product ID.
+
+### Key lessons
+
+- **The model maps intent to the tool.** "Can I order...?" doesn't mention inventory at all, yet the model realises the answer depends on stock. That reasoning is the model's job. Your job is to give it a tool with a clear description.
+- **The docstring is the contract.** "Check if a product is in stock" tells the model when to use the tool. The example (`e.g., "PROD-123"`) tells it what format the argument takes, so it passes `PROD-123` and not "product 123".
+- **Tools return facts, and the model turns them into replies.** The function returns a plain sentence, and the model then phrases the final answer in its own words. You keep the logic (the lookup) in code and let the model handle the conversation.
+- **Handle the missing case in the tool.** `inventory.get(product_id, 0)` means an unknown ID counts as out of stock instead of crashing.
+- **The agent is only as accurate as its tools.** The model didn't know the stock level. The tool supplied it. That is the pattern: the model handles language, and tools supply real data.
+
+<Callout type="warn" title="A typo says 'out of stock'">
+
+That missing-case handling has a cost. A typo like `PROD-12` isn't in the table, so the tool says "out of stock", which is misleading: the product doesn't exist. The agent will repeat whatever your tool says, true or not. Returning "not found" for unknown IDs is more honest:
+
+```python
+if product_id not in inventory:
+    return f"Product {product_id} was not found."  # a different message from "out of stock"
+```
+
+</Callout>
+
+## Recap
+
+Three agents, three lessons about tools:
+
+| Agent | The lesson |
+| --- | --- |
+| Tip calculator | The model turns a sentence into arguments, guided by the docstring and the type hints |
+| Sales assistant | With several small tools, the model works out the order and chains them through results |
+| Inventory checker | The model maps intent to a tool, so a clear description replaces keyword matching |
+
+And a few ideas that apply to every tool you write:
+
+- A tool is a plain function plus a name, type hints and a docstring. The model reads those and never the body.
+- The model decides whether to use a tool, and with what arguments. Say so in the system prompt if a tool must be used.
+- A tool that does something in the world, such as sending an email, deserves the most care. Check what the model adds around it.
+- The agent is only as accurate as its tools, and it repeats what they return.
+
+## What's next
+
+Tools let an agent act. The next step is memory, so it can remember what happened.
+
+- [How AI agents remember](/blog/how-ai-agents-remember): long-term memory with Mem0, and short-term memory with LangGraph and AgentCore Memory.
+- The remaining course topics, still to come: [Agents that work together](https://pulkit-scaler.github.io/agents-that-work-together/), [How Agents Talk](https://scaler-content.github.io/How-agents-talk/#glossary) and [Shipping Agents to Production](https://scaler-content.github.io/shipping-agents-to-production/).

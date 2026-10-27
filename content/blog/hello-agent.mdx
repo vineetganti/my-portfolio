@@ -1,128 +1,184 @@
 ---
-title: "Builing my first AI agent, agent tools, agent memory and multi agent patterns"
-description: "Trial and error guided learning on building my first agent using groq"
+title: "Building my first AI agent with Strands and Groq"
+description: "What an agent really is, how the Strands SDK and Groq fit together, and a step-by-step first agent with a tool, a prebuilt calculator and a system prompt."
 date: "2026-10-25"
 tags: ["Agentic AI", "LLMs", "AI Engineering"]
 ---
 
-Following are the resources from Scaler Academy that helped me get this learning going:
+Huge shoutout to Scaler Academy for the solid resources that got this learning going. This post follows their guide [Your first AI agent](https://scaler-content.github.io/your-first-agent/#agents).
 
-[Your first AI agent] (https://scaler-content.github.io/your-first-agent/#agents)
+Agentic AI has been around for more than a couple of years, and I finally wanted to try it, not just as a user but as a builder, to understand it at a deeper technical level. By pure coincidence I came across Scaler's AI Bootcamp, which has a guided path from a first agent to production, and I'll be documenting what I learn along the way.
 
+<Callout type="info" title="This is part of a series">
 
-### What is an agent?
-Speaking in terms of LLM world, the basic level interaction with an LLM happens through chat. User types in a prompt and LLM spits out an answer based on user's input or prompt.
-Under the hood, the model predicts the response one token at a time, drawing on what it learned during training and on whatever context you put in the prompt. Depending on the 
-model's size and compute power, this can significantly vary in terms of the quality of the output.
+1. **Building my first AI agent** (this post): what an agent is, and a first working agent.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
+3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
 
-The limitation is that a chat is a single round trip: one prompt in, one answer out. The model can't go and check something, run code, look up fresh data or fix its own mistake. 
-If the task needs five steps, I am the one doing the stitching, copying the output of step one into the prompt for step two, and so on.
+</Callout>
 
-An agent takes over that stitching. It automates repeated prompting with the LLM and runs multiple jobs behind the scenes to provide a holistic solution in place rather than just 
-an answer which may not be the end solution to the user's request. In practice, it is a loop: the model decides what to do next, calls a tool (a search, a calculator, an API, a function 
-I wrote), reads the result, and decides again, until it judges that the task is done. The LLM is the brain, the tools are the hands, and the loop is what ties them together.
+## What is an agent?
 
-This also explains why speed matters. One user request can turn into many model calls, so a slow model makes an agent painfully slow, and that is part of why I picked Groq for this build.
+In the world of LLMs, the most basic interaction is a chat. You type a prompt, and the LLM replies based on that prompt. Under the hood, the model predicts the response one token at a time, drawing on what it learned during training and on whatever context you put in the prompt. Depending on the model's size and compute power, the quality of the output can vary a lot.
 
-Agentic AI has been around for more than a couple of years and finally i wanted to give it a try in not just being a user of it but rather as a builder to understand a deeper technical 
-perspective. Through pure coincidence, i came across Scaler's AI Bootcamp that has a guided plan to production of AI agents that should help me get my game into building Agentic AI 
-workflows and i will be documenting my learnings.  
+The limitation is that a chat is a **single round trip**: one prompt in, one answer out. The model can't go and check something, run code, look up fresh data or fix its own mistake. If the task needs five steps, I am the one doing the stitching, copying the output of step one into the prompt for step two, and so on.
 
-### What is the Strands Agents SDK?
-Strands Agents is an open-source Python SDK for building AI agents. It was originally released by AWS. Its main idea is that you let the language model do the planning, instead of writing a rigid workflow yourself. You give the model a prompt and a set of tools. It decides which tool to call, reads the result, and keeps going until the task is done. This cycle is called the agent loop.
+An **agent** takes over that stitching. It automates the repeated prompting and runs multiple jobs behind the scenes, so the user gets a complete solution and not just an answer that may not solve the actual request. In practice, an agent is a loop: the model decides what to do next, calls a tool (a search, a calculator, an API, a function I wrote), reads the result, and decides again, until it judges that the task is done.
+
+![On the left, a chat is one prompt in and one answer out, with the user copying results into the next prompt. On the right, an agent is a loop where the model decides, calls a tool, reads the result and repeats until done](/first-agent/chat-vs-agent.svg)
+
+<Callout type="analogy" title="Brain, hands and loop">
+
+The LLM is the **brain**, the tools are the **hands**, and the loop is what ties them together. A brain with no hands can only talk. Hands with no loop can't decide what to do next.
+
+</Callout>
+
+<Callout type="info" title="Why speed matters">
+
+One user request can turn into many model calls, so a slow model makes an agent painfully slow. That is part of why I picked Groq for this build.
+
+</Callout>
+
+## What is the Strands Agents SDK?
+
+**Strands Agents** is an open-source Python SDK for building AI agents. It was originally released by AWS. Its main idea is that you let the language model do the planning, instead of writing a rigid workflow yourself. You give the model a prompt and a set of tools. It decides which tool to call, reads the result, and keeps going until the task is done. This cycle is called the **agent loop**.
 
 Why it suits a first agent:
 
-- Small API. The core is one class, Agent. You can build a working agent in a handful of lines.
-- Model-agnostic. Strands works with Amazon Bedrock, OpenAI, Anthropic, Ollama and others. Any OpenAI-compatible API also works. That includes Groq, which this post uses because it has a free tier.
-- Tools are plain Python. Decorate a function with @tool and the agent can call it. Strands also ships a ready-made tools package (strands-agents-tools).
-- Grows with you. The same SDK supports memory, multi-agent patterns, MCP and A2A, and deployment to AWS. You don't need to switch frameworks later.
+- **Small API.** The core is one class, `Agent`. You can build a working agent in a handful of lines.
+- **Model-agnostic.** Strands works with Amazon Bedrock, OpenAI, Anthropic, Ollama and others. Any OpenAI-compatible API also works, and that includes Groq, which this post uses because it has a free tier.
+- **Tools are plain Python.** Decorate a function with `@tool` and the agent can call it. Strands also ships a ready-made tools package (`strands-agents-tools`).
+- **Grows with you.** The same SDK supports memory, multi-agent patterns, MCP and A2A, and deployment to AWS. You don't need to switch frameworks later.
 
-The whole agent, in about 10 lines
-
+### The whole agent, in about 10 lines
 
 ```python
-import os
-from strands import Agent
-from strands.models.openai import OpenAIModel
+import os  # read environment variables, such as the API key
+from strands import Agent  # the class that runs the agent loop
+from strands.models.openai import OpenAIModel  # adapter for any OpenAI-compatible API
 
+# The model the agent will use, reached through Groq's OpenAI-compatible endpoint
 model = OpenAIModel(
     client_args={
-        "api_key": os.environ["GROQ_API_KEY"],
-        "base_url": "https://api.groq.com/openai/v1",
+        "api_key": os.environ["GROQ_API_KEY"],         # your Groq key, read from the environment
+        "base_url": "https://api.groq.com/openai/v1",  # where the requests go
     },
-    model_id="openai/gpt-oss-120b",
+    model_id="openai/gpt-oss-120b",  # which model to call
 )
 
-agent = Agent(model=model)
-agent("Hello! Tell me a fun fact about AI agents.")
+agent = Agent(model=model)  # wrap the model in an agent and its loop
+agent("Hello! Tell me a fun fact about AI agents.")  # send a prompt through the loop
 ```
 
-**What each part does**
+What each part does:
 
-- OpenAIModel tells Strands which model to talk to. Pointing base_url at Groq is the only change needed to swap providers.
-- Agent(model=model) creates the agent and its loop. With no tools, it behaves like a chat model. Adding tools is what makes it act.
-- Calling agent("...") sends your prompt through the loop and returns the response.
+- **`OpenAIModel`** tells Strands which model to talk to. Pointing `base_url` at Groq is the only change needed to swap providers.
+- **`Agent(model=model)`** creates the agent and its loop. With no tools, it behaves like a chat model. Adding tools is what makes it act.
+- **`agent("...")`** sends your prompt through the loop and returns the response.
 
-Takeaway: a first agent in Strands is a model plus an Agent wrapper. You add tools, memory and deployment on top of that as you need them.
+![An Agent takes a model, optional tools and an optional system prompt, runs the loop, and returns an AgentResult with the message, the stop reason and the metrics](/first-agent/agent-anatomy.svg)
 
-### What is groq?
-Groq is a company that runs open-source LLMs very fast. Groq doesn't train it's own frontier models. It hosts models like Open AI's gpt-oss, Llama and Qwen on custom chips and sells through an API called GroqCloud.
+<Callout type="tip" title="Takeaway">
 
-**Key Concepts:**
-- LPU (Language Processing Unit): Groq's custom chip, built for inference, meaning running a trained model, not training one. It keeps model weights in on-chip memory, which is why responses come back so quickly. Speed is the selling point.
-- GroqCloud: The hosted service. Call models over HTTP after creating an API key.
-- OpenAI-compatible API: Groq's endpoint speaks the same protocol as OpenAI's. That's why the Strand's code only needs a different base_url and api_key. It's also why swapping providers later is easy.
-- Free tier: no credit card is needed, and you are never charged on it. If you go over the limits, you get an HTTP 429 error. Limits apply per organization and per model.
-    - Limits: sources disagree on the exact numbers. One recent page cites about 30 requests/min, 1,000 requests/day and 200,000 tokens/day for models like gpt-oss-120b. Check your own limits in the console before quoting figures in the post.
-    - Developer tier: pay-as-you-go. It gives up to 10x higher limits and unlocks the Batch API.
+A first agent in Strands is a model plus an `Agent` wrapper. You add tools, memory and deployment on top of that as you need them.
 
-**Why it fits a first agent**
+</Callout>
+
+## What is Groq?
+
+**Groq** is a company that runs open-source LLMs very fast. Groq doesn't train its own frontier models. It hosts models like OpenAI's gpt-oss, Llama and Qwen on custom chips, and sells access through an API called GroqCloud.
+
+| Term | What it is |
+| --- | --- |
+| **LPU** (Language Processing Unit) | Groq's custom chip, built for *inference*, meaning running a trained model, not training one. It keeps model weights in on-chip memory, which is why responses come back so quickly. Speed is the selling point. |
+| **GroqCloud** | The hosted service. You call models over HTTP after creating an API key. |
+| **OpenAI-compatible API** | Groq's endpoint speaks the same protocol as OpenAI's. That's why the Strands code only needs a different `base_url` and `api_key`. It's also why swapping providers later is easy. |
+| **Free tier** | No credit card is needed, and you are never charged on it. If you go over the limits, you get an HTTP 429 error. Limits apply per organisation and per model. |
+
+The "OpenAI-compatible" part is what makes the model swappable. The Strands code stays the same, and only two settings change:
+
+![The same Strands code points at Groq, another OpenAI-compatible provider or a local server by changing only the api_key and base_url settings](/first-agent/swap-provider.svg)
+
+<Callout type="warn" title="Free tier limits">
+
+Sources disagree on the exact numbers, and they change. One recent page cites about 30 requests per minute, 1,000 requests per day and 200,000 tokens per day for models like gpt-oss-120b. Check your own limits in the Groq console. The **Developer tier** is pay-as-you-go, with up to 10x higher limits, and it unlocks the Batch API.
+
+</Callout>
+
+Why it fits a first agent:
+
 - Agents call the model many times per task: plan, call a tool, read the result, repeat.
-- Fast inference makes that loop feel responsive, and the free tier lets us experiement without spening money. The catch is the free tier limits.
-- A looping agent can hit them quickly, so expect a 429 or two while we learn.
+- Fast inference makes that loop feel responsive, and the free tier lets us experiment without spending money.
+- The catch is the free tier limits. A looping agent can hit them quickly, so expect a 429 or two while we learn.
 
+## Build it step by step
 
 ### Step 1: Install dependencies
+
+Install the packages in a single notebook cell. `%pip` installs into the notebook's own Python, `-q` keeps the output quiet, and the backslashes continue the command on the next line. The quotes around each package matter, because `<` and `>` would otherwise be read by the shell as redirects.
+
 ```python
-%pip install -q 
-"strands-agents[openai]>=1.60.0,<2.0.0" 
-"strands-agents-tools>=0.8.9,<0.9.0" 
-"langchain>=1.4.0,<2.0.0" 
-"langchain-groq>=1.1.0,<2.0.0" 
-"langgraph>=1.2.0,<2.0.0" 
-"python-dotenv>=1.0.0"
-"rich<14" 
-"opentelemetry-api<=1.42.1" 
-"opentelemetry-sdk<=1.42.1"
+%pip install -q \
+  "strands-agents[openai]>=1.60.0,<2.0.0" \
+  "strands-agents-tools>=0.8.9,<0.9.0" \
+  "langchain>=1.4.0,<2.0.0" \
+  "langchain-groq>=1.1.0,<2.0.0" \
+  "langgraph>=1.2.0,<2.0.0" \
+  "python-dotenv>=1.0.0" \
+  "rich<14" \
+  "opentelemetry-api<=1.42.1" \
+  "opentelemetry-sdk<=1.42.1"
 ```
 
+| Package | What it is for |
+| --- | --- |
+| `strands-agents[openai]` | The Strands SDK, plus the extra that adds the OpenAI-compatible model adapter |
+| `strands-agents-tools` | Ready-made tools, such as a calculator |
+| `langchain`, `langchain-groq`, `langgraph` | Not used in this post. They appear later in the series, in [How AI agents remember](/blog/how-ai-agents-remember). |
+| `python-dotenv` | Loads your API key from a `.env` file |
+| `rich` | Terminal formatting, used for the coloured tool output; pinned below version 14 |
+| `opentelemetry-api`, `opentelemetry-sdk` | Tracing libraries that Strands can use for telemetry; pinned to a tested version |
+
+The version pins (`>=1.60.0,<2.0.0`) mean "this version or newer, but not the next major release", which keeps the code from breaking when a library changes its API.
 
 ### Step 2: Choose the model
-- Below code block instantiates a groq model id along with the API key that was generated from [groq keys](https://console.groq.com/keys)
-- Set it as `GROQ_API_KEY` in your environment or in a `.env` file (this folder or the repo root)
+
+The next cell picks the Groq model and checks that the API key is in place. Generate a key at [Groq keys](https://console.groq.com/keys), then set it as `GROQ_API_KEY` in your environment or in a `.env` file (in this folder or the repo root).
+
 ```python
 import os
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # loads KEY=value lines from a .env file
 
 load_dotenv()  # reads GROQ_API_KEY from a .env file, if present
 
+# Which Groq model to use. Falls back to gpt-oss-120b if GROQ_MODEL_ID isn't set.
 MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
 
 print(f"Model  : {MODEL_ID}")
+# Prints whether the key exists, without ever printing the key itself
 print(f"API key: {'set' if os.getenv('GROQ_API_KEY') else 'MISSING - set GROQ_API_KEY'}")
 ```
 
+The last line is a handy habit: it tells you whether the key is set without printing the secret into your notebook.
+
+<Callout type="warn" title="Keep the key out of git">
+
+Put `.env` in your `.gitignore` so your API key never reaches a repository.
+
+</Callout>
 
 ### Step 3: The first agent
+
+Now the real thing: a model, wrapped in an agent, answering a prompt.
+
 ```python
 from strands import Agent
 from strands.models.openai import OpenAIModel
 
 model = OpenAIModel(
     client_args={
-        "api_key": os.environ["GROQ_API_KEY"],
+        "api_key": os.environ["GROQ_API_KEY"],  # raises an error straight away if the key is missing
         "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),  # or a local OpenAI-compatible server
         "max_retries": 5,  # retry dropped connections (the client default is 2)
     },
@@ -137,14 +193,21 @@ agent = Agent(model=model)
 response = agent("Explain Amazon Bedrock AgentCore in three sentences.")
 ```
 
-This would give us answer:
+This gives us an answer:
 
-Amazon Bedrock AgentCore is the underlying runtime that powers **agents**—self‑directed AI workflows you can build on the Bedrock platform. It orchestrates calls to multiple foundation models (e.g., Claude, Titan, Llama 3), manages tool integrations, maintains conversation state, and handles error recovery, all while abstracting the infrastructure so developers focus on logic rather than scaling or networking. By exposing a simple SDK and API, AgentCore lets you define prompts, actions, and branching rules, then executes them reliably at scale within a secure, fully managed AWS environment.
+```text
+Amazon Bedrock AgentCore is the underlying runtime that powers **agents**—self‑directed AI workflows you can build on the Bedrock platform. It orchestrates calls to multiple foundation models (e.g., Claude, Titan, Llama 3), manages tool integrations, maintains conversation state, and handles error recovery, all while abstracting the infrastructure so developers focus on logic rather than scaling or networking. By exposing a simple SDK and API, AgentCore lets you define prompts, actions, and branching rules, then executes them reliably at scale within a secure, fully managed AWS environment.
+```
 
+<Callout type="tip" title="Fluent is not the same as verified">
 
-The agent streams it's answer and generates it. The returned object holds the full result, the final text, token usage and the stop reason:
+That reads well, but it is the model recalling AgentCore from its training data, with no tool or source behind it. Treat a model's explanation of a product as a starting point and check it against the official documentation.
 
-```python 
+</Callout>
+
+The agent streams its answer to the screen as it generates it. The object it returns, `response`, holds the full result: the final text, the token usage and the stop reason.
+
+```python
 print("Stop reason:", response.stop_reason)
 print("Tokens used:", response.metrics.accumulated_usage)
 ```
@@ -154,21 +217,33 @@ Stop reason: end_turn
 Tokens used: {'inputTokens': 81, 'outputTokens': 145, 'totalTokens': 226}
 ```
 
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `stop_reason` | `end_turn` | The model finished its answer normally. It wasn't cut off by a token limit. |
+| `inputTokens` | 81 | Tokens sent to the model: the prompt, plus anything Strands adds |
+| `outputTokens` | 145 | Tokens the model wrote back |
+| `totalTokens` | 226 | The two added together, which is what usage limits and bills count |
 
 ### Step 4: Give the agent a tool
-**What a tool is**
 
-- Is an odinary Python function that we hand to the agent. 
-- Model can't run code itself and can only produce text. 
-- When it wants to act, it asks for a tool call, code runs the function, and result goes back to the model as new context.
-- Never sees the function body. Only sees description of the function.
-- Function name: The tool's name. Pick a clear verb phrase like get_weather.
-- Docstring: The tool's description. This is how the model decides when to use it.
-- Type hints and Args: The input schema. They tell the model what arguments to pass and what types they are.
+#### What a tool is
 
-Using the follwoing example of fetching current time:
+- A tool is an ordinary Python function that we hand to the agent.
+- The model can't run code itself. It can only produce text.
+- When it wants to act, it asks for a **tool call**, our code runs the function, and the result goes back to the model as new context.
+- The model never sees the function body. It only sees a description of the function.
+- **Function name:** the tool's name. Pick a clear verb phrase like `get_weather`.
+- **Docstring:** the tool's description. This is how the model decides when to use it.
+- **Type hints and `Args:`:** the input schema. They tell the model what arguments to pass and what types they are.
+
+Here is an example that fetches the current time:
 
 ```python
+from datetime import datetime   # the current date and time
+from zoneinfo import ZoneInfo   # time zones by IANA name, such as "Asia/Kolkata"
+from strands import Agent, tool # tool turns a function into something the agent can call
+
+
 @tool
 def current_time(timezone: str = "Asia/Kolkata") -> str:
     """Get the current date and time in a given IANA timezone.
@@ -182,61 +257,73 @@ def current_time(timezone: str = "Asia/Kolkata") -> str:
 agent = Agent(model=model, tools=[current_time])
 agent("What time is it right now in Bangalore and in New York?")
 ```
-An LLM has no clock. It's knowledge is frozen at training time, so it can't answer the question by itself.
 
-A tool fixes that which give model access to things it can't know or do on it's own.
+An LLM has no clock. Its knowledge is frozen at training time, so it can't answer this question by itself. A tool fixes that, because it gives the model access to things it can't know or do on its own.
 
-**The function line by line:**
-- `@tool`: registers the function with Strands and builds the description the model reads.
-- `timezone: str = "Asia/Kolkata"` : the type hint tells the model to pass a string. The default makes the argument optional, so a call with no argument gives IST.
-- Docstring: the summary line tells the model when to use the tool (it needs the current date or time). The `Args:` line tells it *what to pass*. The examples inside it matter most here. They show the model the exact format wanted, an IANA name like `America/New York` and not "NYC" or "EST".
-- Body: `ZoneInfo(timezone)` loads the zone, `datetime.now(...)` gets hte current time in it, and `strftime` formats it such as text such as `Sunday, 25 October 2026 06:30 PM IST`. Returning a readable string means the model can quote it directly.
+#### The function, line by line
 
-**What happens when you run the agent**
+- **`@tool`** registers the function with Strands and builds the description the model reads.
+- **`timezone: str = "Asia/Kolkata"`**: the type hint tells the model to pass a string. The default makes the argument optional, so a call with no argument gives IST.
+- **The docstring:** the summary line tells the model when to use the tool (it needs the current date or time). The `Args:` line tells it *what to pass*. The examples inside it matter most here. They show the model the exact format wanted, an IANA name like `America/New_York`, and not "NYC" or "EST".
+- **The body:** `ZoneInfo(timezone)` loads the zone, `datetime.now(...)` gets the current time in it, and `strftime` formats it as text such as `Sunday, 25 October 2026 06:30 PM IST`. Returning a readable string means the model can quote it directly.
+
+#### What happens when you run the agent
 
 ```python
 agent = Agent(model=model, tools=[current_time])
-agent("What time is it right now in Bangalore and in New york?")
+agent("What time is it right now in Bangalore and in New York?")
 ```
 
+```text
 Tool #1: current_time
 
 Tool #2: current_time
-- **Bangalore (India – Asia/Kolkata):** Sunday, 25 October 2026 09:16 PM IST  
-- **New York (USA – America/New_York):** Sunday, 25 October 2026 11:46 AM EDT
+- **Bangalore (India – Asia/Kolkata):** Sunday, 25 October 2026 09:16 PM IST
+- **New York (USA – America/New_York):** Sunday, 25 October 2026 11:46 AM EDT
+```
 
-- Prompt plus tool list go to the model. Sees the question and description of `current_time`.
-- Model reasons about it. Decides it needs the clock nad that the question has two places, so it needs two lookups.
-- The model translates place names. We mentioned "Bangalore" and "New York", but the tool wants IANA names. Model maps them itslef, which is why docstring examples matter:
+The two `Tool #` lines are log messages: the agent called `current_time` twice. Behind them, these steps happened:
+
+1. **The prompt and the tool list go to the model.** It sees the question and the description of `current_time`.
+2. **The model reasons about it.** It decides it needs the clock, and that the question has two places, so it needs two lookups.
+3. **The model translates place names.** We said "Bangalore" and "New York", but the tool wants IANA names. The model maps them itself, which is why the docstring examples matter:
     - `current_time(timezone="Asia/Kolkata")`
     - `current_time(timezone="America/New_York")`
-- Strands runs Python. Each call executes the real function and returns a string like `Sunday, 25 October 2026 06:30 PM IST`.
-- Results go back to the model. It now has both times and writes the final answer in plain english.
+4. **Strands runs the Python.** Each call executes the real function and returns a string like `Sunday, 25 October 2026 06:30 PM IST`.
+5. **The results go back to the model.** It now has both times and writes the final answer in plain English.
 
-Steps 2 to 5 are the agent loop. May take two calls one after the other or together. Either way, we wrote none of the control flow. The model chose which tool to call, how many times, and with what arguments.
+![The user asks for the time in two cities. The model calls the current_time tool once for Asia/Kolkata and once for America/New_York, reads both results and writes the answer](/first-agent/tool-call-sequence.svg)
 
+Steps 2 to 5 are the agent loop. The model may make the two calls one after the other or together, and the log doesn't say which. Either way, we wrote none of the control flow. The model chose which tool to call, how many times, and with what arguments.
 
-### Step 5: Using a prebuilt tool
-`strands-agents-tools` ships ready made tools.
+### Step 5: Use a prebuilt tool
+
+You don't have to write every tool yourself. `strands-agents-tools` ships ready-made ones, such as a calculator.
 
 ```python
-from strands_tools import calculator
+from strands_tools import calculator  # a ready-made math tool from strands-agents-tools
 
+# Give the agent two tools; it will pick whichever the question needs
 agent = Agent(model=model, tools=[calculator, current_time])
 agent("What is 18% GST on a laptop that costs Rs 84,999? Give me the final price too.")
 ```
 
-The GST (18 % of ₹84,999) is **₹15,299.82**.  
+```text
+The GST (18 % of ₹84,999) is **₹15,299.82**.
 
 Adding this to the base price gives a **final price of ₹100,298.82**.
+```
 
+The agent had two tools, and the question only needed the calculator, so it left `current_time` alone. That is the model choosing a tool from the descriptions, which is the same decision as before, just with a bigger menu. The arithmetic checks out: 84,999 × 0.18 is 15,299.82, and adding it to the price gives 100,298.82.
 
 ### Step 6: Shape behaviour with a system prompt
-The system prompt sets the agent's role, tone, and rules for every turn.
+
+The **system prompt** sets the agent's role, tone and rules for every turn. It is the standing instruction that sits in front of whatever the user types.
 
 ```python
 agent = Agent(
     model=model,
+    # A system prompt applies to every message in the conversation
     system_prompt=(
         "You are a patient tutor for engineers who are new to AI agents. "
         "Explain ideas with one real-world analogy and keep answers under 120 words."
@@ -245,321 +332,20 @@ agent = Agent(
 agent("What is the difference between an LLM and an AI agent?")
 ```
 
----
+With that prompt, the agent should answer as a short tutor's explanation with a single analogy, instead of a long generic one. Change the system prompt and the same question gets a different kind of answer.
 
-[Giving agents tools](https://scaler-content.github.io/giving-agents-tools/)
+<Callout type="tip" title="A prompt is guidance, not a guarantee">
 
-Further on using @tool, we will use the function to build a tip calculator, a multi-tool sales assistant and a custom inventory checker
+A system prompt asks the model to behave a certain way, but it can't force it. When a rule really must hold, such as keeping one user's data away from another, enforce it in code, not in the prompt. [How AI agents remember](/blog/how-ai-agents-remember) shows this with a memory tool that is bound to one user in code.
 
-Starting off with the exact setup code to instantiate the API_KEY, MODEL_ID and base_url
+</Callout>
 
-```python
-import os
+## Recap
 
-from dotenv import load_dotenv
-from strands.models.openai import OpenAIModel
+1. An agent is a loop: the model decides, calls a tool, reads the result and decides again, until the task is done.
+2. Strands gives you that loop in one class, `Agent`, and works with any OpenAI-compatible API, including Groq.
+3. A tool is a plain Python function. The decorator, type hints and docstring tell the model what it does and how to call it.
+4. Prebuilt tools save you from writing common ones yourself.
+5. A system prompt shapes the agent's role and tone, but it is guidance and not a guarantee.
 
-load_dotenv()  # reads GROQ_API_KEY from a .env file, if present
-
-MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
-
-model = OpenAIModel(
-    client_args={
-        "api_key": os.environ["GROQ_API_KEY"],
-        "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),  # or a local OpenAI-compatible server
-        "max_retries": 5,  # retry dropped connections (the client default is 2)
-    },
-    model_id=MODEL_ID,
-    # Groq reasoning models stream their thinking by default; hide it so only the answer prints.
-    params={"extra_body": {"include_reasoning": False}},
-)
-print(f"Using {MODEL_ID} on Groq")
-```
-
-### From function to tool
-An odinary Python function. Works when you call it, but an agent has no way to know it exists. 
-```python
-import requests
-
-
-def check_server_status_plain(server_url):
-    """Check if a server is responding."""
-    try:
-        response = requests.get(server_url, timeout=5)
-        return f"Server is up. Status code: {response.status_code}"
-    except requests.exceptions.RequestException:
-        return "Server is down or unreachable"
-
-
-print(check_server_status_plain("https://httpbin.org/get"))
-```
-
-This is a normal Python function that checks whether a website or server is reachable. The blog section calls it "plain" because it has no @tool decorator, no type hints and no Args: docstring. It works if you call it. An agent, though, only knows about functions you register as tools, so this one is invisible to it. The next step in your post would be adding @tool to turn it into a real tool.
-
-Add three things and it becomes a tool the agent can discover and call: the tool decorator, type hints and a clear docstring (with an `Args:` section)
-```python
-from strands import Agent, tool
-
-
-@tool  # Decorator
-def check_server_status(server_url: str) -> str:  # Type hints
-    """Check if a server is responding by making an HTTP request.
-
-    Args:
-        server_url: The URL of the server to check
-
-    Returns:
-        A message indicating whether the server is up or down
-    """
-    try:
-        response = requests.get(server_url, timeout=5)
-        return f"Server is up. Status code: {response.status_code}"
-    except requests.exceptions.RequestException:
-        return "Server is down or unreachable"
-```
-
-```python
-agent = Agent(model=model, tools=[check_server_status])
-response = agent("Is the staging server running? Check https://httpbin.org/get")
-```
-
-
-### First tool-enabled agent -- Tip Calculator 
-```python
-@tool
-def calculate_tip(bill_amount: float, tip_percentage: float, num_people: int = 1) -> dict:
-    """Calculate tip and split the bill among people.
-
-    Args:
-        bill_amount: Total bill amount in dollars
-        tip_percentage: Tip percentage (e.g., 15, 18, 20)
-        num_people: Number of people splitting the bill (default: 1)
-    """
-    tip = bill_amount * (tip_percentage / 100)
-    total = bill_amount + tip
-    per_person = total / num_people
-
-    return {
-        "bill": bill_amount,
-        "tip": round(tip, 2),
-        "total": round(total, 2),
-        "per_person": round(per_person, 2),
-    }
-
-
-agent = Agent(model=model, tools=[calculate_tip])
-
-response = agent(
-    "The bill is $85. What's a 20% tip, and how much does each person pay if we're splitting it 4 ways?"
-)
-print("\n\nFinal answer:\n", response.message["content"][0]["text"])
-```
-
-Something that made me read further as to what's happening in the last three lines of the function
-
-`agent = Agent(model=model, tools=[calculate_tip])`
-
-- `model` is the Groq model object we setup earlier.
-- `tools=[calculate tip] registers the function. Because of `@tool`, Strands has already built a description from the name, the docstring, and the type hints (`bill_amount: float`, `num_people: int = 1`). That description is ent to the model with every request.
-- Nothing runs yet. This only builds the agent and it's loop.
-
-`response = agent(
-    "The bill is $85. What's a 20% tip, and how much does each person pay if we're splitting it 4 ways?"
-)`
-
-- Prompt and the tool description go to the model.
-- Sees it needs a calculation. Pulls the values out of the sentence and requests a call: `calcualte_tip(bill_amount=85, tip_percentage=20, num_people=4`). This is why the docstring says "eg., 15, 18, 20". It tells the model to pass `20`, and not `0.2`.
-- Strands run Python function and the returning dict goe sback to the model as a tool result. 
-
-`print("\n\nFinal answer:\n", response.message["content"][0]["text"])`
-
-Working from the inside out:
-
-- `response.message` is the model's last message, as a dict shaped like `{"role": "assistant", "content": [ ... ]}`.
-- `["content"]` is a list of content blocks. A message can hold several pieces, such as text, tool calls, or reasoning.
-- `[0]` takes the first block.
-- `["text"]` gets the string inside a text block.
-- `"\n\nFinal answer:\n"` is only formatting: two blank lines, a label, and a newline. print puts a space between its two arguments.
-
-So the line prints the model's closing sentence, after all the tool work is done.
-
-Tool #1: calculate_tip
-
-Here’s the breakdown:
-
-
-- **Bill amount:** $85.00  
-- **20 % tip:** $17.00  
-- **Total (bill + tip):** $102.00  
-
-
-When you split the total among **4 people**:
-
-- **Each person pays:** **$25.50**.
-
-
-Final answer:
- Here’s the breakdown:
-
-- **Bill amount:** $85.00  
-- **20 % tip:** $17.00  
-- **Total (bill + tip):** $102.00  
-
-When you split the total among **4 people**:
-
-- **Each person pays:** **$25.50**.
-
-
-Try different phrasings - the agent understands intent, not just keywords:
-
-```python
-agent("What's a 15% tip on $42?")
-agent("Bill is $120, we want to tip 18%, split between 3 people")
-agent("Calculate tip for $67.50 at 20%")
-```
-
-A 15 % tip on a $42 bill is:
-
-**$42 × 0.15 = $6.30**.
-
-Tool #2: calculate_tip
-
-Here’s the calculation:
-
-- **Bill amount:** $120.00  
-- **18 % tip:** $21.60  
-- **Total (bill + tip):** $141.60  
-
-
-Split among **3 people**:
-
-- **Each person pays:** **$47.20**.- **20 % tip on $67.50:** $13.50  
-- **Total amount (bill + tip):** $81.00.
-
-
-### Multi-tool Sales Assistant 
-
-Give the agent several small tools and it works out the order to call them in. One request -- "pull sales data and email a summary" -- becomes three tool calls.
-
-```python
-@tool
-def get_sales_data(quarter: str) -> dict:
-    """Retrieve sales data for a specific quarter."""
-    return {"revenue": 1250000, "deals": 47, "quarter": quarter}
-
-
-@tool
-def analyze_sales(revenue: int, deals: int, quarter: str) -> str:
-    """Calculate key metrics from sales data."""
-    avg_deal = revenue / deals
-    return f"{quarter}: ${revenue:,} revenue, {deals} deals, ${avg_deal:,.0f} avg deal size"
-
-
-@tool
-def send_email(to: str, subject: str, body: str) -> str:
-    """Send an email message."""
-    print(f"\n[EMAIL] to={to} | subject={subject}\n{body}\n")
-    return f"Email sent to {to}"
-
-
-agent = Agent(model=model, tools=[get_sales_data, analyze_sales, send_email])
-response = agent("Pull last quarter's sales data and email a summary to team@company.com")
-```
-
-You never wrote "first get data, then analyze it, then email." You gave the agent three tools and one sentence. The model worked out the order itself:
-    - `get_sales_data(quarter="last quarter")` returns `{"revenue": 1250000, "deals": 47, ...}`
-    - `analyze_sales(revenue=1250000, deals=47, quarter=...)` returns the summary string with the average deal size
-    - `send_email(to="team@company.com", subject=..., body=...)` sends it
-This is the shift from a chat to an agent. In a chat we'd be the glue between steps. Here the loop does it.
-
-**Key Lessons**
-- Chaining happens through results. The output of one tool becomes context for the next call. The model reads the dict from step 1 and copies those numbers into step 2's arguments.
-- The model fills in arguments from our request. "Last quarter" became the quarter value, and team@company.com became to. The model also wrote the subject and body itself. Tool inputs come from the model's understanding of our sentence.
-- Each tool does one small job. Fetching, analyzing and sending are separate functions. That makes them reusable and lets the model combine them in different ways for different requests.
-- Docstrings and names are how the model chooses. "Retrieve sales data", "Calculate key metrics" and "Send an email message" are how it knows which tool fits each step. Clear names and descriptions matter more than clever code. The type hints (revenue: int, deals: int) also tell it what shape of data each tool expects.
-- Tools are how the agent affects the world. get_sales_data reads, analyze_sales computes, and send_email has a side effect. Real actions are the part that makes agents powerful and also the part that needs care.
-
-Output:
-Tool #1: get_sales_data
-
-Tool #2: analyze_sales
-
-Tool #3: send_email
-
-[EMAIL] to=team@company.com | subject=Q3 2026 Sales Summary
-
-Hello Team,
-
-
-Here is the sales performance summary for Q3 2026:
-- Total Revenue: $1,250,000
-- Total Deals Closed: 47
-- Average Deal Size: $26,596
-
-
-Please let me know if you need any further details.
-
-
-Best regards,
-
-[Your Name]
-
-The sales data for Q3 2026 has been retrieved, analyzed, and an email summary has been sent to **team@company.com**. Let me know if you need any additional information or a different format for the report.
-
-
-```python
-@tool
-def check_inventory(product_id: str) -> str:
-    """Check if a product is in stock.
-
-    Args:
-        product_id: The product ID to check (e.g., "PROD-123")
-    """
-    inventory = {"PROD-123": 15, "PROD-456": 0, "PROD-789": 8}
-    quantity = inventory.get(product_id, 0)
-
-    if quantity > 0:
-        return f"Product {product_id} is in stock. We have {quantity} units available."
-    return f"Product {product_id} is currently out of stock."
-
-
-agent = Agent(model=model, tools=[check_inventory])
-
-# All of these work — the agent understands intent, not just keywords
-agent("Is PROD-123 in stock?")
-agent("Do we have PROD-456 available?")
-agent("Check inventory for PROD-789")
-agent("Can I order PROD-123 right now?")
-```
-
-
-One function. Four differently worded questions all end up calling it:
-
-- "Is PROD-123 in stock?" -- check_inventory("PROD-123")
-- "Do we have PROD-456 available?" -- check_inventory("PROD-456")
-- "Check inventory for PROD-789" -- check_inventory("PROD-789")
-- "Can I order PROD-123 right now?" -- check_inventory("PROD-123")
-We never wrote code to match phrases like "in stock", "available" or "can I order". With traditional code we'd need keyword matching or a set of rules. Here the model reads the intent, decides the tool fits, and pulls out the product ID.
-
-
-Key Lessons
-- The model maps intent to the tool. "Can I order...?" doesn't mention inventory at all, yet the model realizes the answer depends on stock. That reasoning is the model's job. Your job is to give it a tool with a clear description.
-- The docstring is the contract. "Check if a product is in stock" tells the model when to use the tool. The example (e.g., "PROD-123") tells it what format the argument takes, so it passes PROD-123 and not "product 123".
-- Tools return facts, and the model turns them into replies. The function returns a plain sentence, and the model then phrases the final answer in its own words. You keep the logic (the lookup) in code and let the model handle the conversation.
-- Handle the missing case in the tool. inventory.get(product_id, 0) means an unknown ID counts as out of stock instead of crashing. Notice what this costs you: a typo like PROD-12 says "out of stock", which is misleading. Returning "Product not found" would be more honest. This is a good beginner lesson, because the agent will repeat whatever your tool says, true or not.
-- The agent is only as accurate as its tools. The model didn't know the stock level. The tool supplied it. That is the pattern: the model handles language, and tools supply real data.
-
----
-
-[Agents that remember](https://scaler-content.github.io/Agents-that-remember/)
-
-LLMs by default are stateless. That means if we opt out of a working session with a regular LLM chat conversation, it will not have any memory of that converstation as it's default behaviour.
-Memory is how the agent gets that information back into the prompt. Without memory, every interaction feels transactional. With memory, agent can keep track of what we asked a while ago, keep important facts across sessions and adapt to our preferences and stay on track in long-running work.
-
-
-
-
-
-[Agents that work together](https://pulkit-scaler.github.io/agents-that-work-together/)
-[How Agents Talk](https://scaler-content.github.io/How-agents-talk/#glossary)
-[Shipping Agents to Production](https://scaler-content.github.io/shipping-agents-to-production/)
+Next: [Giving an AI agent tools](/blog/giving-agents-tools), where a plain function becomes a tool and we build a tip calculator, a sales assistant and an inventory checker.
