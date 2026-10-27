@@ -5,343 +5,560 @@ date: "2026-10-10"
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
+The first post stayed on the Python side of things. This one moves to the neural network itself: what a network is made of, how its parameters live in memory, how a forward pass runs on the GPU, and why inference needs so much less memory than training.
+
+<Callout type="note" title="The LLM Architectures series">
+
+1. [01 · Python Internals](/blog/mentiforce01)
+2. **02 · Neural Network Fundamentals** (this post)
+3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
+4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
+
+</Callout>
+
 ## What are the basic components of a neural network?
 
 ### What is a layer? What is a parameter?
 
-**What are the components of a neural network model?**
-- A highly flexible function approximator composed of several interconnected computational elements.
-- The core structure typically consists of Neurons (Nodes) which are the fundamental processing units. Each neuron receives one or more inputs and performs a weighted sum and applies an activation function to the result.
-- Neurons are organized into layers
-    - Input layer receives raw data. No computation other than passing input features through.
-    - Hidden layers perform complex feature extraction and transformation through successive applications of weighted sums and activation functions.
-    - Output layer produces the final predictions or classifications.
-- Weights represent the strength of connection between neurons in different layers. Determine influence of an input on the output of a neuron. Adjusted during training to minimize prediction error.
-- Biases allow activation function to be shifted, effectively enabling the neuron to activate even if all inputs are zero.
-- Activation functions are non-linear functions applied to the output of each neuron's weighted sum. Critical for enabling the network to learn non-linear relationships.
-    - Without non-linearity, a deep neural network would simply be equivalent to a single-layer perceptron, severely limiting its expressive power.
-- Loss funnction or cost function quantifies discrepancy between network's predictions and actual target values. A numerical measure of how wrong the model's predictions are.
-    - The objective of training is to minimize this loss function over the training data, guiding the parameter updates.
-- Optimizer is an algorithm used to adjust the network's weights and biases during training by minimizing the loss function.
-    - Optimizers typically employ gradient-based methods, such as Stochastic Gradient Descent (SGD) and its variants (Adam, RMSprop), to iteratively update parameters in the direction that reduces the loss.
+#### What are the components of a neural network model?
 
-**Which ones are trainable parameters, and which are constants?**
-- Trainable parameters are the numerical values within the neural network that are adjusted by the optimization algorithm during the training process. Examples are weights, biases and convolutional kernels.
-    - Their primary role is to learn the underlying patterns and relationships in the data, enabling the network to map inputs to desired outputs. They are the components that hold the 'learned knowledge' of the network.
-- Constants establish the framework and operational rules within which the trainable parameters are learned.
-    - These are elements of the neural network that are fixed prior to or during training and are not adjusted by the optimization algorithm based on gradients from the loss function.
-    - Constants typically define the network's architecture, operational logic, or control the training process itself. They are either structural elements or hyperparameters set by the model designer and remain static or are manually adjusted.
-- In essence, trainable parameters are the adaptive elements that encode the network's learned representations, modified through data exposure and gradient-based optimization. Constants (or hyperparameters) establish the framework and operational rules within which these parameters are learned, determined by design choices rather than direct data-driven updates during training.
+A neural network is a highly flexible function approximator made of many interconnected computational elements. A **neuron** (or node) is the fundamental processing unit. Each neuron receives one or more inputs, computes a weighted sum, and applies an activation function to the result.
 
-**Which are used during forward pass, and what extra is used during training?**
-- The initial data vector (where n is the number of features) that serves as the network's starting point.
-- Learnable parameters comprising weights and biases for each layer and activation functions to bring in non-linerarity.
-    - They scale and shift the input signals, forming the core of the linear transformation within each neuron.
-- Activation functions: Transform the summed weighted inputs into an output that is passed to the next layer. Without them, a neural network, no matter how deep, would only be able to learn linear transformations.
-- The final result generated by the network after the input has traversed all layers.
-- The training phase is useful, extending the forward pass by incorporating mechanisms to learn from errors and iteratively adjust the learnable parameters.
-    - Target labels (Ground Truth): Benchmark against network predictions for supervised learning.
-    - Loss Function (Cost Function): A scalar-valued function that quantifies the discrepancy between the network's prediction and the true label. Its primary purpose is to provide a measurable objective for optimization.
-        - The objective function that the training process aims to minimize. A lower loss indicates a better-performing model.
-            - Examples include Mean Squared Error (MSE) for regression, and Cross-Entropy loss for classification. 
-    - Gradients: Vectors of partial derivatives of loss function wrt each learnable parameter.
-        - Used by the optimizer to determine how to adjust parameters to decrease the loss. They are computed efficiently via the backpropagation algorithm, which uses the chain rule of calculus.
-            - The core idea of backpropagation is to propagate the error backwards through the network, layer by layer, calculating the gradient for each parameter.
-    - Optimizer: Utilize computed gradients to iteratively update the network's learnable parameters, minimizing loss function.
-    - Learning rate: Crucial hyperparameter that controls step size taken by the optimizer when adjusting parameters. Dictates how aggressively the model learns.
-        - A high learning rate can lead to instability and divergence, while a low learning rate can result in slow convergence or getting stuck in local minima.
+Neurons are organised into **layers**:
+
+- The **input layer** receives the raw data. It does no computation other than passing the input features through.
+- **Hidden layers** perform complex feature extraction and transformation, through successive weighted sums and activation functions.
+- The **output layer** produces the final predictions or classifications.
+
+| Component | What it does |
+| --- | --- |
+| **Weights** | The strength of the connection between neurons in different layers. They determine how much an input influences a neuron's output, and they are adjusted during training to minimise prediction error |
+| **Biases** | They shift the activation function, so a neuron can activate even when all its inputs are zero |
+| **Activation functions** | Non-linear functions applied to the output of each neuron's weighted sum. They are what lets the network learn non-linear relationships |
+| **Loss (cost) function** | Quantifies the gap between the network's predictions and the actual target values: a number that says how wrong the predictions are |
+| **Optimizer** | The algorithm that adjusts the weights and biases during training, by minimising the loss |
+
+- Without non-linearity, a deep network would collapse into a single linear transformation, which severely limits its expressive power.
+- The goal of training is to minimise the loss over the training data, and the loss guides the parameter updates.
+- Optimizers typically use gradient-based methods, such as Stochastic Gradient Descent (SGD) and its variants (Adam, RMSprop), to update the parameters step by step in the direction that reduces the loss.
+
+You can see the parameters of a tiny model directly in PyTorch:
+
+```python
+import torch
+from torch import nn
+
+model = nn.Sequential(
+    nn.Linear(4, 8),  # input to hidden: an 8 x 4 weight matrix plus 8 biases
+    nn.ReLU(),        # an activation function: it has no learnable parameters
+    nn.Linear(8, 2),  # hidden to output: a 2 x 8 weight matrix plus 2 biases
+)
+
+for name, p in model.named_parameters():
+    print(name, tuple(p.shape))  # each one is a trainable parameter tensor
+
+print(sum(p.numel() for p in model.parameters()))  # 4*8 + 8 + 8*2 + 2 = 58 parameters
+```
+
+#### Which ones are trainable parameters, and which are constants?
+
+| | Trainable parameters | Constants (hyperparameters) |
+| --- | --- | --- |
+| **What they are** | Numerical values adjusted by the optimizer during training. Examples: weights, biases, convolutional kernels | Elements that are fixed before or during training and aren't adjusted by gradients from the loss. They define the architecture, the operational logic, or the training process itself |
+| **Their role** | They learn the patterns and relationships in the data and hold the network's "learned knowledge" | They set the framework and rules within which the parameters are learned: layer sizes, the learning rate, the choice of activation function |
+| **Who sets them** | Data and gradient-based optimization | The model designer, by design choice, and then left static or adjusted by hand |
+
+In short, trainable parameters are the adaptive elements that encode what the network has learned. Constants (hyperparameters) are the design choices around them.
+
+#### Which are used during the forward pass, and what extra is used during training?
+
+| Used in the forward pass (inference) | Added during training |
+| --- | --- |
+| The **input** vector (with n features), the network's starting point | **Target labels** (ground truth), the benchmark for the predictions in supervised learning |
+| **Learnable parameters**: weights and biases for each layer, which scale and shift the input signals | **Loss function**, which measures how far the prediction is from the true label |
+| **Activation functions**, which transform each summed input into the output passed to the next layer | **Gradients**, from backpropagation |
+| The **output**: the final result after the input has passed through all the layers | **Optimizer** and its state, plus the **learning rate** |
+
+![The forward pass takes input through the model to a prediction. Training adds a loss against the target, gradients from backpropagation, and an optimizer that updates the weights](/llm-nn-fundamentals/training-loop.svg)
+
+The training phase extends the forward pass with ways to learn from errors and adjust the learnable parameters step by step.
+
+- **Loss function.** A scalar-valued function that measures the gap between the prediction and the true label. It gives optimization something measurable to aim at, and a lower loss means a better model.
+    - Examples: Mean Squared Error (MSE) for regression, and Cross-Entropy loss for classification.
+- **Gradients.** Vectors of partial derivatives of the loss with respect to each learnable parameter. The optimizer uses them to decide how to adjust the parameters so the loss goes down.
+    - They are computed efficiently by the **backpropagation** algorithm, which uses the chain rule of calculus.
+    - The core idea is to propagate the error backwards through the network, layer by layer, calculating the gradient for each parameter.
+- **Optimizer.** Uses the computed gradients to update the network's learnable parameters step by step and reduce the loss.
+- **Learning rate.** A crucial hyperparameter that controls the step size the optimizer takes when adjusting parameters, in other words how aggressively the model learns.
+    - A learning rate that is too high can cause instability and divergence. One that is too low can mean slow convergence, or getting stuck in a local minimum.
 
 ### How are parameters stored? How does PyTorch manage them?
 
-**How are parameter tensors allocated in memory?**
-- Allocated as n-dimensional arrays, managed by underlying deep learning framework's runtime and hardware interfaces.
-- Encapsulate numerical data and are associated with a specific device and data type. torch.sensor is the fundamental data structure representing a multi-dimensional matrix. It acts as a handle to a block of memory, which can reside on either the CPU (host memory) or a GPU (device memory).
-- Memory Allocation by Device:
-    - CPU Memory (Host): When a tensor is created on the CPU, PyTorch's C++ backend (powered by the ATen library) uses standard system memory allocation routines (e.g., malloc or equivalent) to reserve a contiguous block of RAM. This is typically the default device.
-    - GPU Memory (Device): For GPU allocation, PyTorch interfaces with the GPU's programming model, primarily CUDA for NVIDIA GPUs or ROCm for AMD GPUs. It calls low-level runtime APIs (e.g., cudaMalloc in CUDA) to request dedicated video RAM (VRAM) from the GPU's memory controller. The tensor then stores a pointer to this GPU memory block.
-    - Device Transfer: Moving a tensor from CPU to GPU (e.g., tensor.to('cuda') or model.cuda()) involves copying the tensor's data from host RAM to device VRAM. This is a crucial step for leveraging parallel computation, and the data transfer bandwidth can be a significant bottleneck.
-- Memory Layout and Contiguity: Tensors are often stored in a contiguous block of memory to optimize access patterns and computational efficiency. PyTorch internally manages strides to handle non-contiguous views without copying data, but explicit .contiguous() calls can enforce contiguity when necessary, potentially incurring a copy operation.
-- Data Types and Precision: The amount of memory allocated is directly proportional to the number of elements and the data type (e.g., torch.float32, torch.float16, torch.bfloat16, torch.int8). Lower precision types (float16, bfloat16) reduce memory footprint and can accelerate computations on compatible hardware.
-- Parameter Management in nn.Module: When you define a neural network using torch.nn.Module, parameters are registered using self.register_parameter() (or implicitly via nn.Parameter). This allows the module to track them, move them between devices, and include them in the optimizer's parameter list for gradient updates.
+#### How are parameter tensors allocated in memory?
 
-**Do all parameters have to be moved to GPU? When does this happen?**
-- PyTorch operations are device-agnostic in their definition, meaning the same operation can run on CPU or GPU. However, they strictly require all participating tensors to be on the same computational device (either CPU or a specific GPU) to execute successfully. You cannot perform an operation between a tensor on CPU and a tensor on GPU directly.
-- Not all parameters must be moved to the GPU, but for any computation to leverage GPU acceleration, the relevant parameters and input data must reside on the same GPU device as the operation itself.
-    - Parameters are moved to the GPU when a user explicitly requests it or when an underlying framework (e.g., for distributed training) orchestrates this placement. This typically occurs just before or at the point of computation, enabling the GPU to perform matrix multiplications and other operations efficiently.
-        - Explicit User Control in PyTorch: The most common scenario for moving parameters to the GPU involves explicit placement using PyTorch's API.
-            - Moving Individual Tensors: Individual tensors can be moved using the .to(device) method or its convenience alias .cuda().
-            - Moving Entire Modules: For instances of torch.nn.Module (which represent neural network layers or full models), calling module.to(device) conveniently moves all internal parameters (e.g., weights and biases) and buffers (e.g., batch normalization running statistics) of that module to the specified device.
-        - Implicit and Orchestrated Placement for Advanced Setups: In more sophisticated or large-scale training scenarios, parameters might be moved dynamically, partially, or managed by distributed frameworks.
-            - Data Parallelism: Frameworks like torch.nn.DataParallel or torch.distributed.DistributedDataParallel typically replicate the model on multiple GPUs. Each replica will have its parameters on its respective GPU, allowing each GPU to process a batch of data in parallel.
-            - Model Parallelism and CPU Offloading: For extremely large models that exceed the memory capacity of a single GPU, techniques like model parallelism (sharding model layers across multiple GPUs) or CPU offloading (moving less frequently used layers or parameters to CPU memory) are employed. In these cases, parameters are only loaded onto the active GPU as needed for computation, dynamically moving them back and forth.
-            - ZeRO (Zero Redundancy Optimizer): Advanced optimizers like ZeRO (part of DeepSpeed) further optimize memory by partitioning model states (optimizer states, gradients, and parameters) across devices, meaning not all parameters reside fully on any single GPU at all times, reducing memory footprint.
+- Parameters are n-dimensional arrays, managed by the deep learning framework's runtime and hardware interfaces. They hold numerical data and are tied to a specific **device** and **data type**.
+- `torch.Tensor` is the fundamental data structure, a multi-dimensional matrix. It acts as a handle to a block of memory that lives either on the CPU (host memory) or on a GPU (device memory).
 
-**Can multiple models share parameters?**
-- Yes, parameter sharing enables efficiency, regularization and exploitation of shared representations across different parts of a network or distinct models.
-- Parameter sharing, often referred to as weight sharing, is an architectural pattern where a single set of trainable parameters (weights and biases) is used by multiple computational units or layers within a neural network, or even across separate model instances.
-- The core principle behind parameter sharing is the enforcement of an inductive bias. If certain transformations or feature extractions are expected to be universally useful or perform similar operations across different contexts (e.g., different input locations in an image, or different but related tasks), then sharing parameters allows these components to learn a unified, robust representation.
-- In PyTorch, parameter sharing is elegantly managed by Python's object referencing and PyTorch's module system. It's achieved by having multiple nn.Module instances or sub-modules reference the same underlying torch.nn.Parameter objects.
-    - When an nn.Module is initialized, its parameters are typically registered as attributes. If multiple modules or layers are assigned the same nn.Parameter instance, or if a sub-module is passed by reference to multiple parent modules, they will all operate on the exact same underlying tensors. During backpropagation, gradients for these shared parameters will accumulate correctly.
-- Common Application Patterns:
-    - Siamese Networks: Consist of two or more identical subnetworks (sharing all parameters) that process distinct inputs to learn a similarity metric or embed inputs into a common space for comparison (e.g., face recognition, signature verification).
-    - Multi-Task Learning (MTL): A single model is trained to perform multiple related tasks simultaneously. A common 'backbone' network shares parameters to learn general features, while task-specific 'heads' branch off from these shared layers, each with their own unique parameters.
-        - This setup encourages the shared layers to learn features that are useful across all tasks, often leading to better generalization and data efficiency compared to training separate models.
-    - Encoder-Decoder Architectures: In certain sequence-to-sequence models or autoencoders, the embedding layer or parts of the encoder and decoder might share weights. This is particularly effective when the input and output vocabularies are identical, enforcing a consistent semantic space.
-        - Example: Sharing the input and output embedding matrices in a Neural Machine Translation (NMT) model, where the source and target languages use the same vocabulary, can lead to improved performance and reduced parameters.
-    - Generative Adversarial Networks (GANs): While typically Generator and Discriminator are separate, some advanced GAN architectures or component sharing (e.g., partial weight sharing in spectral normalization layers or shared feature extractors in conditional GANs) might implicitly or explicitly leverage parameter sharing principles.
+| Where | How memory is allocated |
+| --- | --- |
+| **CPU (host)** | PyTorch's C++ backend (powered by the ATen library) uses standard system memory allocation routines (such as `malloc` or equivalent) to reserve a contiguous block of RAM. This is typically the default device |
+| **GPU (device)** | PyTorch uses the GPU's programming model, mainly CUDA for NVIDIA GPUs or ROCm for AMD GPUs. It calls low-level runtime APIs (such as `cudaMalloc`) to request dedicated video RAM (VRAM) from the GPU's memory controller, and the tensor stores a pointer to that block |
 
+- **Device transfer.** Moving a tensor from CPU to GPU (with `tensor.to('cuda')` or `model.cuda()`) copies its data from host RAM to device VRAM. This is a crucial step for using parallel computation, and the transfer bandwidth can be a significant bottleneck.
+- **Memory layout and contiguity.** Tensors are often stored in one contiguous block to optimise access patterns and efficiency. PyTorch uses **strides** to handle non-contiguous views without copying data, and an explicit `.contiguous()` call forces contiguity when needed, possibly at the cost of a copy.
+- **Data types and precision.** The memory allocated is directly proportional to the number of elements and the size of the data type. Lower-precision types reduce the memory footprint and can speed up computation on compatible hardware.
+
+| Data type | Bytes per element |
+| --- | --- |
+| `torch.float32` | 4 |
+| `torch.float16`, `torch.bfloat16` | 2 |
+| `torch.int8` | 1 |
+
+- **Parameter management in `nn.Module`.** When you define a network with `torch.nn.Module`, parameters are registered with `self.register_parameter()` (or implicitly through `nn.Parameter`). That lets the module track them, move them between devices, and include them in the optimizer's parameter list for gradient updates.
+
+<Callout type="tip" title="A quick sizing rule">
+
+Weight memory is roughly the parameter count times the bytes per parameter. A 7-billion-parameter model in FP16 takes about 7 × 10⁹ × 2 bytes, which is about 14 GB, before activations or anything else.
+
+</Callout>
+
+#### Do all parameters have to be moved to the GPU? When does this happen?
+
+- PyTorch operations are device-agnostic in their definition: the same operation can run on the CPU or the GPU. But all the tensors taking part must be on the **same device**. You can't directly combine a CPU tensor with a GPU tensor.
+- Not all parameters *must* be on the GPU, but for a computation to use GPU acceleration, the relevant parameters and input data must sit on the same GPU as the operation.
+- Parameters move to the GPU when the user asks for it explicitly, or when a framework (for example for distributed training) arranges the placement. This usually happens just before or at the point of computation.
+
+```python
+model = model.to("cuda")  # moves every parameter and buffer of the module
+x = x.to("cuda")          # the inputs must be on the same device as the model
+y = model(x)              # now the computation can run on the GPU
+```
+
+- **Explicit control.** Individual tensors move with `.to(device)` or its alias `.cuda()`. For a `torch.nn.Module`, `module.to(device)` moves all the module's parameters and buffers (such as batch normalization's running statistics).
+- **Placement in more advanced setups.** Large-scale training can move parameters dynamically, partially, or through a distributed framework:
+
+| Technique | What happens to the parameters |
+| --- | --- |
+| **Data parallelism** (`DataParallel`, `DistributedDataParallel`) | The model is replicated on several GPUs, each replica holds its parameters on its own GPU, and each GPU processes a batch of data in parallel |
+| **Model parallelism and CPU offloading** | For models too big for one GPU, layers are sharded across GPUs, or less-used layers sit in CPU memory. Parameters are loaded onto the active GPU only as needed and moved back and forth |
+| **ZeRO** (part of DeepSpeed) | Partitions the model state (optimizer states, gradients and parameters) across devices, so no single GPU holds everything at once, which cuts the memory footprint |
+
+#### Can multiple models share parameters?
+
+- **Yes.** Parameter sharing (also called weight sharing) brings efficiency, regularisation and shared representations across different parts of a network, or across separate models.
+- It is an architectural pattern in which a single set of trainable parameters (weights and biases) is used by several computational units or layers in a network, or even across model instances.
+- The principle behind it is an **inductive bias**. If certain transformations are expected to be useful everywhere, for example at different locations in an image or across related tasks, sharing parameters lets those components learn one robust, unified representation.
+- In PyTorch, sharing works through Python's object references and the module system: several `nn.Module` instances or sub-modules reference the **same** `torch.nn.Parameter` objects. If a sub-module is passed by reference to several parents, they all operate on exactly the same tensors. During backpropagation, the gradients for shared parameters accumulate correctly.
+
+```python
+embed = nn.Embedding(1000, 64)           # a 1000 x 64 embedding matrix
+proj = nn.Linear(64, 1000, bias=False)   # its weight is also 1000 x 64
+proj.weight = embed.weight               # both now share one Parameter (weight tying)
+```
+
+Common patterns:
+
+| Pattern | How parameters are shared |
+| --- | --- |
+| **Siamese networks** | Two or more identical subnetworks share all their parameters and process different inputs, to learn a similarity metric or to embed inputs into a common space (face recognition, signature verification) |
+| **Multi-task learning** | One model does several related tasks at once. A common "backbone" shares parameters to learn general features, and task-specific "heads" branch off with their own parameters. This tends to improve generalisation and data efficiency |
+| **Encoder-decoder models** | The embedding layer, or parts of the encoder and decoder, can share weights. This works especially well when the input and output vocabularies are the same, and it enforces a consistent semantic space. Sharing the input and output embedding matrices in a translation model with one shared vocabulary improves performance and reduces the parameter count |
+| **GANs** | A generator and a discriminator are usually separate, but some advanced GAN designs share components (for example partial weight sharing in spectral normalization layers, or shared feature extractors in conditional GANs) |
 
 ## How does a model run during inference?
 
 ### How is the forward pass executed on the GPU?
 
-**How does a Linear layer → matrix multiplication run?**
-- Linear layer transforms an input matrix or batch of vectors X into an output Y using a weight matrix W and an optional bias vector B.
-    - Notation: Where:
-        - X: Input matrix of shape (batch size, in_features)
-        - W: Weight matrix of shape (out_features, in_features)
-        - B: Bias vector of shape (out_features)
-        - Y: Output matrix of shape (batch_size, out_features)
-- GPU Execution Paradigm: Massive Parallelism: GPUs are designed for Single Instruction, Multiple Threads (SIMT) execution, which is perfectly suited for matrix multiplication where each output element can be computed independently.
-    - Thread Hierarchy: GPU computations are organized hierarchically to exploit parallelism:
-        - Grid: A collection of independent thread blocks.
-        - Block: A group of cooperating threads (e.g., threads) that can access fast shared memory and synchronize.
-        - Thread: The smallest unit of execution, responsible for a portion of the computation, typically a single element or a small segment of data.
-- For the general matrix multiplication, C = A X B, where A is M X K and B is K X N, the output C is M X N.
-    - Each element Cij is computed as the dot product of the ith row of A and the jth column of B by mapping portions of the output matrix C to thread blocks.
-    - A common strategy involves mapping portions of the output matrix C to thread blocks. For instance, a thread block might be responsible for computing a tile (sub-matrix) of C. Within that block, individual threads compute specific elements or parts of elements.
-    - To maximize efficiency and minimize global memory access (which is slow), highly optimized kernels use tiling with shared memory.
-        - Large matrices A and B are divided into smaller tiles (sub-matrices) that fit within the GPU's fast on-chip shared memory.
-        - Threads within a block collaboratively load corresponding tiles of A and B into shared memory. This is done once per tile, amortizing the global memory access cost.
-        - Once tiles are in shared memory, threads perform multiple dot products (or partial dot products) using the fast shared data. This creates a high compute-to-memory-access ratio.
-        - This technique dramatically reduces memory latency, allows for data reuse, and keeps the GPU's arithmetic logic units (ALUs) busy, achieving near peak performance.
-    - Individual threads also extensively utilize fast registers for intermediate calculations. Compilers and hardware aggressively pipeline instructions to ensure continuous execution and maximal throughput of arithmetic operations.
-    - Deep learning frameworks abstract these low-level GPU details, relying on highly optimized libraries to execute matrix multiplications efficiently.
-        - NVIDIA's parallel computing platform and programming model, enabling developers to write GPU-accelerated code. It provides the low-level interface to program GPUs.
-            - cuBLAS: The CUDA Basic Linear Algebra Subprograms library provides a highly tuned suite of GPU-accelerated standard BLAS routines, including GEMM (General Matrix Multiply). This is the workhorse for dense matrix operations. 
-            - cuDNN: The CUDA Deep Neural Network library provides highly optimized primitives for deep learning operations like convolutions, pooling, and activation functions. Crucially, many of its operations internally leverage cuBLAS for matrix multiplications.
-            - Modern NVIDIA GPUs (Volta, Turing, Ampere, Hopper architectures) feature specialized hardware units called Tensor Cores. These are programmable matrix-multiply-and-accumulate units designed to accelerate mixed-precision matrix operations, further boosting linear layer performance, especially for lower precision (e.g., FP16, BF16, INT8) inference.
-    - High-level deep learning frameworks like PyTorch, TensorFlow, and JAX transparently manage these low-level details. When a linear layer is defined and executed on a GPU, the framework automatically dispatches the underlying matrix multiplication to the most appropriate and highly optimized cuBLAS or cuDNN routines, often leveraging Tensor Cores where available.
+#### How does a Linear layer → matrix multiplication run?
 
-**Is each operation a separate kernel call?**
-- Not necessarily for every single numerical computation. While conceptually distinct operations can map to individual GPU kernel calls, modern deep learning frameworks employ sophisticated optimization techniques to reduce overhead and maximize parallelism.
-- Launching a GPU kernel from the CPU involves a certain amount of overhead. This includes: CPU-GPU communication (copying parameters, setting up launch configurations), kernel enqueueing, and synchronization if subsequent operations depend on the current kernel's completion.
-- For a sequence of many small operations, the cumulative launch overhead can become a significant bottleneck, especially for memory-bound tasks.
-- To mitigate this overhead, deep learning frameworks frequently use a technique called kernel fusion.
-    - Kernel fusion combines multiple consecutive, compatible operations into a single, larger custom kernel.
-        - This reduces the number of kernel launches, minimizing overhead and improving memory access patterns.
-        - Instead of writing intermediate results to global GPU memory and reading them back for the next operation, fused kernels can keep data in faster on-chip memory (e.g., registers, shared memory). 
-- Advanced deep learning compilers and runtime libraries automatically perform kernel fusion and other graph optimizations.
+A Linear layer transforms an input matrix (or a batch of vectors) **X** into an output **Y**, using a weight matrix **W** and an optional bias vector **B**: `Y = X · Wᵀ + B`.
 
-**Is there kernel fusion? Can multiple layers be merged?**
-- Kernel fusion explicitly allows for the merging of multiple elementary operations (layers or parts of layers) into a single GPU kernel.
-- Combines a sequence of operations that would typically require separate GPU kernel launches into a single, larger kernel.
-    - Standard Execution Model: Without fusion, each operation (e.g., matrix multiplication, ReLU, bias addition) involves: Launching a new kernel on the GPU -> Loading input data from global memory -> Performing the computation -> Writing intermediate results back to global memory.
-    - Fused Execution Model: With fusion, a compiler identifies opportunities to chain these operations directly within the GPU's faster on-chip memory (e.g., registers, shared memory) for intermediate results, avoiding costly global memory round trips.
+| Symbol | Shape |
+| --- | --- |
+| **X**, the input | (batch_size, in_features) |
+| **W**, the weights | (out_features, in_features) |
+| **B**, the bias | (out_features) |
+| **Y**, the output | (batch_size, out_features) |
+
+**The GPU execution paradigm is massive parallelism.** GPUs are designed for Single Instruction, Multiple Threads (SIMT) execution, which suits matrix multiplication perfectly, because each output element can be computed independently. Computation is organised in a hierarchy:
+
+| Level | What it is |
+| --- | --- |
+| **Grid** | A collection of independent thread blocks |
+| **Block** | A group of cooperating threads that can access fast shared memory and synchronise |
+| **Thread** | The smallest unit of execution, responsible for a small part of the computation, typically one element or a small segment of data |
+
+For the general matrix multiplication `C = A × B`, where A is M × K and B is K × N, the output C is M × N. Each element `C[i][j]` is the dot product of row i of A and column j of B.
+
+- A common strategy maps portions of the output matrix C to thread blocks. A block might be responsible for computing one **tile** (a sub-matrix) of C, and within the block each thread computes specific elements or parts of elements.
+- To maximise efficiency and minimise slow global memory access, highly optimised kernels use **tiling with shared memory**:
+    1. Large matrices A and B are divided into smaller tiles that fit into the GPU's fast on-chip shared memory.
+    2. The threads in a block load the matching tiles of A and B into shared memory together. This happens once per tile, which spreads the cost of the global memory access over many uses.
+    3. Once the tiles are in shared memory, the threads perform many dot products (or partial dot products) on the fast shared data. This gives a high ratio of computation to memory access.
+- This dramatically reduces memory latency, lets data be reused, and keeps the GPU's arithmetic logic units (ALUs) busy, reaching near peak performance. Individual threads also use fast **registers** for intermediate calculations, and compilers and hardware pipeline the instructions aggressively to keep execution continuous.
+
+![C equals A times B. One thread block computes one tile of C, loading tiles of A and B from global memory into shared memory and accumulating in registers](/llm-nn-fundamentals/gpu-tiling.svg)
+
+Deep learning frameworks hide these low-level details and rely on highly optimised libraries to run matrix multiplications:
+
+| Library or hardware | Role |
+| --- | --- |
+| **CUDA** | NVIDIA's parallel computing platform and programming model, which lets developers write GPU-accelerated code. It is the low-level interface for programming GPUs |
+| **cuBLAS** | The CUDA Basic Linear Algebra Subprograms library: highly tuned, GPU-accelerated BLAS routines, including GEMM (General Matrix Multiply). It is the workhorse for dense matrix operations |
+| **cuDNN** | The CUDA Deep Neural Network library: highly optimised primitives for convolutions, pooling and activation functions. Many of its operations use cuBLAS internally for matrix multiplication |
+| **Tensor Cores** | Specialised matrix-multiply-and-accumulate units on modern NVIDIA GPUs (Volta, Turing, Ampere, Hopper). They speed up mixed-precision matrix operations, especially at lower precision (FP16, BF16, INT8) |
+
+When a linear layer is defined and run on a GPU, PyTorch, TensorFlow and JAX automatically dispatch the matrix multiplication to the most suitable cuBLAS or cuDNN routine, often using Tensor Cores when they are available.
+
+#### Is each operation a separate kernel call?
+
+- **Not necessarily** for every numerical computation. Conceptually, distinct operations can map to individual GPU kernel calls, but modern frameworks use optimisation techniques to cut overhead and maximise parallelism.
+- Launching a GPU kernel from the CPU has a cost. It includes CPU-GPU communication (copying parameters, setting up launch configurations), kernel enqueueing, and synchronisation if later operations depend on this kernel finishing.
+- For a sequence of many small operations, the launch overhead adds up and can become a significant bottleneck, especially for memory-bound work.
+- To reduce it, frameworks often use **kernel fusion**.
+    - Kernel fusion combines several consecutive, compatible operations into one larger custom kernel.
+        - This reduces the number of kernel launches, which cuts overhead and improves memory access patterns.
+        - Instead of writing intermediate results to global GPU memory and reading them back for the next operation, a fused kernel can keep the data in faster on-chip memory (registers, shared memory).
+- Advanced deep learning compilers and runtime libraries perform kernel fusion and other graph optimisations automatically.
+
+#### Is there kernel fusion? Can multiple layers be merged?
+
+- Yes. Kernel fusion lets several elementary operations (layers, or parts of layers) merge into a single GPU kernel. It combines a sequence of operations that would normally need separate kernel launches into one larger kernel.
+- **Standard execution model.** Without fusion, each operation (matrix multiplication, ReLU, bias addition) goes through: launch a new kernel on the GPU → load the input data from global memory → compute → write the intermediate result back to global memory.
+- **Fused execution model.** With fusion, a compiler finds chances to chain these operations directly in the GPU's faster on-chip memory (registers, shared memory) for the intermediate results, avoiding costly round trips to global memory.
+
+![Without fusion, matmul, bias and ReLU are three kernels with six trips to global memory. With fusion they are one kernel with two trips, and the intermediates stay in registers and shared memory](/llm-nn-fundamentals/kernel-fusion.svg)
 
 ### How does memory layout affect performance?
 
-**Is PyTorch column-major or row-major?**
-- Row-Major (C-style): In a row-major layout, elements of the last dimension are stored contiguously in memory. When iterating through rows, elements within a row are adjacent.
-- Column-Major (Fortran-style): In a column-major layout, elements of the first dimension are stored contiguously in memory. When iterating through columns, elements within a column are adjacent.
-- PyTorch tensors are by default row-major (C-style) in their memory layout, similar to NumPy arrays
-    - PyTorch uses a stride mechanism to represent how to navigate a tensor's memory. A stride is the jump in memory (in number of elements) required to get to the next element along a specific dimension.
-    - A tensor is contiguous if its elements are stored in memory in the same order as a row-major tensor with the same shape. Operations like transpose() or permute() often create non-contiguous views of the tensor by changing its strides without rearranging the underlying data.
-        - Check Contiguity: You can check if a tensor is contiguous using tensor.is_contiguous().
-        - Force Contiguity: To ensure optimal performance for certain operations (e.g., convolutions, view reshaping), it's often necessary to convert a non-contiguous tensor into a contiguous one using tensor.contiguous(). This operation creates a new tensor with the data physically rearranged in memory.
-- Performance Implications for Neural Networks: The memory layout significantly impacts performance due to cache locality and vectorization efficiency on modern hardware like GPUs.
-    - Accessing contiguous memory regions allows the CPU/GPU to make efficient use of its cache hierarchy. When data is accessed linearly, the prefetching mechanisms can bring subsequent data into the cache before it is explicitly requested, reducing memory latency.
-    - Modern processors and GPUs perform operations on multiple data elements simultaneously using Single Instruction, Multiple Data (SIMD) instructions. Contiguous memory access patterns are crucial for these vector units to load and process data efficiently without incurring penalties from scattered memory access.
+#### Is PyTorch column-major or row-major?
 
-**Why perform layer fusion?**
-- Fundamental optimization technique in deep learning inference and training, primarily aimed at enhancing computational efficiency on specialized hardware like GPUs.
-- Involves combining multiple consecutive, elementary operations or 'layers' of a neural network into a single, consolidated computational kernel.
-- Common examples include fusing element-wise operations (e.g., activation functions, additions, multiplications) with preceding convolution or matrix multiplication layers.
-- Primary Motivations: 
-    - Reduced Memory Bandwidth Consumption: Intermediate results between fused layers are often kept in faster on-chip memory (e.g., registers, shared memory, L1 cache) rather than being written back to slower global device memory (DRAM). This drastically reduces the pressure on memory bandwidth, which is a common bottleneck in compute-bound applications like neural networks.
-    - Reduced Kernel Launch Overhead: Each GPU kernel launch incurs a certain overhead, involving context switching, setting up execution parameters, and synchronization. By fusing multiple operations into one kernel, the number of launches is reduced, thereby mitigating this overhead, especially for networks with many small layers.
-    - Improved Cache Locality and Resource Utilization: Keeping data on-chip not only reduces bandwidth usage but also improves data locality for subsequent computations. This allows better utilization of GPU streaming multiprocessor (SM) resources, including registers and shared memory, leading to higher arithmetic intensity.
-- Common examples include fusing element-wise operations (e.g., activation functions, additions, multiplications) with preceding convolution or matrix multiplication layers.
-    - Example: Convolution + ReLU Fusion: Instead of executing a convolution and then a separate ReLU activation, a fused kernel computes both in sequence for each output element of the convolution, writing the ReLU output directly to global memory.
+- **Row-major (C-style):** the elements of the last dimension are stored next to each other in memory. When you walk along a row, the elements are adjacent.
+- **Column-major (Fortran-style):** the elements of the first dimension are stored next to each other. When you walk down a column, the elements are adjacent.
+- **PyTorch tensors are row-major by default**, like NumPy arrays.
+    - PyTorch uses **strides** to describe how to move through a tensor's memory. A stride is the jump in memory (in number of elements) needed to get to the next element along one dimension.
+    - A tensor is **contiguous** if its elements are stored in the same order as a row-major tensor of the same shape. Operations like `transpose()` or `permute()` often create non-contiguous *views* by changing the strides without rearranging the underlying data.
+        - **Check contiguity** with `tensor.is_contiguous()`.
+        - **Force contiguity** with `tensor.contiguous()`. Some operations (convolutions, view reshaping) perform best, or only work, on contiguous data. This creates a new tensor with the data physically rearranged in memory.
 
-**How are activations stored in intermediate buffers?**
-- Activations: These are the outputs of non-linear activation functions applied after linear transformations (e.g., convolutions, matrix multiplications) within a neural network layer. They represent the transformed feature maps that are passed as input to the subsequent layer.
-- Intermediate Buffers: These are temporary memory regions used to hold activations between successive computational operations or layers. On GPUs, these buffers typically reside in global device memory, but frequently accessed portions are often staged into faster, on-chip memory such as shared memory or registers.
-- Effective storage leverages the multi-level GPU memory hierarchy to ensure data is as close as possible to the processing units (SMs/cores) when needed, minimizing expensive global memory access.
-    - Global memory (DRAM): The largest and slowest memory, accessible by all SMs. Most activations are initially stored here. Optimizing for coalesced memory access (threads in a warp accessing contiguous memory locations) is paramount to maximize bandwidth.
-    - Shared Memory (On-chip): A small, very fast memory shared by threads within a single thread block. It's used for tiling or blocking strategies, where sections of activations are loaded from global memory into shared memory once, then reused multiple times by local threads, dramatically reducing global memory transactions.
-    - Registers (On-chip): The fastest memory, private to each thread. Individual scalar values or small tensor fragments of activations are held in registers during computation.
-- NCHW (Channels-First): In a 4D tensor representing Batch x Channels x Height x Width, channels are the most contiguous dimension after width.
-- NHWC (Channels-Last): Here, channels are the innermost dimension (Activations[N, H, W, C]). This layout provides better spatial locality for pixel-wise operations (e.g., element-wise additions, non-linearities), as all channel values for a given (H, W) coordinate are contiguous.
-- Advanced Buffer Management Techniques: 
-    - Tiling and Blocking: For operations like matrix multiplication or convolution, input activations, weights, and output activations are broken into smaller tiles. These tiles are loaded into faster shared memory, computations are performed, and results are written back to global memory. This maximizes data reuse and minimizes high-latency global memory access.
-    - Buffer Reuse and In-Place Operations: Wherever possible, frameworks try to reuse existing memory buffers for intermediate results rather than allocating new ones. In-place operations modify the buffer directly (e.g., relu_(x) in PyTorch), reducing memory traffic and allocations.
-    - Quantization: Storing activations at reduced precision (e.g., FP16, INT8) significantly decreases memory footprint, allowing more data to fit in faster caches and reducing memory bandwidth requirements. This is a common optimization for inference on specialized hardware.
-    - Dynamic Paging/Virtual Memory: For extremely large models, researchers are exploring techniques where only active parts of the model (including activations) are resident in GPU memory, similar to CPU virtual memory, to process models larger than GPU VRAM.
+```python
+import torch
 
+x = torch.arange(1, 7).reshape(2, 3)   # [[1, 2, 3], [4, 5, 6]]
+print(x.stride(), x.is_contiguous())    # (3, 1) True
+
+t = x.t()                               # a transposed view: no data is copied
+print(t.stride(), t.is_contiguous())    # (1, 3) False
+
+c = t.contiguous()                      # the data is now physically rearranged (a copy)
+print(c.stride(), c.is_contiguous())    # (2, 1) True
+```
+
+![A 2 by 3 tensor in flat memory, its transposed view that only changes the strides, and the contiguous copy with the data rearranged](/llm-nn-fundamentals/tensor-strides.svg)
+
+**Performance implications for neural networks.** Memory layout matters because of cache locality and vectorisation efficiency on modern hardware such as GPUs:
+
+- Reading contiguous regions lets the CPU or GPU use its cache hierarchy well. When data is read linearly, prefetching can bring the next data into the cache before it is asked for, which reduces latency.
+- Modern processors and GPUs work on many data elements at once with SIMD instructions. Contiguous access patterns are crucial for these vector units to load and process data efficiently, without the penalties of scattered memory access.
+
+#### Why perform layer fusion?
+
+- It is a fundamental optimisation in deep learning inference and training, aimed mainly at improving computational efficiency on specialised hardware such as GPUs.
+- It combines several consecutive elementary operations (or "layers") into one consolidated kernel. Common examples fuse element-wise operations (activation functions, additions, multiplications) with a preceding convolution or matrix multiplication layer.
+
+| Motivation | Why it helps |
+| --- | --- |
+| **Less memory bandwidth** | Intermediate results between the fused layers stay in faster on-chip memory (registers, shared memory, L1 cache) instead of being written back to slower global memory (DRAM). This takes pressure off memory bandwidth, a common bottleneck for the many small, element-wise operations in neural networks |
+| **Less kernel launch overhead** | Each kernel launch costs something: context switching, setting up execution parameters, synchronisation. Fewer, larger kernels mean fewer launches, which helps especially in networks with many small layers |
+| **Better cache locality and resource use** | Keeping data on-chip saves bandwidth and also improves data locality for the next computation. That makes better use of the GPU's streaming multiprocessor (SM) resources, including registers and shared memory, and gives higher arithmetic intensity |
+
+- **Example: Convolution + ReLU fusion.** Instead of running a convolution and then a separate ReLU, a fused kernel computes both in sequence for each output element of the convolution, and writes the ReLU output directly to global memory.
+
+#### How are activations stored in intermediate buffers?
+
+- **Activations** are the outputs of the non-linear activation functions applied after linear transformations (convolutions, matrix multiplications) inside a layer. They are the transformed feature maps passed as input to the next layer.
+- **Intermediate buffers** are temporary memory regions that hold activations between successive operations or layers. On GPUs they typically sit in global device memory, but the frequently used parts are often staged into faster on-chip memory such as shared memory or registers.
+- Good storage uses the GPU's multi-level memory hierarchy, so data is as close as possible to the processing units (SMs and cores) when needed, which minimises expensive global memory access:
+
+| Level | What it is |
+| --- | --- |
+| **Global memory (DRAM)** | The largest and slowest memory, accessible by all SMs. Most activations start here. Optimising for **coalesced** access (the threads of a warp reading contiguous locations) is essential to get the most bandwidth |
+| **Shared memory (on-chip)** | A small, very fast memory shared by the threads of one thread block. It is used for tiling or blocking: sections of activations are loaded from global memory once, then reused many times by the local threads, which sharply reduces global memory traffic |
+| **Registers (on-chip)** | The fastest memory, private to each thread. Single scalar values or small fragments of activations stay in registers during computation |
+
+Two common layouts for 4D image tensors:
+
+- **NCHW (channels-first):** Batch × Channels × Height × Width. Width varies fastest in memory, so each channel's H × W plane is stored contiguously.
+- **NHWC (channels-last):** the channels are the innermost dimension (`Activations[N, H, W, C]`). This gives better spatial locality for pixel-wise operations (element-wise additions, non-linearities), because all the channel values for one (H, W) position sit together.
+
+Advanced buffer management techniques:
+
+- **Tiling and blocking.** For operations like matrix multiplication or convolution, the input activations, weights and output activations are broken into small tiles. The tiles are loaded into faster shared memory, computed on, and written back to global memory. This maximises data reuse and minimises high-latency global memory access.
+- **Buffer reuse and in-place operations.** Frameworks reuse existing buffers for intermediate results where possible, instead of allocating new ones. In-place operations (such as `relu_(x)` in PyTorch) modify the buffer directly, which reduces memory traffic and allocations.
+- **Quantization.** Storing activations at lower precision (FP16, INT8) cuts the memory footprint a lot, lets more data fit in faster caches and lowers bandwidth needs. It is a common inference optimisation on specialised hardware.
+- **Dynamic paging and virtual memory.** For extremely large models, researchers are exploring techniques where only the active parts of the model (including activations) stay in GPU memory, like CPU virtual memory, to handle models larger than the GPU's VRAM.
 
 ## Do optimizer and gradients matter for inference?
 
 ### Is gradient needed during inference?
 
-**Does inference generate intermediate results? Where are they stored?**
-- Yes. The storage location for thesee intermediate results is a critical factor influencing inference performance and is primarily determined by the computational device used.
-    - Nature of Intermediate Results: These are primarily the activations or feature maps produced by each layer as data propagates through the network.
-        - The output of a given layer transforms the input it received and becomes the input for the subsequent layer in the network's architecture.
-    - Role in Forward Pass: Intermediate activations are indispensable for the sequential, layer-by-layer computation that constitutes the neural network's forward pass during inference.
-        - Each layer applies its specific transformations (e.g., convolutions, matrix multiplications, non-linear activations) to its input, producing an intermediate representation that encapsulates progressively more abstract features.
-        - This process continues, building upon the outputs of preceding layers, until the final output layer computes the network's ultimate prediction or decision.
-    - Storage Mechanism: The storage location for these intermediate results is a critical factor influencing inference performance and is primarily determined by the computational device used.
-        - GPU Memory (VRAM): For models run on Graphics Processing Units (GPUs), intermediate activations are predominantly stored in the GPU's dedicated video random-access memory (VRAM).
-            - This architecture enables high-bandwidth, low-latency access to data by the GPU's numerous parallel processing cores, which is essential for accelerating the highly parallel computations inherent in neural networks.
-            - Modern deep learning frameworks like PyTorch and TensorFlow abstract away much of the manual memory management, handling the allocation and deallocation of these tensors within VRAM automatically.
-        - CPU Memory (RAM): If the model inference is executed on a Central Processing Unit (CPU), these intermediate results reside in the system's main random-access memory (RAM).
-            - While access to main RAM is typically slower than VRAM, it is utilized when a dedicated GPU is unavailable or for smaller models where the overhead of GPU data transfer might outweigh computational gains.
+#### Does inference generate intermediate results? Where are they stored?
 
-**Why does .eval() change model behavior (dropout, normalization)?**
-- .eval() ensures that stochastic elements of the model (like Dropout) are turned off, and statistics-dependent elements (like Batch Normalization) use stable, learned population statistics instead of batch-specific ones, which is critical for obtaining consistent and reliable predictions.
-    - Purpose of .eval(): It switches the model into evaluation mode, which is distinct from training mode. This distinction is vital for layers whose behavior differs between training and inference.
-    - Dropout Layers: During training, Dropout layers Dropout(p) randomly set a fraction p of input units to zero at each update to prevent overfitting. In evaluation mode, Dropout is deactivated.
-        - Training Behavior: Each neuron's output is multiplied by 1/(1 - p) and then randomly zeroed with probability. This introduces noise and prevents co-adaptation of neurons.
-        - Inference Behavior (after .eval()): When .eval() is called, Dropout layers simply pass the inputs through without any dropping or scaling. This ensures that the entire learned model capacity is used for prediction and results are deterministic.
-    - Batch Normalization Layers: Batch Normalization (BN) layers also exhibit different behavior. During training, BN normalizes inputs using the mean and variance of the current mini-batch. During inference, it uses learned population statistics.
+- **Yes.** The storage location of these intermediate results is a critical factor for inference performance, and it is mainly determined by the device doing the computation.
+- **What they are:** mostly the activations (feature maps) produced by each layer as data moves through the network. A layer's output transforms the input it received and becomes the next layer's input.
+- **Why they exist:** intermediate activations are indispensable for the layer-by-layer computation of the forward pass. Each layer applies its transformations (convolutions, matrix multiplications, non-linear activations) to its input and produces a representation with progressively more abstract features. This continues until the final layer computes the network's prediction or decision.
+
+| Device | Where intermediate results live |
+| --- | --- |
+| **GPU** | Mostly in the GPU's dedicated video RAM (**VRAM**). This gives the GPU's many parallel cores high-bandwidth, low-latency access, which is essential for the highly parallel computation in neural networks. Frameworks like PyTorch and TensorFlow handle allocation and deallocation of these tensors in VRAM automatically |
+| **CPU** | In the system's main RAM. Access is typically slower than VRAM, but it is used when no dedicated GPU is available, or for smaller models where the cost of transferring data to the GPU outweighs the speed gain |
+
+#### Why does .eval() change model behavior (dropout, normalization)?
+
+- `.eval()` turns off the stochastic parts of the model (such as Dropout) and makes statistics-dependent parts (such as Batch Normalization) use stable, learned **population statistics** instead of batch-specific ones. This is critical for consistent, reliable predictions.
+- It switches the model into **evaluation mode**, which differs from training mode. The difference matters for layers that behave differently in training and inference.
+
+| Layer | In training mode | After `.eval()` |
+| --- | --- | --- |
+| **Dropout** | Randomly sets a fraction p of input units to zero at each update, to prevent overfitting. The surviving activations are scaled by 1/(1 − p). This adds noise and prevents neurons from co-adapting | Passes the inputs straight through, with no dropping and no scaling. The full learned capacity of the model is used and the results are deterministic |
+| **Batch Normalization** | Normalises inputs with the mean and variance of the current mini-batch | Uses the learned population (running) statistics instead |
+
+```python
+model.eval()               # dropout off; batch norm uses its running statistics
+with torch.no_grad():      # also skip building the autograd graph (more on this below)
+    out = model(x)
+```
 
 ### Does the optimizer consume resources?
 
-**How does AdamW keep momentum for each parameter?**
-- AdamW doesn't have a single 'momentum' scalar; instead, it uses the first moment vector (an average of past gradients) for each parameter to impart a momentum-like effect, while the second moment vector (an average of squared gradients) provides adaptive learning rate scaling.
-- Both are maintained independently for every parameter, allowing for highly nuanced and efficient optimization.
-    - First Moment Vector: Directional Momentum: This vector stores an exponentially weighted average of past gradients. It serves a similar role to classical momentum, accumulating the 'direction' of consistent gradients, thereby accelerating convergence in relevant directions and dampening oscillations.
-    - Second Moment Vector: Adaptive Learning Rate Scaling: This vector maintains an exponentially weighted average of past squared gradients. It provides an estimate of the 'uncentered variance' of the gradients, which is then used to adaptively scale the learning rate for each parameter. Parameters with consistently large gradients receive smaller effective learning rates, and vice-versa.
+#### How does AdamW keep momentum for each parameter?
 
-**How does the optimizer “scan” through all parameters?**
-- A highly parallel operation often executed efficiently on specialized hardware like GPUs.
-- During the backward pass (backpropagation), gradients for all parameters are computed. Each parameter tensor, has a corresponding gradient tensor that matches its shape and is associated with it.
-    - The deep learning framework constructs a computational graph that records all operations performed in the forward pass. During backpropagation, this graph is traversed in reverse order, applying the chain rule to efficiently compute all necessary gradients.
-- The optimizer's primary function is to receive these computed gradients and apply a predefined update rule to each parameter. The update rule modifies the parameter's value based on its gradient and potentially other state information (e.g., momentum).
-- The efficiency of this 'scan' is achieved through vectorization and parallelization on modern hardware. Instead of distinct CPU-bound loops, operations are performed on entire tensors simultaneously.
-    - Deep learning frameworks translate these mathematical operations into highly optimized CUDA kernels (for NVIDIA GPUs) or similar low-level routines. A single kernel can update millions of parameters concurrently.
-    - While conceptually an optimizer might iterate through parameters, the actual implementation dispatches tensor-level operations. For instance, a simple SGD update param.data -= learning_rate * param.grad is executed as a single, parallel element-wise subtraction and scaling operation on the GPU.
+- AdamW doesn't keep a single "momentum" scalar. For each parameter it keeps a **first moment** vector (an average of past gradients), which gives a momentum-like effect, and a **second moment** vector (an average of squared gradients), which provides adaptive learning-rate scaling.
+- Both are maintained independently for every parameter, which allows nuanced and efficient optimisation.
 
-**Why is optimizer memory usage 2–4× the parameter size?**
-- Primarily due to the need for optimizers to maintain additional state variables for each parameter, coupled with considerations for numerical stability, particularly in mixed-precision training.
-    - Modern optimizers like Adam, AdamW, and RMSprop do not just store the parameter values. They maintain internal state variables for each parameter to facilitate more effective and stable updates.
-    - The '2-4x' range becomes clear when considering mixed-precision training, a common practice to reduce memory consumption and speed up computations, especially on modern GPUs (e.g., NVIDIA Tensor Cores).
-        - While model parameters might be stored in FP16 (half-precision, 2 bytes) to save memory and utilize specialized hardware, the optimizer's state variables (like m and v in Adam) are typically maintained in FP32 (single-precision, 4 bytes).
-        - In many mixed-precision setups (e.g., NVIDIA's Apex AMP or PyTorch's Automatic Mixed Precision), an additional FP32 master copy of the model weights might be maintained. Gradients are typically computed in FP16, scaled, then converted to FP32 to update these master weights, which are then cast back to FP16 for the model.
+| State | What it stores | What it does |
+| --- | --- | --- |
+| **First moment** (directional momentum) | An exponentially weighted average of past gradients | Plays the role of classical momentum: it accumulates the "direction" of consistent gradients, speeding up convergence in the relevant directions and damping oscillations |
+| **Second moment** (adaptive scaling) | An exponentially weighted average of past squared gradients, an estimate of the "uncentered variance" of the gradients | Used to scale the learning rate for each parameter: parameters with consistently large gradients get smaller effective learning rates, and the reverse |
 
+```python
+opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+# After the first opt.step(), opt.state holds, for every parameter, two extra tensors of the
+# same shape: "exp_avg" (the first moment) and "exp_avg_sq" (the second moment).
+```
+
+#### How does the optimizer "scan" through all parameters?
+
+- It is a highly parallel operation, usually run efficiently on specialised hardware such as GPUs.
+- During the backward pass (backpropagation), gradients are computed for all parameters. Each parameter tensor has a matching gradient tensor with the same shape.
+    - The framework builds a computational graph that records all operations of the forward pass. During backpropagation the graph is traversed in reverse, applying the chain rule to compute all the gradients efficiently.
+- The optimizer's main job is to take these gradients and apply a predefined update rule to each parameter. The rule changes the parameter's value based on its gradient and possibly other state (such as momentum).
+- The efficiency of this "scan" comes from **vectorisation and parallelisation**. Instead of separate CPU loops, operations run on entire tensors at once.
+    - Frameworks translate these mathematical operations into highly optimised CUDA kernels (on NVIDIA GPUs) or similar low-level routines. One kernel can update millions of parameters at the same time. PyTorch's optimizers also offer *foreach* and *fused* implementations that group many tensors into few kernels.
+    - Conceptually an optimizer iterates over the parameters, but in practice it dispatches tensor-level operations. A simple SGD update, `param.data -= learning_rate * param.grad`, runs as a single parallel element-wise subtraction and scaling on the GPU.
+
+#### Why is optimizer memory usage 2–4× the parameter size?
+
+- Mainly because optimizers must keep extra **state variables** for every parameter, together with numerical-stability needs, especially in mixed-precision training.
+    - Modern optimizers such as Adam, AdamW and RMSprop don't store only the parameter values. They keep internal state for each parameter to make updates more effective and stable.
+    - The "2–4×" range is clearest in **mixed-precision training**, a common practice that reduces memory use and speeds up computation, especially on modern GPUs (for example NVIDIA Tensor Cores).
+        - The model's parameters may be stored in FP16 (half precision, 2 bytes) to save memory and use specialised hardware, while the optimizer's state variables (such as `m` and `v` in Adam) are typically kept in FP32 (single precision, 4 bytes).
+        - In many mixed-precision setups (such as NVIDIA's Apex AMP or PyTorch's Automatic Mixed Precision), an extra FP32 **master copy** of the weights may also be kept. Gradients are typically computed in FP16, scaled, then converted to FP32 to update these master weights, which are then cast back to FP16 for the model.
 
 ## Memory usage and VRAM allocation during inference
 
 ### How much memory is taken by parameters, inputs, and computation graphs?
 
-**Model weights take fixed space, but what about input tensors?**
-- Input tensors are dynamic and contribute significantly to VRAM usage during inference, especially due to factors like batch size and input dimensions.
-- The memory footprint varies with each inference request based on specific input characteristics.
-- Factors Influencing Memory:
-    - Batch Size: The number of samples processed simultaneously. Larger batch sizes directly scale up the memory required for input tensors. For a batch of N inputs, the memory is N times that of a single input.
-    - Input Dimensions: The spatial or temporal dimensions of the input. For images, this includes height, width, and channels. For sequences, it's sequence length and feature dimension. Higher dimensions lead to larger tensors.
-    - Data Type Precision: The numerical precision of the data (e.g., float32, float16, int8). Lower precision data types (like float16 or int8) consume less memory per element, which is a common optimization for VRAM-constrained deployment.
-    - Memory = Batch size x Input elements per sample x Bytes per element 
-- During inference, input tensor memory is allocated on the GPU. While often smaller than model weights, it becomes a critical factor for:
-    - High-throughput scenarios where large batch sizes are used.
-    - Models processing very high-resolution images or long sequences.
-    - Edge devices or embedded systems with limited VRAM capacity.
+#### Model weights take fixed space, but what about input tensors?
 
-**Do intermediate activations take VRAM? Are there release strategies?**
-- Yes. As a definition, intermediate activations are the output of hidden layers or operations within a neural network. They serve as inputs for subsequent layers in the computational graph.
-- Automatic memory management (Garbage collection): Automatically release VRAM occupied by intermediate tensors as soon as they are no longer needed by any subsequent operation.
-- Inference contexts: Using context managers will prevent the framework from building the backward graph, significantly reducing VRAM usage for activations by avoiding the storage of tensors necessary only for gradients.
-- In-place operations: Modify input tensor directly without allocating new memory for output.
-- Graph optimization and fusion: Fusing multiple operations into a single GPU kernel, reduce the number of intermediate tensors that need to be explicitly materialized and stored in VRAM.
-- Quantization: Reducing numerical precision of activations directly reduces the VRAM footprint of each activation tensor.
-- Activation Offloading: To CPU RAM. Moved back to VRAM only when they are explicitly needed for subsequent computations.
+- Input tensors are **dynamic** and add a lot to VRAM use during inference, mainly through batch size and input dimensions. The memory footprint changes with each request, depending on the characteristics of the input.
 
-**Why does VRAM fill up when batch size increases?**
-- Weights and biases of the neural network remain constant regardless of batch size.
-- Memory occupied by input data scales linearly with batch size. For a batch B, it requires B X Sinput size.
-- Intermediate activations: For each layer, activations are generated for every item in the batch. If layer produces an activation sensor of size Sactivation, for a batch of size B, it requires B X Sactivation memory to store these activations simultaneously.
-- From the term measuring quantitative impact of Total VRAM usage as the sum of memory required for model parameters, the sum of the product of batch size  with the memory required for a single input sample and sum of product of the batch size with the memory required for intermediate activations for a single sample across all layers, it becomes evident that increase in batch size scales the memory needed for inputs and intermediate activations leading to higer VRAM consumption.
+| Factor | Effect on memory |
+| --- | --- |
+| **Batch size** | The number of samples processed at the same time. For a batch of N inputs, the memory is N times that of one input |
+| **Input dimensions** | For images: height, width and channels. For sequences: sequence length and feature dimension. Larger dimensions mean larger tensors |
+| **Data type precision** | float32, float16, int8. Lower-precision types use less memory per element, a common optimisation for VRAM-constrained deployment |
 
+**Memory = batch size × input elements per sample × bytes per element**
+
+- During inference, the input tensor memory is allocated on the GPU. It is often smaller than the model weights, but it becomes critical for:
+    - High-throughput scenarios that use large batch sizes.
+    - Models that process very high-resolution images or long sequences.
+    - Edge or embedded devices with limited VRAM.
+
+#### Do intermediate activations take VRAM? Are there release strategies?
+
+- **Yes.** Intermediate activations are the outputs of hidden layers or operations inside a network, and they serve as inputs for later layers in the computational graph. There are several ways to release or reduce them:
+
+| Strategy | How it helps |
+| --- | --- |
+| **Automatic memory management** (garbage collection) | Releases the VRAM held by intermediate tensors as soon as no later operation needs them |
+| **Inference contexts** | Context managers stop the framework building the backward graph, which cuts activation VRAM a lot by not storing tensors that are only needed for gradients |
+| **In-place operations** | Modify the input tensor directly, without allocating new memory for the output |
+| **Graph optimisation and fusion** | Fusing several operations into one GPU kernel reduces the number of intermediate tensors that must be materialised and stored in VRAM |
+| **Quantization** | Lower numerical precision of the activations directly shrinks the VRAM footprint of each activation tensor |
+| **Activation offloading** | Activations are moved to CPU RAM and brought back to VRAM only when needed again |
+
+#### Why does VRAM fill up when batch size increases?
+
+- The weights and biases of the network stay **constant** whatever the batch size.
+- The memory for the input data scales **linearly** with batch size. For a batch of B, it needs B × S_input.
+- **Intermediate activations:** each layer produces activations for every item in the batch. If one layer's activation for one sample has size S_act, a batch of B needs B × S_act to hold them at the same time.
+
+Putting these together:
+
+**Total VRAM ≈ parameters + B × (input per sample) + B × (activations per sample, summed over all layers) + overhead**
+
+Only the parameters stay fixed. Everything else grows with the batch size B, so increasing B steadily raises VRAM consumption.
 
 ### Differences in memory usage between inference and training
 
-**Does inference skip gradient storage?**
-- Yes because during inference, the neural network performs a forward pass only to generate predictions based on weights.
-- Gradient computation is an integral part of backpropagation to determine how much each parameter contributed to the prediction error.
-- Since a pre-trained model is applied, there are no parameter updates. Consequently, the intermediate values are needed for gradient calculation during backpropagation and not retained beyond thier immediate use in the forward pass.
-- Elimination of gradient storage reduces VRAM footprint and significantly larger models can be deployed for inference on hardware with substantially less memory than was required for thier initial training.
+#### Does inference skip gradient storage?
 
-**Do dropout and batchnorm affect memory usage?**
-- During training, dropout randomly sets a fraction of input units to zero at each update to prevent co-adaptation features. To ensure consistent behaviour during back propagation, specific pattern of dropped neurons must be stored.
-- During inference, no random dropping occurs and consequently, no dropout masks are genrated or stored.
-- For BatchNorm, during training, they use running (global) mean and variance which are exponentially weighted averages of batch statistics accumulated throughout the training process. Saved as part of model's state.
+- **Yes**, because inference runs only a forward pass, to produce predictions from the weights.
+- Gradient computation is an integral part of backpropagation, which works out how much each parameter contributed to the prediction error.
+- A pre-trained model is simply applied, with no parameter updates. So the intermediate values that backpropagation would need aren't kept beyond their immediate use in the forward pass.
+- Without gradient storage, the VRAM footprint shrinks, and much larger models can be deployed for inference on hardware with far less memory than their training needed.
 
-**Training needs optimizer states—does inference?**
-- Inference does not need optimizer states. Inference involves using a pre-trained fixed model to make predictions or generate outputs for new, unseen data.
-- Since inference solely involves a forward pass through the static network, the machinery for parameter updates (gradients and optimizer states) is unnecessary and hence there is no memory allocated.
-    - This exclusion significantly reduces the overall memory footprint during inference. For instance, an Adam optimizer often requires storing two additional tensors (moment vectors) for each trainable parameter, typically of the same data type as the parameters. This can mean memory savings of 2x to 3x or even 4x the parameter memory when switching from training to inference, depending on the precision (e.g., FP32 parameters with FP32 states vs. FP16 parameters with FP32 states).
-- In specialized contexts where models undergo continuous adaptation or fine-tuning (e.g., certain online learning systems, meta-learning), a model might perform an 'inference' step followed immediately by a 'micro-training' step. In such cases, a minimal set of optimizer states might be maintained or re-initialized. However, this deviates from the conventional understanding of 'static inference'.
-- It's important to distinguish optimizer states from recurrent states or attention key/value caches in sequential models. These latter states are part of the model's architectural design to maintain context across time steps or tokens during inference and are not related to the optimization process.
+#### Do dropout and batchnorm affect memory usage?
+
+- **Dropout.** During training, dropout randomly sets a fraction of the inputs to zero at each update, to prevent co-adaptation of features. To keep backpropagation consistent, the specific pattern of dropped neurons (the dropout mask) must be stored. During inference there is no random dropping, so **no dropout masks are generated or stored**.
+- **Batch normalization.** During training, BatchNorm normalises each batch with that batch's own statistics (which must be kept for the backward pass), and it updates running estimates of the mean and variance along the way. Those running statistics are saved as part of the model's state. During inference, BatchNorm just uses the stored running statistics, so there are no per-batch statistics to compute or keep.
+
+#### Training needs optimizer states. Does inference?
+
+- **No.** Inference uses a pre-trained, fixed model to make predictions or generate outputs for new, unseen data.
+- Since inference is just a forward pass through a static network, the machinery for parameter updates (gradients and optimizer states) isn't needed, so **no memory is allocated for it**.
+    - This cuts the memory footprint a lot. An Adam optimizer typically stores two extra tensors (the moment vectors) per trainable parameter. Depending on precision (for example FP32 parameters with FP32 states, or FP16 parameters with FP32 states), switching from training to inference can save the equivalent of 2× to 4× the parameter memory.
+- In specialised settings where models keep adapting (certain online learning systems, meta-learning), a model may do an "inference" step immediately followed by a "micro-training" step. Then a minimal set of optimizer states may be kept or re-initialised. This departs from the conventional meaning of static inference.
+- Optimizer states are different from **recurrent states** or **attention key/value caches** in sequential models. Those belong to the model's architectural design, keeping context across time steps or tokens during inference, and have nothing to do with optimization.
+
+![Training in FP32 with Adam needs about four times the parameter memory plus activations, while inference needs the weights plus a small working set](/llm-nn-fundamentals/memory-train-vs-inference.svg)
 
 ### Causes of VRAM OOM (out-of-memory) and prediction
 
-**Is there a way to estimate required VRAM for a given model and batch size?**
-- During inference, VRAM is primarily consumed by three categories of data, plus a baseline overhead. Understanding these is the first step in accurate estimation.
-    - Model Parameters (Weights and Biases): These are the learned coefficients of the neural network. Their memory footprint is fixed once the model is loaded and does not scale with batch size during inference.
-    - Intermediate Activations: These are the outputs of each layer during the forward pass. Unlike training, where many activations are kept for backpropagation, inference typically only needs to store activations for the current and immediate subsequent operations, but the peak memory can still be substantial, especially for large batch sizes or wide/deep layers.
-    - Input/Output Buffers: Memory required to hold the input data fed into the model and the output predictions generated by the model.
-    - Framework Overhead and CUDA Context: A baseline amount of VRAM is reserved by the CUDA driver, the deep learning framework (e.g., PyTorch, TensorFlow), and other system processes. This is generally a few hundred megabytes and is mostly independent of model size or batch size.
-- Analytical approach: Calculate each component based on model architecture.
-    - Calculate total number of parameters and chosen data type. Calculate Minput and Moutput based on batch size and tensor shapes.
-    - Manually trace the computation graph to identify largest intermediate tensors or use introspection tools within frameworks that report layer-wise output shapes.
-- Empirical approach: Involves loading the model and performing actual inference on target hardware to measure memory usage.
-    - Load model onto GPU, Measure base memory, perform inference, executing a forward pass with a small batch size and record max VRAM allocated during the process.
-    - Extrapolate parameters and activations. Although a simpler linear scaling of the difference is often used. More accurate way is to test with varying batch sizes to observe scaling behavior.
+#### Is there a way to estimate the VRAM required for a given model and batch size?
 
-**Can torch.compile or torch.no_grad save memory?**
-- Memory conservation using torch.no_grad(), Autograd's graph construction and gradient tracking are disengaged. Intermediate tensors are either never allocated for gradient purposes or are immediately deallocated, significantly reducing memory footprint. Tensors produced within this context will not have associated .grad attributes.
-    - PyTorch's automatic differentiation engine, Autograd, dynamically constructs a computational graph during the forward pass. This graph retains intermediate activations and metadata essential for computing gradients during the subsequent backward pass.
-    - When operations are executed within a torch.no_grad() block, Autograd's graph construction and gradient tracking mechanisms are fundamentally disengaged. This implies:
-        - Intermediate tensors, which would otherwise be retained in memory for backpropagation, are either never allocated for gradient purposes or are immediately deallocated, significantly reducing the memory footprint.
-        - Tensors produced within this context will not have associated .grad attributes, precluding the allocation of memory for gradient storage.
-- torch.compile is primarily engineered for optimizing execution speed, but it can indirectly contribute to memory savings through sophisticated graph-level transformations and aggressive kernel fusion.
-    - torch.compile performs a comprehensive analysis of the PyTorch computation graph, transforming it into a highly optimized, backend-specific representation. This typically leverages technologies such as Triton or Inductor to generate highly efficient kernel code.
-- While memory savings are an achievable outcome, they are often a secondary benefit of the primary goal of performance acceleration. The initial compilation phase itself may introduce a temporary memory overhead. Furthermore, the magnitude of VRAM reduction is highly contingent upon the specific model architecture and the compiler's proficiency in optimizing that particular computational graph.
-- torch.no_grad() provides a guaranteed and direct memory reduction for inference by explicitly disabling Autograd's graph tracking. Conversely, torch.compile() can offer memory improvements primarily through intelligent graph optimization and operator fusion, alongside its core objective of accelerating execution. These latter savings tend to be less direct and more variable.
+During inference, VRAM is mostly used by three categories of data, plus a baseline overhead:
 
-**Can temporary intermediate tensors be freed early?**
-- Hinges on whether intermediate tensors are still needed for subsequent computations, particularly for gradient calculation during training. 
-- During inference: No need to store intermediate activations. torch.no_grad() explicitly tells the framework not to build computational graph for gradient computation.
-- During training: Techniques like activation checkpointing allow for early freeing of certain intermediate tensors even during training. Computes activations during the backward pass instead of storing them, trading computation for memory.
-- Understanding and utilizing these mechanisms is vital for deploying large models, optimizing batch sizes, and preventing VRAM Out-Of-Memory (OOM) errors.
-    - By freeing memory early, more VRAM becomes available for larger models, bigger batch sizes, or running multiple models concurrently. 
+| Category | What it is |
+| --- | --- |
+| **Model parameters** (weights and biases) | The learned coefficients of the network. The footprint is fixed once the model is loaded and doesn't scale with batch size during inference |
+| **Intermediate activations** | The outputs of each layer during the forward pass. Unlike training, where many are kept for backpropagation, inference typically only stores the activations for the current and next operations, but the peak can still be large, especially for large batch sizes or wide, deep layers |
+| **Input and output buffers** | The memory that holds the input data fed to the model and the predictions it produces |
+| **Framework overhead and CUDA context** | A baseline reserved by the CUDA driver, the framework (PyTorch, TensorFlow) and other system processes. Usually a few hundred megabytes, and mostly independent of model size and batch size |
 
-### How is VRAM managed for multiple models/users on the same GPU?
+There are two ways to estimate it:
 
-**How does PyTorch know which tensors are still alive?**
-- Interplay of Python's reference counting garbage collection and it's dynamic computational graph (autograd engine)
-- For requires_grad=True, a dynamic computation graph is built on the fly for backward pass to compute gradients. Gradient tracking tensor will have .grad_fn attribute that points to the function that created the tensor. Intermediate tensors are implicitly kept alive until thier role in gradient computation is fulfilled.
-- A tensor's memory is freed when it's Python object's reference count drops to zero. GC invokes the tensor's __del__ method, which is responsible for releasing the underlying C++ and CUDA memory.
-- Practical Implications and Control:
-    - Disabling Gradient Tracking: Using contexts like torch.no_grad() or torch.inference_mode() during inference or when gradients are not needed prevents the autograd graph from being built, significantly reducing memory consumption by avoiding the retention of intermediate activations.
-    - Detaching Tensors: Calling tensor.detach() creates a new tensor that shares the same data but is completely removed from the current computation graph. This is useful for preventing gradients from flowing back through certain parts of the graph or for saving memory on intermediate results not needed for backpropagation.
-    - Explicit Deletion: Explicitly setting a variable to None or using del on a tensor can decrement its reference count, allowing Python's GC to reclaim memory earlier, provided no other references exist.
+- **Analytical approach:** work out each component from the model architecture.
+    - Calculate the total number of parameters and the chosen data type. Calculate the input and output memory from the batch size and tensor shapes.
+    - Trace the computation graph by hand to find the largest intermediate tensors, or use introspection tools that report layer-wise output shapes.
+- **Empirical approach:** load the model and run actual inference on the target hardware to measure memory use.
+    - Load the model onto the GPU and measure the base memory. Run a forward pass with a small batch size and record the maximum VRAM allocated.
+    - Extrapolate the parameters and activations. A simple linear scaling of the difference is often used, but a more accurate way is to test several batch sizes and watch how memory scales.
 
-**What causes VRAM fragmentation?**
-- VRAM fragmentation refers to the state where available GPU memory is scattered in small, discontiguous segments, making it impossible to allocate a large, contiguous block required for a new tensor, even if the sum of all free segments equals or exceeds the requested size.
-- Unlike CPU RAM, GPU memory often favors contiguous allocations for performance. When a program requests a block of VRAM, the allocator tries to find a single, contiguous region. If only small, separated regions are available, a larger allocation will fail.
-- Dynamic tensor lifecycles: Tensors allocated and deallocated at different times especially during training or when handling variable-sized inputs.
-- Varying tensor sizes: Allocating and deallocating variable-sized blocks over time naturally leads to non-uniform free spaces.
-- Concurrent Operations/ Multi-tenancy: Sharing of a GPU with multiple models or processes can quickly lead to an intertwined pattern of allocated freed blocks, accelerating fragmentation.
-- Lack of memory compaction: GPU memory allocators typically do not perform memory compaction in real time due to performance overhead, making fragmentation persistent.
-- The most common symptom is an OOM error, even when the `nvidia-smi` utility or equivalent shows ample 'free' VRAM. This free VRAM is simply not contiguous enough for the next large allocation.
-- Allocators may spend more time searching for suitable blocks, potentially impacting performance, though OOM is the more critical issue.
+```python
+import torch
 
-**How to manually free memory (del, torch.cuda.empty_cache()) for actual release?**
-- Python's garbage collection for tensor objects and PyTorch's CUDA memory cache management.
-- Mechanism 1: The del keyword in Python decrements the reference count of an object. When reference count of a PyTorch tensor drops to zero, Python's GC marks that memory as available for reclamation. For GPU, underlying CUDA memory blocks becomes eligible to be freed.
-- Mechanism 2: Tensor's memory deallocation memory block is not immediately returned to the OS. Instead held in a specialzed cache by PyTorch's allocator for future tensor allocations. Reduces overhead with frequent cudaMalloc and cudaFree calls.
-- To ensure that VRAM is truly released and made available for other models, users, or processes, the following sequence is imperative:
-    - Explicitly drop all references to tensors you no longer require using the del keyword or by allowing them to go out of scope. This action signals to Python's GC that these memory regions are no longer needed.
-    - Subsequently, invoke torch.cuda.empty_cache() to compel PyTorch's internal allocator to release the now-unused, cached memory blocks back to the underlying CUDA driver.
+torch.cuda.reset_peak_memory_stats()
+model = model.to("cuda").eval()
+base = torch.cuda.memory_allocated()               # the weights are loaded
+
+x = torch.randn(8, 512, device="cuda")             # a batch of 8 (adjust the shape to your model)
+with torch.no_grad():
+    model(x)                                       # one forward pass
+
+peak = torch.cuda.max_memory_allocated()           # the highest allocation seen so far
+print(f"weights: {base / 1e9:.2f} GB, peak: {peak / 1e9:.2f} GB")
+```
+
+#### Can torch.compile or torch.no_grad save memory?
+
+| | `torch.no_grad()` | `torch.compile` |
+| --- | --- | --- |
+| **How it saves memory** | Disengages Autograd's graph construction and gradient tracking. Intermediate tensors that would be kept for backpropagation are never allocated for gradient purposes, or are freed immediately. Tensors produced inside have no `.grad` | Graph-level transformations and aggressive kernel fusion cut the number of intermediate tensors. It typically uses technologies such as Triton or Inductor to generate efficient kernel code |
+| **How reliable the saving is** | Guaranteed and direct | Indirect and variable. It depends on the model architecture and on how well the compiler optimises that particular graph |
+| **Main purpose** | Disabling gradient tracking | Speeding up execution. Memory savings are usually a secondary benefit, and the initial compilation can itself use temporary extra memory |
+
+- PyTorch's automatic differentiation engine, **Autograd**, builds a computational graph dynamically during the forward pass. That graph retains intermediate activations and the metadata needed to compute gradients in the backward pass.
+- Inside a `torch.no_grad()` block, graph construction and gradient tracking are switched off. So intermediate tensors that would otherwise be kept for backpropagation are either never allocated for gradient purposes or freed at once, and no memory is allocated for gradient storage.
+
+```python
+with torch.no_grad():                 # or torch.inference_mode(): no autograd graph is built
+    y = model(x)
+
+fast_model = torch.compile(model)     # may fuse kernels: faster, and sometimes smaller in memory
+```
+
+#### Can temporary intermediate tensors be freed early?
+
+- It depends on whether the intermediate tensors are still needed for later computation, particularly for gradient calculation during training.
+- **During inference:** there is no need to store intermediate activations. `torch.no_grad()` tells the framework explicitly not to build a computational graph for gradients.
+- **During training:** techniques like **activation checkpointing** let certain intermediate tensors be freed early even during training. The activations are recomputed during the backward pass instead of being stored, trading computation for memory.
+- Understanding and using these mechanisms is vital for deploying large models, tuning batch sizes and avoiding VRAM out-of-memory errors. Freeing memory early leaves more VRAM for larger models, bigger batch sizes, or running several models at once.
+
+### How is VRAM managed for multiple models and users on the same GPU?
+
+#### How does PyTorch know which tensors are still alive?
+
+- Through the interplay of Python's **reference counting** and PyTorch's dynamic computational graph (the autograd engine).
+- For tensors with `requires_grad=True`, a dynamic computation graph is built on the fly for the backward pass. A tensor that tracks gradients has a `.grad_fn` attribute pointing to the function that created it. Intermediate tensors are implicitly kept alive until their role in gradient computation is done.
+- A tensor's memory is freed when its Python object's reference count drops to zero. The tensor is then destroyed, and its destructor releases the underlying C++ and CUDA memory.
+
+Practical implications and controls:
+
+- **Disable gradient tracking.** Use `torch.no_grad()` or `torch.inference_mode()` during inference or whenever gradients aren't needed. This stops the autograd graph being built and cuts memory use a lot by not keeping intermediate activations.
+- **Detach tensors.** `tensor.detach()` creates a new tensor that shares the same data but is completely removed from the current computation graph. It is useful to stop gradients flowing back through part of the graph, or to save memory on intermediate results you don't need for backpropagation.
+- **Delete explicitly.** Setting a variable to `None`, or using `del` on a tensor, reduces its reference count, so Python can reclaim the memory earlier, provided nothing else references it.
+
+#### What causes VRAM fragmentation?
+
+- VRAM fragmentation is the state in which free GPU memory is scattered in small, non-contiguous pieces. A new tensor that needs one large contiguous block can't be allocated, **even if the total free memory is enough**.
+- Unlike CPU RAM, GPU memory often prefers contiguous allocation for performance. When a program requests a block, the allocator tries to find a single contiguous region. If only small separated regions are free, a larger allocation fails.
+
+![A row of GPU memory blocks has eight free blocks scattered in runs of at most two, so a request for four contiguous blocks fails even though enough total memory is free](/llm-nn-fundamentals/vram-fragmentation.svg)
+
+The main causes:
+
+- **Dynamic tensor lifecycles.** Tensors are allocated and freed at different times, especially during training or with variable-sized inputs.
+- **Varying tensor sizes.** Allocating and freeing blocks of different sizes over time naturally leaves uneven free space.
+- **Concurrent operations and multi-tenancy.** Sharing a GPU between several models or processes quickly produces an interleaved pattern of allocated and freed blocks, which speeds up fragmentation.
+- **No memory compaction.** GPU allocators typically don't compact memory in real time because of the performance cost, so fragmentation persists.
+
+How it shows up:
+
+- The most common symptom is an **OOM error even when `nvidia-smi` (or an equivalent) shows plenty of "free" VRAM.** That free VRAM just isn't contiguous enough for the next large allocation.
+- Allocators may also spend more time searching for suitable blocks, which can hurt performance, though OOM is the more critical problem.
+
+#### How do you manually free memory (del, torch.cuda.empty_cache()) for actual release?
+
+This involves two layers: Python's garbage collection of tensor objects, and PyTorch's CUDA memory cache management.
+
+- **Mechanism 1.** The `del` keyword decrements an object's reference count. When a PyTorch tensor's count reaches zero, Python reclaims it, and for a GPU tensor the underlying CUDA memory block becomes eligible to be freed.
+- **Mechanism 2.** When a tensor's memory is deallocated, the block is *not* immediately returned to the OS. PyTorch's allocator keeps it in a specialised cache for future tensor allocations, which reduces the overhead of frequent `cudaMalloc` and `cudaFree` calls.
+
+To make sure VRAM is truly released and available to other models, users or processes, follow this sequence:
+
+1. Drop every reference to tensors you no longer need, using `del` or by letting them go out of scope. This tells Python's garbage collector that the memory isn't needed any more.
+2. Then call `torch.cuda.empty_cache()`, which makes PyTorch's allocator give the now-unused cached blocks back to the underlying CUDA driver.
+
+```python
+del big_tensor            # drop the last reference: the block returns to PyTorch's cache
+torch.cuda.empty_cache()  # now hand the cached, unused blocks back to the CUDA driver
+```
+
+<Callout type="tip" title="allocated versus reserved">
+
+`torch.cuda.memory_allocated()` counts memory used by live tensors, while `torch.cuda.memory_reserved()` also counts cached blocks that PyTorch is holding. After `del`, the first number drops straight away, and the second only drops after `empty_cache()`.
+
+</Callout>
+
+## Key takeaways
+
+- A network is **layers of weights and biases plus activation functions**. Training adds a **loss, gradients and an optimizer**, and inference needs only the forward pass.
+- Parameters are **tensors on a device**. Operations need all their tensors on the same device, and strides let PyTorch reshape views without copying.
+- On the GPU, a Linear layer is a **tiled matrix multiplication**, and **kernel fusion** keeps intermediate results out of slow global memory.
+- Training needs roughly **2–4× the parameter memory** for gradients and optimizer state. Inference skips all of that, and `torch.no_grad()` removes the autograd graph.
+- VRAM use is **weights + batch-size-scaled inputs and activations + overhead**, and **fragmentation** can cause OOM even when total free memory looks sufficient.
+
+Next in the series: [03 · Transformer Architecture Principles](/blog/mentiforce03).
