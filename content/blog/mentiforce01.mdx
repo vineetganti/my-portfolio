@@ -5,13 +5,19 @@ date: "2026-10-07"
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
-## Why this post
+## About this series
 
-In mid 2025, I started my journey into how LLMs work inside, and that is when I stumbled upon Mentiforce through a Reddit post. Through this series of blog posts, which mention Mentiforce in the title, I intend to walk through what I learnt, from the basics of Python language internals all the way to the vLLM framework and inference engine design.
+This series started as part of my learning on LLM internals. In mid 2025 I started my journey into how LLMs work inside, and that is when I came across Mentiforce through a Reddit post. Each post walks through one stage of what I learnt, from Python internals all the way to the vLLM framework and inference engine design, and the last one lays the foundations of the project I'm building next: a small scheduler for LLM requests.
 
-<Callout type="info" title="How these notes are written">
+<Callout type="info" title="How these posts were written">
 
-The notes are my own, and part of the content is AI-generated to support them. Each topic is a question I wanted to be able to answer, and the answers are written as short, direct points.
+About 30% of the content comes from my own notes. The rest is AI-generated. Each topic is a question I wanted to be able to answer, and every post adds diagrams, worked examples and a summary with recall questions, so the series is also something I can come back to.
+
+</Callout>
+
+<Callout type="tip" title="Credit to Mentiforce">
+
+The learning roadmap behind this series, and the project in post 06, come from [Mentiforce](https://mentiforce.ai), a community for learning fast with AI, pairing up with a peer and shipping challenging projects together. You can reach them through [their website](https://mentiforce.ai) or [their Discord server](https://discord.com/invite/QvqN5894fM).
 
 </Callout>
 
@@ -21,6 +27,8 @@ The notes are my own, and part of the content is AI-generated to support them. E
 2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
 3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
 4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
 
 </Callout>
 
@@ -101,6 +109,7 @@ print(eval("2 + 3 * 4"))  # parsed, compiled and executed at runtime: prints 14
 - Bytecode is an intermediate language. It is the bridge between high-level Python source code and the machine-specific instructions that a CPU can execute.
 - It is a crucial step for Python's portability: the same bytecode runs on different operating systems and architectures, as long as a compatible PVM is available.
 - When the PVM "executes" bytecode, it doesn't typically translate each instruction into machine instructions on the fly (that would be just-in-time compilation). Instead, the PVM's pre-compiled native code performs the operation that each bytecode instruction describes.
+- Since Python 3.11 the interpreter is also **specializing**. After an instruction has run a few times, it is swapped for a faster version for the types it actually sees: a `BINARY_OP` that keeps adding two integers becomes an integer-only add. `dis.dis(code, adaptive=True)` shows the specialized instructions. Python 3.13 added an experimental JIT compiler as well, off by default.
 
 ![For total = price * qty with price 12 and qty 5, two loads push 12 and 5 onto a value stack, a multiply replaces them with 60, and a store moves 60 into the name total](/llm-python-internals/bytecode-stack.svg)
 
@@ -337,10 +346,10 @@ if __name__ == "__main__":  # required when processes are started with "spawn" (
 
 #### How does the CPU execute NumPy and PyTorch operations?
 
-- Through highly optimised low-level libraries written in C, C++ or Fortran, which often use vectorisation, parallelisation and hardware-specific instructions.
-- NumPy delegates most of its heavy numerical work to optimised external libraries: **BLAS** (Basic Linear Algebra Subprograms) and **LAPACK** (Linear Algebra PACKage).
-- PyTorch's CPU backend works similarly, using Intel MKL or OpenBLAS. For the GPU backend (NVIDIA CUDA) it uses cuBLAS, cuDNN, TensorRT and NCCL.
-- This architecture keeps the Python interpreter's overhead out of numerical loops, which minimises its cost.
+- Through the libraries from [who is actually running the code](#when-we-use-torch-or-numpy-who-is-actually-running-the-code): BLAS and LAPACK for NumPy, and MKL, OpenBLAS and oneDNN for PyTorch. On the CPU they add two levels of parallelism:
+    - **Inside a core**, vector (SIMD) instructions process several numbers per instruction (next question).
+    - **Across cores**, one large operation is split over several threads, which is called **intra-op parallelism** and usually runs on OpenMP. `torch.get_num_threads()` shows how many threads PyTorch uses, and `torch.set_num_threads(n)` changes it.
+- Python makes one call per operation, so the interpreter's overhead stays out of the numerical loops.
 
 #### Are these operations pure Python, or do they use SIMD / AVX instructions?
 
@@ -372,10 +381,14 @@ The path of a single call looks like this:
 
 ### Are Python threads truly parallel?
 
-- **Not for CPU-bound computation**, because of the GIL. You get concurrency, but not parallelism.
-- For CPU-bound tasks, even if you launch several threads, they effectively run one after another as they compete for the single lock.
-- For I/O, the interpreter releases the GIL automatically. That lets other Python threads acquire it and run while the first thread waits. This gives concurrency, but not true CPU parallelism.
-- To get true parallelism for CPU-bound tasks, you can use the `multiprocessing` module (which sidesteps the GIL), C/C++ extensions and native libraries, asynchronous programming, or explicit GIL management in the CPython C API.
+**Not for CPU-bound Python code**, because of the GIL. Threads give you *concurrency* (taking turns and overlapping waits), but not *parallelism* (running at the same instant). Which tool gives which:
+
+| Tool | Runs Python bytecode in parallel? | Best for |
+| --- | --- | --- |
+| **Threads** | No: one thread holds the GIL at a time | I/O-bound work, and calls into C code that releases the GIL |
+| **Processes** (`multiprocessing`) | Yes: each has its own interpreter and GIL | CPU-bound pure-Python work |
+| **asyncio** | No: one thread, taking turns at each `await` | Many concurrent I/O waits, such as network requests |
+| **C and C++ extensions** (NumPy, PyTorch) | Their native code can, with the GIL released | Heavy numerical work |
 
 #### What operations does the GIL prevent from running in parallel?
 
@@ -385,11 +398,43 @@ The path of a single call looks like this:
 
 #### Which built-in operations automatically release the GIL?
 
-- The GIL is released automatically for I/O-bound operations. When a Python thread does I/O, it typically spends most of its time waiting for an external resource, not executing bytecode. During these blocking calls to the OS, the GIL is released.
+- **Blocking I/O.** Reading and writing files and sockets, `select`, `time.sleep()` and waiting on a subprocess all release the GIL while the thread waits for the operating system.
+- **Some CPU-heavy built-ins.** `hashlib` releases it while hashing large buffers, and `zlib`, `bz2` and `lzma` while compressing.
+- **Native libraries.** Most NumPy operations on large arrays, and most PyTorch operations, release it inside their compiled code.
+- **Waiting on locks.** A blocked `threading.Lock.acquire()` or `queue.Queue.get()` releases it while it waits.
+- **What never releases it:** pure-Python loops, arithmetic on Python objects, and work on lists and dictionaries.
 
 #### Can multiprocessing bypass the GIL?
 
-- **Yes**, by enabling true parallel execution of CPU-bound work. Each process has independent execution contexts: its own memory space, its own Python objects and its own GIL. So computationally heavy (CPU-bound) tasks can run in parallel across several CPU cores, avoiding the limit that a single GIL puts on multi-threaded Python programs.
+- **Yes.** Each process has its own interpreter, its own memory and its own GIL, so CPU-bound Python code runs in parallel on several cores.
+- **The price.** Arguments and results are **pickled** and copied between processes, each process holds its own copy of the interpreter and of any data it loads, and starting a process takes much longer than starting a thread. For large arrays, `multiprocessing.shared_memory` avoids the copies.
+- That is why data loaders use worker processes. PyTorch's `DataLoader(num_workers=4)` runs four processes that prepare batches in parallel while the main process feeds the GPU.
+
+#### Where does asyncio fit in?
+
+- **asyncio** gives concurrency on a single thread. Functions declared with `async def` are **coroutines**, and an **event loop** runs them one at a time. When a coroutine reaches an `await` on something that isn't ready yet (a network reply, a timer), it pauses, and the loop runs another one.
+- Nothing runs in parallel, so the GIL never comes into play. The gain is that thousands of waits can overlap without thousands of threads.
+- This is how LLM servers handle many users at once. vLLM's API server is an asyncio application (post 05), and the scheduler project in post 06 is built the same way.
+- **The catch:** a coroutine that computes for a long time without awaiting blocks the whole loop. Blocking work belongs on a thread (`asyncio.to_thread`) or in another process.
+
+![One thread runs an event loop that switches between three coroutines. Each coroutine runs for 8 milliseconds, awaits a network reply for about 90 milliseconds, then runs 8 more. While one waits, the loop runs another, so all three finish at 128 milliseconds instead of 324 if they ran one after another](/llm-python-internals/asyncio-event-loop.svg)
+
+```python
+import asyncio
+
+
+async def fetch(name: str, seconds: float) -> str:
+    await asyncio.sleep(seconds)     # stands in for a network call: the loop runs others meanwhile
+    return f"{name} done"
+
+
+async def main():
+    # three one-second waits overlap on one thread: about 1 second in total, not 3
+    print(await asyncio.gather(fetch("A", 1), fetch("B", 1), fetch("C", 1)))
+
+
+asyncio.run(main())
+```
 
 ## How Python calls the GPU
 
@@ -499,6 +544,8 @@ At a low level, the caching allocator still talks to the CUDA Driver API:
 5. **Arguments.** Pointers to data in device memory, and scalar parameters, are passed from the host to the kernel function running on the device.
 6. **Queueing.** The runtime API call becomes commands that the GPU driver submits to the GPU's internal command queue, for asynchronous execution.
 
+The queue is a **CUDA stream**. Work on one stream runs in order, while work on different streams can overlap, for example a copy on one stream while a kernel runs on another. PyTorch uses one default stream per device unless you create more.
+
 ![A kernel is written, compiled, loaded by the driver, launched with a grid and block configuration, queued in a stream, and run by thread blocks on the streaming multiprocessors](/llm-python-internals/kernel-launch.svg)
 
 #### How can you check which kernel an operation uses?
@@ -523,8 +570,9 @@ print(prof.key_averages().table(row_limit=10))
 
 #### Is .cuda() and .cpu() data transfer synchronous or asynchronous?
 
-- `.cuda()` and `.cpu()` are **synchronous by default**, which means the CPU thread blocks until the data transfer has completely finished.
-- Operations like `tensor.cuda()` or `tensor.cpu()` are blocking by default. Execution halts until the memory on the host (or the device) is fully transferred. This simplifies control flow, but can add latency.
+- **Synchronous by default**, like `.to("cuda")` above: the CPU thread waits until the copy has finished.
+- `.cpu()` also has to wait for every kernel that produces the tensor, so it is a synchronization point as well as a copy.
+- `.cuda(non_blocking=True)` and `.to(device, non_blocking=True)` make the copy asynchronous. From the host it overlaps with other work when the source is in pinned memory. Toward the host, the values aren't safe to read until the stream has been synchronized.
 
 #### When does PyTorch force synchronization?
 
@@ -552,12 +600,89 @@ torch.cuda.synchronize()        # wait for the GPU, or we would only time the la
 print(time.perf_counter() - start)
 ```
 
-## Key takeaways
+## Summary
 
-- A Python program runs as **source → tokens → AST → bytecode → PVM**, and CPython is a C program that does all of this.
-- With `torch` and `numpy`, **Python only orchestrates.** The math runs in compiled C, C++, Fortran and CUDA libraries.
-- The **GIL** serialises Python bytecode across threads. Use **processes** for CPU-bound work and threads for I/O-bound work. GPU work escapes the GIL because the real computation is native code.
-- Python reaches the OS through **syscalls**, and the kernel, not Python, enforces permissions.
-- **GPU launches are asynchronous**, and copies are blocking by default. Use `torch.cuda.synchronize()` when you need to measure time or read results safely.
+A Python program runs as source, tokens, an AST, bytecode and finally the PVM, all inside CPython, which is itself a C program. With `torch` and `numpy`, Python only orchestrates: the math runs in compiled C, C++, Fortran and CUDA libraries. That is also why the GIL, which lets one thread run bytecode at a time, slows down pure-Python threads but not GPU work. The operating system sees a process with a PID, a heap and file descriptors, and every file or network access is a syscall that the kernel checks. On the CPU, libraries use SIMD instructions and several threads per operation. On the GPU, copies block by default, kernel launches are asynchronous, PyTorch caches freed memory, and `torch.cuda.synchronize()` is how you wait for the results.
+
+![A map of post 01 in four columns. What Python is: source compiled to bytecode, CPython written in C, torch and numpy calling C, and the GIL. The OS: a process with a PID and heap, syscalls through libc, permission checks in the kernel, and processes to get around the GIL. The CPU: BLAS and MKL, SIMD, threads inside an operation and the ATen dispatch path. The GPU: blocking copies, asynchronous kernels, the caching allocator and synchronization](/llm-python-internals/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Execution pipeline** | Source → tokens → AST → bytecode → PVM | What `python app.py` actually does |
+| **Bytecode** | Platform-independent instructions for the PVM, specialized while the program runs | The interpreter's unit of work |
+| **CPython** | The reference interpreter, written in C | Its C layer is how Python calls fast native code |
+| **Python orchestrates** | `torch` and `numpy` dispatch to BLAS, MKL and cuBLAS | Heavy math barely touches the interpreter |
+| **C API, ctypes and bindings** | Three routes from Python into C | How extension modules are built |
+| **GIL** | One lock, so one thread runs bytecode at a time | Threads don't speed up CPU-bound Python |
+| **Process** | A PID, virtual memory with a heap, file descriptors | What the OS sees when Python runs |
+| **Syscall** | Python, then libc, then the kernel | The kernel, not Python, enforces permissions |
+| **memoryview** | A zero-copy view of another object's buffer | Sharing memory without copying it |
+| **Processes, threads, asyncio** | Parallel CPU work, overlapping I/O, one-thread concurrency | Picking the right tool for the workload |
+| **SIMD and intra-op threads** | Many numbers per instruction, many cores per operation | Where CPU speed comes from |
+| **ATen dispatch** | Python call → C++ kernel → MKL or cuBLAS | The path of one `torch` call |
+| **Host-to-device copy** | `.to("cuda")`, blocking by default, faster from pinned memory | Data has to reach the GPU first |
+| **Asynchronous kernels and streams** | Launches return at once and queue on a stream | Python runs ahead of the GPU |
+| **Caching allocator** | Freed GPU memory goes back to PyTorch's cache | `memory_reserved` is not `memory_allocated` |
+| **Synchronization** | `.item()`, `.cpu()` and `torch.cuda.synchronize()` wait for the GPU | Correct timings and correct reads |
+
+### Test yourself
+
+<details>
+<summary>What are the four stages between app.py and a running program?</summary>
+
+Lexing (source text into tokens), parsing (tokens into an abstract syntax tree), compiling (the tree into bytecode in code objects, cached as `.pyc`), and execution of that bytecode by the Python virtual machine.
+
+</details>
+
+<details>
+<summary>Why can a CPU-bound Python program with two threads be no faster than with one?</summary>
+
+The GIL lets only one thread execute bytecode at a time. The two threads take turns, and the switching adds overhead on top.
+
+</details>
+
+<details>
+<summary>Why is GPU code almost unaffected by the GIL?</summary>
+
+The extension releases the GIL while it launches work, and the computation runs on the GPU in native code, outside the interpreter. The Python thread only waits.
+
+</details>
+
+<details>
+<summary>You open a file you have no permission to read. Who refuses?</summary>
+
+The kernel. The `openat` syscall returns an error code, and CPython turns it into a `PermissionError`.
+
+</details>
+
+<details>
+<summary>When should you use processes, threads or asyncio?</summary>
+
+Processes for CPU-bound pure-Python work, threads for blocking I/O or C calls that release the GIL, and asyncio for many concurrent I/O waits on a single thread.
+
+</details>
+
+<details>
+<summary>Is x.to("cuda") blocking? Is y = x @ x on the GPU blocking?</summary>
+
+The copy blocks by default (unless `non_blocking=True` with pinned memory). The matrix multiplication only queues a kernel and returns at once, and the GPU runs it asynchronously.
+
+</details>
+
+<details>
+<summary>Why does timing GPU code need torch.cuda.synchronize()?</summary>
+
+Kernel launches return before the GPU has finished. Without synchronizing before and after, you only measure how long the launches took.
+
+</details>
+
+<details>
+<summary>After del t, why doesn't nvidia-smi show the memory as free?</summary>
+
+PyTorch's caching allocator keeps the block for reuse, so it still counts as reserved. `torch.cuda.empty_cache()` hands unused blocks back to the driver.
+
+</details>
 
 Next in the series: [02 · Neural Network Fundamentals](/blog/mentiforce02).

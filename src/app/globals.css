@@ -453,3 +453,30 @@ body {
 .callout.warn .callout-ico {
   background: var(--risk);
 }
+
+/* ---------- Recall questions (details/summary in post summaries) ---------- */
+.prose details {
+  border: 1px solid var(--rule);
+  background: var(--card);
+  border-radius: 12px;
+  padding: 10px 16px;
+  margin: 0.75rem 0;
+}
+
+.prose details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--strong);
+}
+
+.prose details > summary::marker {
+  color: var(--muted);
+}
+
+.prose details > summary + * {
+  margin-top: 0.6rem;
+}
+
+.prose details > :last-child {
+  margin-bottom: 0.2rem;
+}

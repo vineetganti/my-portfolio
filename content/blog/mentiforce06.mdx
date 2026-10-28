@@ -1,0 +1,857 @@
+---
+title: "LLM Architectures - 06 - Batching LLM Requests: Foundations for a Queue Scheduler"
+description: "The foundations of my next project, a minimal LLM queue scheduler: why batching matters and what it costs, how requests arrive, how naive, dynamic and continuous batching differ, how to measure TTFT, TPOT and throughput, and the plan for building and benchmarking it."
+date: "2026-10-28"
+tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures", "Projects"]
+---
+
+The first five posts explained how a model runs and how an engine like vLLM serves many users at once. This post turns that into a project: a **minimal LLM queue scheduler**. It implements two batching strategies, naive and dynamic, and benchmarks them against vLLM's continuous batching. The project comes from Mentiforce's LLM System L3 track.
+
+Most of the post lays the foundations the project needs: why batching works and what it costs, how requests arrive, how the strategies differ, and the five design questions of the project's pre-study phase. The last quarter is the plan, with the different ways it can be carried out. I haven't started building yet, so that part is a map of options, not a report of results.
+
+<Callout type="note" title="The LLM Architectures series">
+
+1. [01 · Python Internals](/blog/mentiforce01)
+2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
+3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
+4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
+6. **06 · Batching LLM Requests: Foundations for a Queue Scheduler** (this post)
+
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
+
+</Callout>
+
+The sixth post covers six topics:
+
+- The project in one picture
+- Why batching matters, and what it costs
+- How requests arrive, and when queues explode
+- The three batching strategies
+- Designing the scheduler: the pre-study questions
+- From plan to execution
+
+## The project in one picture
+
+### What will the scheduler do, and how will it be judged?
+
+Requests arrive one by one as a random stream, wait in a queue, are grouped into batches by a scheduler, run on a model, and leave with their output and a record of how long everything took.
+
+![A Poisson stream of requests with variable prompt lengths enters a queue. A swappable scheduler (naive, dynamic or vLLM) forms batches, a swappable backend (Hugging Face Transformers or vLLM, with TinyLlama for smoke tests and Mistral-7B or LLaMA-13B for full runs) runs them, and each request's output and metrics are collected into plots and a report](/llm-queue-scheduler/project-overview.svg)
+
+| | |
+| --- | --- |
+| **Input** | A continuous stream of requests with variable prompt lengths, arriving as a Poisson process |
+| **Logic** | Requests enter a queue, the scheduler groups them into batches (naive or dynamic), and the batches run on a model (Hugging Face Transformers or vLLM) |
+| **Output** | Each request's generated text, plus throughput (tokens per second), time to first token (TTFT), time per output token (TPOT) and peak GPU memory |
+| **Compared** | Naive batching and dynamic batching, both built on Hugging Face with asyncio, against vLLM's continuous batching as the industry baseline |
+
+The acceptance criteria:
+
+- **The model can be swapped:** TinyLlama-1.1B for smoke tests, and Mistral-7B or LLaMA-13B for the full runs.
+- **The batching strategy can be swapped:** naive, dynamic or vLLM, behind one interface.
+- **The plots clearly show** what dynamic batching improves over naive batching.
+
+The goal is a one-line result of this form, with the numbers filled in by the benchmark: *"Dynamic batching improved throughput by +X% and reduced latency by −Y% compared to naive batching on a single 3090."*
+
+## Why batching matters, and what it costs
+
+### Why does batching give nearly free throughput?
+
+GPUs are massively parallel, and decoding uses very little of that. Post 04 showed that each decode step reads every weight from memory to produce one token per sequence. A batch of `B` sequences reuses each of those reads `B` times. With post 04's step-time model:
+
+```text
+t_step(B)     ≈ ( W_bytes + B × T × c_kv ) ÷ BW
+throughput(B) = B ÷ t_step(B)                tokens per second, for all sequences together
+```
+
+For Llama-2-7B in FP16 on an A100, with 512 tokens of context per sequence:
+
+| Batch size | Step time | Throughput |
+| --- | --- | --- |
+| 1 | 7.1 ms | about 140 tokens/s |
+| 16 | 9.1 ms | about 1,750 tokens/s |
+| 64 | 15.6 ms | about 4,100 tokens/s |
+
+![Bars of decode throughput for Llama-2-7B on an A100 with 512 tokens of context per sequence: about 140 tokens per second at batch 1, 1,750 at batch 16 and 4,100 at batch 64, while the time per step grows only from 7.1 to 15.6 milliseconds](/llm-queue-scheduler/batching-throughput.svg)
+
+The weights are the fixed cost of every step. While they dominate, extra sequences are almost free: 16 sequences give about 12 times the tokens per second for 1.3 times the step time. The KV cache term grows with the batch, so the gain slowly tapers off, until the batch is limited by memory (every sequence's cache must fit) or by compute.
+
+<Callout type="analogy" title="An espresso machine that brews eight cups at once">
+
+A coffee shop's machine can brew eight cups in the time it takes to brew one. Brewing one cup at a time leaves seven-eighths of the machine idle, but waiting for eight customers before starting makes the first customer wait. Every strategy in this project is an answer to one question: when do you start a brew?
+
+</Callout>
+
+### What is the catch?
+
+The sequences in a batch move in **lockstep**. Every step produces one token for every sequence, and Hugging Face's `generate()` keeps going until the longest one is done:
+
+```text
+useful decode work = Σ o_i ÷ ( B × max o_i )
+
+outputs of 50, 120, 500 and 80 tokens:   750 ÷ (4 × 500) = 37.5%
+```
+
+Post 05 drew the same effect inside one static batch, together with padding. The slowest request sets the pace for everyone. The 50-token answer is ready after 50 steps but stays in the batch for 500, and the requests queued behind the batch can't start until it ends. This is **head-of-line blocking**.
+
+So batching has two costs: wasted slots inside a batch, and time that requests spend **waiting outside** it, for the batch to fill or for the previous one to finish. The rest of this post is mostly about the second cost.
+
+## How requests arrive, and when queues explode
+
+### What is a Poisson arrival process, and how do you simulate one?
+
+Real users act independently, so requests arrive at random. The standard model is a **Poisson process** with an average rate `λ`, in requests per second:
+
+```text
+arrivals in a window of t seconds  ~  Poisson(λt)          P(k arrivals) = (λt)^k × e^(−λt) ÷ k!
+gap between two arrivals           ~  Exponential(λ)       mean 1/λ,     P(gap > x) = e^(−λx)
+```
+
+- It is **memoryless**: how long you have already waited tells you nothing about when the next request will arrive.
+- **Bursts and lulls happen on their own.** At 2 requests per second, a 2-second gap with no arrivals has a probability of `e^(−4)`, about 1.8%, and a second with 5 or more arrivals has a probability of about 5.3%.
+
+To simulate it, draw exponential gaps and add them up. A fixed seed gives every strategy exactly the same trace:
+
+```python
+import asyncio
+import time
+
+import numpy as np
+
+
+def poisson_arrival_times(rate: float, duration_s: float, seed: int = 0) -> list[float]:
+    """Arrival times, in seconds from the start, of a Poisson process with `rate` requests per second."""
+    rng = np.random.default_rng(seed)              # same seed, same trace, for every strategy
+    times, t = [], rng.exponential(1.0 / rate)
+    while t < duration_s:
+        times.append(t)
+        t += rng.exponential(1.0 / rate)
+    return times
+
+
+async def replay(times, make_request, scheduler):
+    start = time.perf_counter()
+    for t in times:
+        await asyncio.sleep(max(0.0, start + t - time.perf_counter()))
+        # stamp the planned arrival time, not the moment this coroutine woke up
+        await scheduler.submit(make_request(arrival_time=start + t))
+```
+
+![Top: 20 seconds of simulated arrivals at an average of 1.5 requests per second: 33 arrivals, including a 2.7-second lull and a burst of 9 in 1.5 seconds. Bottom: a histogram of the gaps between 2,000 simulated arrivals follows the exponential curve, with a mean of 0.67 seconds](/llm-queue-scheduler/poisson-arrivals.svg)
+
+The prompts themselves supply the **variable lengths**. Sampling prompts from a real chat dataset (vLLM's own benchmarks use ShareGPT conversations) gives a realistic mix. Drawing lengths from a chosen distribution gives more control. Either way, the same seeded trace and the same prompts go to every strategy.
+
+### How busy can a server get before waiting explodes?
+
+Two results from queueing theory describe every serving system.
+
+**Little's law** links the arrival rate, the time in the system and the number of requests in it:
+
+```text
+L = λ × W             L = requests in the system on average, λ = arrival rate, W = average time per request
+
+λ = 5 requests/s, W = 4 s   →   L = 20 requests in flight
+```
+
+That `L` is the concurrency the server has to hold: room for about 20 requests in the batch and in the KV cache, or a queue that keeps growing.
+
+**Utilization** is the arrival rate divided by the fastest rate the server can sustain, `ρ = λ ÷ μ`. In the simplest queue (one server, random arrivals and random service times, called M/M/1), the average time in the system is:
+
+```text
+W = 1 ÷ (μ − λ)  =  (1/μ) ÷ (1 − ρ)
+
+ρ = 0.5 → 2× the service time     ρ = 0.8 → 5×     ρ = 0.9 → 10×     ρ = 0.95 → 20×
+```
+
+![The average time in an M/M/1 queue, as a multiple of the service time, plotted against utilization: 2 times at 50% load, 5 at 80%, 10 at 90% and 20 at 95%. The curve is flat at first and shoots up near full load](/llm-queue-scheduler/queueing-knee.svg)
+
+A batching server isn't an M/M/1 queue, but the shape is universal: latency stays flat at low load and shoots up near capacity. Batching raises `μ` (a bigger batch serves more requests per second), which moves the knee to the right. That is why the benchmark sweeps the arrival rate (5, 20 and 50 requests per second): the interesting part of every curve is where it bends.
+
+## The three batching strategies
+
+### How do naive, dynamic and continuous batching differ?
+
+The same five requests, under three strategies with room for four requests at a time. The requests arrive at steps 0, 1, 5, 6 and 7, and need 6, 3, 4, 2 and 5 decode steps:
+
+![Five requests arriving at steps 0, 1, 5, 6 and 7, needing 6, 3, 4, 2 and 5 steps, under three strategies with room for four. Naive batching waits for four requests, so the first waits 6 steps, everyone finishes with the longest, and the fifth never starts. Dynamic batching launches the first two after a 2-step wait, but the next three wait for that batch to finish. Continuous batching starts every request when it arrives and frees each slot as soon as it finishes. Mean time to first token: 4.0, 2.8 and 1.0 steps](/llm-queue-scheduler/three-strategies.svg)
+
+- **Naive** waits for exactly four requests. Request 1 waits 6 steps for the batch to fill, then everyone runs until the longest request ends. Request 5 never starts, because three more requests would have to arrive first.
+- **Dynamic** launches when the batch is full **or** the oldest request has waited 2 steps, so requests 1 and 2 start at step 2. But requests 3 to 5 arrive while that batch is running, and they wait for it to finish.
+- **Continuous** forms the batch again at every step. Each request starts when it arrives and leaves when it is done.
+
+| | Naive (static) | Dynamic | Continuous |
+| --- | --- | --- | --- |
+| **When a batch starts** | When exactly N requests are waiting | When N are waiting, the oldest has waited `max_wait`, or memory is full | At every step, filling any free slot |
+| **Batch size** | Always N | Whatever is waiting, up to a cap | Changes at every step |
+| **When requests leave** | Together, when the longest finishes | Together, when the longest finishes | Each one as soon as it finishes |
+| **At low load** | Requests wait for the batch to fill: a very long TTFT | Short waits (at most `max_wait`) and small batches | Requests start almost at once |
+| **At high load** | Full batches and good throughput, but head-of-line blocking | Full batches, much like naive | The highest throughput and the lowest latency |
+| **Used by** | `model.generate()` on a list of prompts | Triton Inference Server, TensorFlow Serving | vLLM, TGI, SGLang, TensorRT-LLM |
+
+Dynamic batching is a **request-level** policy: it decides when to launch a whole batch. Continuous batching is **iteration-level**: it decides at every token step, which needs an engine that owns the decode loop and the KV cache, exactly what vLLM is (post 05). That is why the project builds naive and dynamic batching itself, on top of Hugging Face's `generate()`, and uses vLLM as the baseline to beat.
+
+## Designing the scheduler: the pre-study questions
+
+Phase 0 of the project asks five questions. Unlike the questions in the earlier posts, these are about implementation. Each answer has to be precise (a data structure, an algorithm in pseudocode or a formula) and come with a reason why it is correct.
+
+### 0.1 What must a request and a response contain?
+
+A request is read by three parts of the system: the **scheduler** (to form batches), the **backend** (to run the model) and the **metrics collector** (to compute latencies). So it carries the input, the generation settings, the timestamps that every metric is computed from, and its state:
+
+```python
+import asyncio
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class Status(Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    FINISHED = "finished"
+    FAILED = "failed"
+
+
+@dataclass
+class Request:
+    # input, tokenized once at submission
+    prompt: str
+    prompt_token_ids: list[int]
+    max_new_tokens: int = 128
+    temperature: float = 0.0                 # 0 means greedy: deterministic and easy to compare
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    # timestamps from time.perf_counter(): every latency metric comes from these four
+    arrival_time: float = field(default_factory=time.perf_counter)
+    scheduled_time: float | None = None      # pulled into a batch
+    first_token_time: float | None = None    # first output token produced
+    completion_time: float | None = None     # last output token produced
+
+    # output and state
+    output_token_ids: list[int] = field(default_factory=list)
+    status: Status = Status.QUEUED
+    error: str | None = None
+    done: asyncio.Event = field(default_factory=asyncio.Event)   # set when finished or failed
+
+    @property
+    def prompt_len(self) -> int:
+        return len(self.prompt_token_ids)
+```
+
+The response is what the caller receives: a frozen snapshot with the output and the metrics already computed.
+
+```python
+@dataclass(frozen=True)
+class Response:
+    request_id: str
+    status: Status
+    output_text: str
+    output_token_ids: list[int]
+    prompt_len: int
+    output_len: int
+    queue_wait: float        # scheduled_time − arrival_time
+    ttft: float              # first_token_time − arrival_time
+    tpot: float | None       # (completion_time − first_token_time) ÷ (output_len − 1)
+    e2e_latency: float       # completion_time − arrival_time
+    error: str | None = None
+```
+
+![A request is created as queued with its arrival time. It becomes running when the scheduler puts it in a batch and stamps the scheduled time, records the first token time when its first token appears, and ends as finished with a completion time, or as failed with an error. Either way its done event is set and a frozen response with the metrics is produced](/llm-queue-scheduler/request-lifecycle.svg)
+
+Why this shape:
+
+| Design choice | Why it is right |
+| --- | --- |
+| **Timestamps live on the request** | A finished request is its own metrics record, with no side tables to keep in sync |
+| **Tokenize once, at submission** | The scheduler needs `prompt_len` before batching (for padding and memory), and tokenizing again would cost CPU time on every pass |
+| **Sampling settings per request** | vLLM handles them per request. For Hugging Face batches, greedy decoding for everyone keeps the comparison fair |
+| **One status field** | Queued, running, then finished or failed is a state machine, and one field can't represent impossible states such as "finished but still queued" |
+| **An `asyncio.Event` per request** | The coroutine that submitted the request just awaits `request.done.wait()`, without a separate table of futures |
+| **The response is a frozen snapshot** | A late write can't change its metrics, and it turns straight into a row of a CSV file |
+
+If the scheduler ever needs to reorder requests, two optional fields fit here later: a `priority` and a `deadline` (a TTFT target).
+
+### 0.2 How does a naive batching scheduler work?
+
+The control flow:
+
+1. Wait until the queue holds **N** requests.
+2. Take exactly N, mark them running and stamp their `scheduled_time`.
+3. Run them as one batch: pad to the longest prompt, decode until the longest output is done.
+4. Fill in their tokens and timestamps, mark them finished, and set their `done` events.
+5. Repeat. At shutdown, **flush** whatever is left as a smaller batch, or the last requests wait forever.
+
+The only launch condition is `len(queue) ≥ N`:
+
+```text
+loop:
+    wait until len(queue) ≥ N                (at shutdown: take whatever is left)
+    batch ← the N oldest requests
+    for r in batch:  r.scheduled_time ← now,  r.status ← RUNNING
+    run batch on the backend                 pads to the longest prompt, decodes to the longest output
+    for r in batch:  record tokens and timestamps,  r.status ← FINISHED,  signal r.done
+```
+
+All the schedulers share one interface and one helper that runs a batch:
+
+```python
+from abc import ABC, abstractmethod
+
+
+class Backend(ABC):
+    @abstractmethod
+    def generate(self, batch: list[Request]) -> None:
+        """Run one batch to completion, filling each request's tokens and token timestamps."""
+
+
+class Scheduler(ABC):
+    @abstractmethod
+    async def submit(self, request: Request) -> None:
+        """Called by the traffic generator when a request arrives."""
+
+    @abstractmethod
+    async def run(self, backend: Backend) -> None:
+        """Form batches forever and hand them to the backend."""
+
+
+async def run_batch(backend: Backend, batch: list[Request]) -> None:
+    now = time.perf_counter()
+    for r in batch:
+        r.scheduled_time, r.status = now, Status.RUNNING
+    try:
+        await asyncio.to_thread(backend.generate, batch)    # the GPU call blocks: keep it off the event loop
+        for r in batch:
+            r.status = Status.FINISHED
+    except Exception as e:                                   # a failed batch fails its requests, not the run
+        for r in batch:
+            r.status, r.error = Status.FAILED, repr(e)
+    for r in batch:
+        r.done.set()
+
+
+class NaiveBatcher(Scheduler):
+    def __init__(self, batch_size: int):
+        self.batch_size = batch_size
+        self.queue: asyncio.Queue[Request] = asyncio.Queue()
+
+    async def submit(self, request: Request) -> None:
+        await self.queue.put(request)
+
+    async def run(self, backend: Backend) -> None:
+        while True:
+            batch = [await self.queue.get() for _ in range(self.batch_size)]   # wait for exactly N
+            await run_batch(backend, batch)
+```
+
+<Callout type="info" title="Why the model runs in a worker thread">
+
+`generate()` blocks until the whole batch is done, which can take seconds. Called directly inside the event loop, it would freeze the traffic generator too, and arrivals would be stamped late, making every TTFT look better than it is. `asyncio.to_thread` runs it on a worker thread instead. PyTorch releases the GIL inside its kernels (post 01), so the event loop keeps accepting requests while the GPU works.
+
+</Callout>
+
+**The cost of waiting for N.** Request `k` of a batch waits for the `N − k` requests that arrive after it:
+
+```text
+E[wait of request k] = (N − k) ÷ λ             average over the batch:  E[wait] = (N − 1) ÷ (2λ)
+
+N = 16:    λ = 1 request/s  →  7.5 s      λ = 20 requests/s  →  0.375 s      λ = 50 requests/s  →  0.15 s
+```
+
+On top of that come the batch's own run time and any wait for the previous batch to finish. So naive batching looks fine at high load and terrible at low load.
+
+![Two timelines with a batch size of four. At 1 request per second the first request waits about 3 seconds for the batch to fill, an average of 1.5 seconds per request. At 20 requests per second the batch fills in about 0.15 seconds, an average of 0.075 seconds](/llm-queue-scheduler/naive-fill-wait.svg)
+
+### 0.3 How does dynamic batching decide when to flush the queue?
+
+A dynamic batcher launches as soon as **any one** of these conditions holds:
+
+1. **Size:** the batch has reached `max_batch_size`.
+2. **Age:** the oldest waiting request has waited `max_wait_ms`.
+3. **Memory:** one more request would go over the memory budget (question 0.4).
+
+The batch size adapts on its own: it is however many requests are waiting when a trigger fires, up to the cap. There are two regimes:
+
+```text
+GPU idle, light load:   the timer fires first      E[B] ≈ min( 1 + λ × max_wait,  max_batch_size )
+GPU busy:               requests pile up during the running batch (about λ × t_batch of them),
+                        and the next batch takes  min( waiting,  max_batch_size )
+
+max_wait = 50 ms:   λ = 5/s → 1.25       λ = 50/s → 3.5       λ = 400/s → 16 (the cap)
+```
+
+![A flowchart of the dynamic batcher: wait for a first request, take everything already waiting, start a deadline at the oldest request's arrival plus max_wait, then keep adding arrivals until the batch reaches its size limit, the deadline passes, or the next request would exceed the memory budget, and launch the batch on a worker thread](/llm-queue-scheduler/dynamic-flow.svg)
+
+```text
+loop:
+    batch ← [ wait for the first request ]
+    move every request already waiting into batch, up to max_batch_size
+    deadline ← batch[0].arrival_time + max_wait
+    while len(batch) < max_batch_size and memory allows one more:
+        r ← wait for the next request, but not past deadline
+        if none arrived in time: break
+        batch.append(r)
+    run batch on the backend
+```
+
+```python
+class DynamicBatcher(Scheduler):
+    def __init__(self, max_batch_size: int = 16, max_wait_ms: float = 50):
+        self.max_batch_size = max_batch_size
+        self.max_wait = max_wait_ms / 1000
+        self.queue: asyncio.Queue[Request] = asyncio.Queue()
+
+    async def submit(self, request: Request) -> None:
+        await self.queue.put(request)
+
+    async def run(self, backend: Backend) -> None:
+        while True:
+            batch = [await self.queue.get()]                     # sleep until there is work
+            while len(batch) < self.max_batch_size and not self.queue.empty():
+                batch.append(self.queue.get_nowait())            # take everyone who is already waiting
+            deadline = batch[0].arrival_time + self.max_wait     # the oldest request sets the clock
+            while len(batch) < self.max_batch_size:              # trigger 1: size
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    break                                        # trigger 2: age
+                try:
+                    batch.append(await asyncio.wait_for(self.queue.get(), remaining))
+                except asyncio.TimeoutError:
+                    break
+            await run_batch(backend, batch)
+```
+
+<Callout type="warn" title="Take the waiting requests before checking the clock">
+
+After a long batch, the oldest waiting request is already past its deadline. Without the first inner loop, the batcher would see the deadline, break at once, and launch batches of one while a dozen requests sat in the queue.
+
+</Callout>
+
+The two knobs, and what moving them does:
+
+| Knob | Larger | Smaller |
+| --- | --- | --- |
+| **`max_batch_size`** | More throughput at high load, but more memory and longer steps | Less memory, but a lower throughput ceiling |
+| **`max_wait_ms`** | Bigger batches at moderate load, but up to `max_wait` added to TTFT | Lower TTFT, but smaller batches |
+
+Production servers expose the same two knobs. Triton Inference Server calls them `max_batch_size` and `max_queue_delay_microseconds`, and TensorFlow Serving calls them `max_batch_size` and `batch_timeout_micros`.
+
+### 0.4 How can the batch size adapt to GPU memory and queue length?
+
+Two things grow with the batch: the **KV cache**, and the **activations** of the prefill. Because Hugging Face pads a batch to its longest prompt, every row costs as much as the longest one:
+
+```text
+per-row KV bytes   ≈ (P_max + max_new_tokens) × c_kv           P_max = longest prompt in the batch
+c_kv               = 2 × L × H_kv × d × b                      post 04: KV bytes per token
+
+memory limit       B_mem = ⌊ (free bytes − reserve) ÷ per-row bytes ⌋
+batch size         B     = min( queue length,  max_batch_size,  B_mem )
+```
+
+The `reserve` covers the prefill activations, which also grow with `B × P_max`. Measure it instead of guessing: run one test batch, read `torch.cuda.max_memory_allocated()`, and keep a margin.
+
+For a 24 GB RTX 3090 with `max_new_tokens = 128` and a 1.5 GiB reserve:
+
+| Model | FP16 weights | KV per token | KV budget left | Per row at P_max = 512 | B_mem |
+| --- | --- | --- | --- | --- | --- |
+| **TinyLlama-1.1B** | 2.2 GB | 22 KiB | about 20 GiB | 14 MiB | about 1,500: never the limit |
+| **Mistral-7B** | 14.5 GB | 128 KiB | about 8.5 GiB | 80 MiB | about 108 |
+| **Mistral-7B, P_max = 2,048** | | | | 272 MiB | about 32 |
+
+Two lessons hide in that table. With TinyLlama, the memory check never fires, so testing it needs long prompts or an artificially small budget. With Mistral-7B, a single long prompt in the batch cuts the safe batch size by more than three times.
+
+So the heuristic adds requests oldest first and stops at the first one that would break the budget:
+
+```text
+batch ← [],  P_max ← 0
+for r in queue, oldest first, up to max_batch_size:
+    P ← max(P_max, r.prompt_len)
+    if (len(batch) + 1) × (P + max_new_tokens) × c_kv > budget:  stop
+    batch.append(r),  P_max ← P
+if batch is empty:  batch ← [oldest request]                    always make progress
+
+on out-of-memory:        cap ← max(1, cap ÷ 2), and put the batch back in the queue     back off fast
+after 20 clean batches:  cap ← min(max_batch_size, cap + 1)                             probe up slowly
+```
+
+![Five queued requests with prompts of 180, 420, 260, 1,900 and 300 tokens are added oldest first under a budget of 6,000 KV slots, where each row costs the longest prompt plus 128 new tokens because of padding. Three requests cost 1,644 slots, but adding the 1,900-token prompt would make four rows of 2,028 slots, 8,112 in total, so the batch launches with three. B = min(queue length 5, cap 16, memory 3)](/llm-queue-scheduler/gpu-aware-batch.svg)
+
+```python
+import torch
+
+
+def kv_budget_bytes(reserve_bytes: int) -> int:
+    free, _ = torch.cuda.mem_get_info()                                    # what the driver can still hand out
+    cached = torch.cuda.memory_reserved() - torch.cuda.memory_allocated()  # PyTorch's own free cache
+    return free + cached - reserve_bytes
+
+
+def rows_that_fit(candidates: list[Request], max_new_tokens: int, kv_per_token: int, budget: int) -> int:
+    """How many of the candidates, oldest first, fit the budget once padded to the longest prompt."""
+    p_max = 0
+    for i, r in enumerate(candidates):
+        p_max = max(p_max, r.prompt_len)
+        if (i + 1) * (p_max + max_new_tokens) * kv_per_token > budget:
+            return max(i, 1)                     # always make progress, even with one oversized request
+    return len(candidates)
+```
+
+- **Count PyTorch's cache as free.** `mem_get_info()` reports what the CUDA driver can still hand out, but blocks in PyTorch's caching allocator (posts 01 and 02) count as used there, even though PyTorch can reuse them at once.
+- **Use a queue you can look into.** `asyncio.Queue` can't peek at requests or put them back at the front, so the real implementation keeps a `collections.deque` plus an `asyncio.Event` to wake the batcher.
+- **The trade-off of grouping by length.** Sorting the queue by prompt length shrinks padding, but it breaks arrival order, so it needs a cap on how long any request can be skipped.
+
+### 0.5 How are TTFT, TPOT, latency and throughput measured and logged?
+
+Every metric comes from the four timestamps on the request:
+
+![One request's timeline: it arrives, waits in the queue until it is scheduled, the prefill produces the first token, more tokens follow at regular gaps, and the last token marks completion. Queue wait is scheduled time minus arrival, TTFT is first token minus arrival, TPOT is the average gap between tokens after the first, and end-to-end latency is completion minus arrival](/llm-queue-scheduler/request-timeline.svg)
+
+```text
+per request
+queue wait     = scheduled_time − arrival_time
+TTFT           = first_token_time − arrival_time
+TPOT           = (completion_time − first_token_time) ÷ (n_out − 1)          when n_out ≥ 2
+E2E latency    = completion_time − arrival_time  =  TTFT + (n_out − 1) × TPOT
+
+per run
+throughput     = Σ n_out ÷ (last completion − first arrival)                 output tokens per second
+request rate   = finished requests ÷ the same window                          requests per second
+peak memory    = torch.cuda.max_memory_allocated(), reset before each run
+```
+
+What each one means to a user:
+
+| Metric | What it feels like | A reasonable target |
+| --- | --- | --- |
+| **TTFT** | How long until the answer starts | Under a few hundred milliseconds feels immediate. Classic interface guidelines put "instant" at 0.1 s and "flow is kept" at 1 s |
+| **TPOT** | How fast the text streams | People read about 4 words (about 5 tokens) a second, so anything under 200 ms keeps ahead of the reader. 50 ms feels fluid |
+| **E2E latency** | How long the whole answer takes | Matters most for non-streaming uses, such as tools and agents |
+| **Throughput** | Nothing for a single user: it is the operator's cost | Higher means more users per GPU |
+
+Averages hide the slow requests that users remember, so report **percentiles**: p50 (the median), p90 and p99.
+
+![A histogram of 1,000 simulated time-to-first-token values with a long right tail. The median is about 300 milliseconds and the mean is higher at about 350, while the 90th percentile is about 610 and the 99th about 1,210, four times the median](/llm-queue-scheduler/latency-percentiles.svg)
+
+The rules that keep the numbers honest:
+
+- **Measure TTFT from arrival, not from scheduling.** Time in the queue is part of what the user waits for.
+- **Use one clock**, `time.perf_counter()`, which is monotonic and high-resolution.
+- **GPU work is asynchronous** (post 01). Call `torch.cuda.synchronize()` before taking a timestamp that marks GPU work as done.
+- **Hugging Face's streamers only support a batch size of 1.** For batches, record a timestamp after every decode step with a stopping-criteria hook (below).
+- **For vLLM**, stream from its OpenAI-compatible server and stamp each chunk on the client.
+- **Warm up first.** The first requests include CUDA initialization and kernel compilation.
+- **Keep failures.** Failed requests are logged with their status and error, never silently dropped.
+
+A stopping criterion runs after every generated token, which makes it a convenient clock:
+
+```python
+import time
+
+import torch
+from transformers import StoppingCriteria, StoppingCriteriaList
+
+
+class StepClock(StoppingCriteria):
+    """Records the time after every decode step. It never stops generation itself."""
+
+    def __init__(self):
+        self.stamps: list[float] = []
+
+    def __call__(self, input_ids, scores, **kwargs):
+        torch.cuda.synchronize()                 # wait until this step's GPU work is really done
+        self.stamps.append(time.perf_counter())
+        return torch.zeros(input_ids.shape[0], dtype=torch.bool, device=input_ids.device)
+
+
+clock = StepClock()
+out = model.generate(**inputs, max_new_tokens=128, do_sample=False,
+                     stopping_criteria=StoppingCriteriaList([clock]))
+# clock.stamps[0] is every row's first token; a row with n tokens finished at clock.stamps[n - 1]
+```
+
+Logging is one row per request, plus one summary per run:
+
+```python
+import pandas as pd
+
+
+def record(r: Request) -> dict:
+    """One metrics row for a finished or failed request, computed from its timestamps."""
+    row = {"request_id": r.request_id, "status": r.status.value, "prompt_len": r.prompt_len,
+           "output_len": len(r.output_token_ids), "error": r.error}
+    if r.status is Status.FINISHED:
+        n = row["output_len"]
+        row |= {
+            "queue_wait": r.scheduled_time - r.arrival_time,
+            "ttft": r.first_token_time - r.arrival_time,
+            "tpot": (r.completion_time - r.first_token_time) / (n - 1) if n > 1 else None,
+            "e2e": r.completion_time - r.arrival_time,
+        }
+    return row
+
+
+def summarize(rows: list[dict], window_s: float, peak_mem_bytes: int) -> dict:
+    """Per-run aggregates: throughput, failures, peak memory and latency percentiles."""
+    df = pd.DataFrame(rows)
+    ok = df[df.status == "finished"]
+    out = {"throughput_tok_s": ok.output_len.sum() / window_s,
+           "requests_per_s": len(ok) / window_s,
+           "failed": int((df.status == "failed").sum()),
+           "peak_mem_gb": peak_mem_bytes / 1e9}
+    for metric in ("ttft", "tpot", "e2e"):
+        for q in (50, 90, 99):
+            out[f"{metric}_p{q}"] = ok[metric].quantile(q / 100)
+    return out
+```
+
+Each per-request row also gets the run's settings (strategy, model, arrival rate, seed), so every plot can be made from one CSV file.
+
+## From plan to execution
+
+### What are the phases, and what does each one deliver?
+
+The project page splits the work into six phases. Each has a result statement that says what "done" means:
+
+| Phase | Done when I can say | Time budget |
+| --- | --- | --- |
+| **0 · Pre-study** | I can design the request and response schema, outline naive and dynamic batching in pseudocode, and define the key metrics | 2 days |
+| **1 · vLLM baseline** | I can run vLLM with a small model, send requests, and log TTFT, TPOT, latency, throughput and memory | 1 day |
+| **2 · Benchmark framework** | I can generate realistic request streams, collect standard metrics, and plot throughput against latency | 2 days |
+| **3 · Naive batching** | I have a working naive scheduler and can show how it performs next to vLLM | 2 days |
+| **4 · Dynamic batching** | I can show that my dynamic batching improves throughput and latency over the naive scheduler | 2 days |
+| **5 · Results and report** | I can present plots and tables of naive, dynamic and vLLM, and sum up the gains in one line | 2 days |
+
+![Six phases in order: pre-study (2 days, this post), vLLM baseline (1 day), benchmark framework (2 days), naive batching (2 days), dynamic batching (2 days), and results and report (2 days), about 11 days in total](/llm-queue-scheduler/roadmap.svg)
+
+This post is Phase 0: the five answers above are its deliverables. Phase 1 sets up the reference to compare against before any custom code exists, and Phase 2 builds the harness that every later phase reuses.
+
+<Callout type="tip" title="How the work is organised">
+
+The project follows Mentiforce's way of working with a peer. Every phase gets two predicted due times: an **earliest** one to aim for and a **latest** one to commit to, re-predicted before the latest one passes. Every design and every piece of code is synced between both people until both can explain it, because even the author forgets their own code after a few days.
+
+</Callout>
+
+Phase 2 also sets a code-quality bar, because a framework that is slow to understand makes every later bug slower to fix:
+
+- **Clean:** no redundant design or code.
+- **Modular:** each function, class or data structure has one atomic job.
+- **Fast to understand:** a long function becomes a short outline of 8 to 20 lines, with the details in named sub-functions.
+- **Reusable:** one role, one unit. No two pieces of code share an overlapping responsibility.
+
+A layout for the repository that keeps strategies and backends swappable:
+
+```text
+llm-batching-benchmark/
+├── core/
+│   ├── request.py          # Request and Response dataclasses
+│   ├── metrics.py          # record() and summarize(): TTFT, TPOT, throughput, memory
+│   └── traffic.py          # seeded Poisson arrivals and prompt sampling
+├── schedulers/
+│   ├── base.py             # the Scheduler interface and run_batch()
+│   ├── naive.py            # NaiveBatcher: waits for exactly N requests
+│   ├── dynamic.py          # DynamicBatcher: size, age and memory triggers
+│   └── vllm_adapter.py     # passes requests straight to a vLLM server
+├── backends/
+│   ├── simulated.py        # the step-time model, CPU only, for tests
+│   ├── hf_backend.py       # Hugging Face generate() with per-step timestamps
+│   └── vllm_backend.py     # OpenAI-compatible streaming client
+├── benchmarks/
+│   ├── run_benchmark.py    # picks scheduler, backend, model and arrival rate from a config
+│   └── plot_results.py     # throughput against latency curves
+├── configs/
+│   ├── smoke.yaml          # TinyLlama, short runs
+│   └── full.yaml           # Mistral-7B, the full sweep
+└── README.md
+```
+
+### What are the ways to carry it out?
+
+There is more than one way to run each part. Where to run:
+
+| Option | Good for | Watch out for |
+| --- | --- | --- |
+| **A laptop, CPU only, with a simulated backend** | Building and testing the scheduler logic, fast and free | No real GPU numbers |
+| **Google Colab** (a free T4, or a paid L4 or A100) | Smoke tests with TinyLlama, and notebooks for analysis | Sessions end and runtimes reset, so save results after every run. The GPU type isn't guaranteed, and a T4 (16 GB, Turing) can't run FlashAttention-2 |
+| **A rented cloud GPU** (RunPod, Vast.ai, Lambda and similar) | The real benchmark on a 3090, as the spec asks, with full control and a persistent disk | Billed by the hour, so stop the instance when it is idle |
+| **A local GPU** | The fastest iteration, if you have one | Results depend on the card, so report it |
+
+Which backend:
+
+| Backend | What it gives | Use it for |
+| --- | --- | --- |
+| **Simulated** (the step-time formula, no model) | Deterministic and instant, on a CPU | Unit tests of the schedulers, and the first plots |
+| **Hugging Face `generate()`** | A real model, in static padded batches | The naive and dynamic strategies, as the spec asks |
+| **A Hugging Face manual decode loop** | Control over every step and the KV cache | Only to go further, for example a continuous batcher of your own |
+| **The vLLM server** (OpenAI-compatible API) | Continuous batching and PagedAttention | The industry baseline (Phase 1), plus vLLM's own `vllm bench serve` to cross-check the harness |
+| **vLLM's offline `LLM` class** | The highest throughput for batch jobs | An upper bound on throughput, not latency |
+
+Tools and models:
+
+- **Editor.** VS Code's Remote-SSH extension and PyCharm's remote interpreters (part of its Pro tier, free for students) both run code on a remote GPU from a local editor. The code is the same either way.
+- **Scripts, not notebooks.** Keep the library code in `.py` files in git, and use notebooks only to analyse results. Notebooks already run an event loop, so call `await main()` in a cell instead of `asyncio.run(main())`.
+- **AI tools.** The project notes recommend generating code in a chat (ChatGPT) rather than with an editor agent such as Cursor that edits the repository directly, so that understanding and control stay with you.
+
+| Model | FP16 weights | KV per token | Where it fits |
+| --- | --- | --- | --- |
+| **TinyLlama-1.1B** | 2.2 GB | 22 KiB | Anywhere, even a T4: development and smoke tests |
+| **Mistral-7B** | 14.5 GB | 128 KiB (GQA) | A 24 GB card (3090, 4090, L4). Too tight on a T4 without quantization |
+| **LLaMA-13B** | 26 GB | 800 KiB | 40 GB or more (A100, A6000), or quantized on a 24 GB card |
+
+**Keeping the bill low** is part of the plan:
+
+- Develop with the simulator and TinyLlama. Switch to the larger model only for the one-time final demonstration.
+- Script the whole benchmark, so the paid GPU runs unattended from start to finish.
+- Write each run's results to disk as soon as it finishes, so a lost session loses one run, not the sweep.
+- Keep model weights on a persistent volume, so they download once.
+- Stop instances when idle. At the time of writing, consumer cards like the 3090 typically rent for well under a dollar an hour, but prices change, so check before choosing.
+
+### How should the benchmark be run so the comparison is fair?
+
+The differences in the results should come from the scheduler and nothing else:
+
+- **The same arrival trace** (the same seed) and the same prompts for every strategy.
+- **The same output lengths.** Use greedy decoding and either ignore the end-of-sequence token or give each request a target length that every backend enforces. Otherwise one strategy may simply get shorter answers.
+- **Warm-up, duration and repeats.** Warm up first, run each point for at least 60 seconds of traffic, and repeat it at least three times.
+- **A sweep past the knee.** Use several arrival rates (5, 20 and 50 requests per second), including at least one that overloads the naive scheduler.
+- **Comparable memory numbers.** vLLM reserves its whole pool up front, so its memory use sits flat at about `gpu_memory_utilization` × VRAM. Compare its KV cache usage (from `/metrics`) with Hugging Face's peak allocation, and say which number is which.
+- **The full setup in the report:** GPU, model, dtype, library versions and the scheduler's knob values.
+
+Phase 1 starts with a client that measures a vLLM server:
+
+```bash
+vllm serve TinyLlama/TinyLlama-1.1B-Chat-v1.0 --gpu-memory-utilization 0.9
+```
+
+```python
+import time
+
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
+MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
+
+async def timed_request(prompt: str, max_tokens: int = 128) -> dict:
+    t0 = time.perf_counter()
+    stamps, usage = [], None
+    stream = await client.completions.create(
+        model=MODEL, prompt=prompt, max_tokens=max_tokens, temperature=0.0,
+        stream=True, stream_options={"include_usage": True},
+    )
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].text:
+            stamps.append(time.perf_counter())   # one stamp per streamed piece of text
+        if chunk.usage:
+            usage = chunk.usage                  # the final chunk reports exact token counts
+    if not stamps:
+        return {"status": "failed"}
+    n = usage.completion_tokens if usage else len(stamps)
+    return {"status": "finished", "ttft": stamps[0] - t0, "e2e": stamps[-1] - t0,
+            "tpot": (stamps[-1] - stamps[0]) / (n - 1) if n > 1 else None, "output_len": n}
+```
+
+A streamed chunk can carry more than one token, which is why TPOT divides by the exact token count from the usage report, not by the number of chunks.
+
+### What results should we expect?
+
+Before measuring anything, the theory above predicts the shape of the results. These are hypotheses for the benchmark to confirm or refute:
+
+![A sketch of the expected results, not measurements. Left: time to first token against arrival rate, with naive batching worst at low load because batches take long to fill, dynamic batching low until the GPU saturates, and vLLM lowest with its knee furthest to the right. Right: throughput rises with load and then levels off, highest for vLLM](/llm-queue-scheduler/expected-curves.svg)
+
+- **Low load:** naive batching has a very long TTFT, because batches take a long time to fill. Dynamic batching and vLLM start requests almost at once.
+- **High load:** naive and dynamic batching both form full batches, so their throughput is similar, and both suffer from head-of-line blocking.
+- **Everywhere:** vLLM should lead on throughput and tail latency, thanks to continuous batching and paging, with its knee furthest to the right.
+- **The headline number** depends on the load chosen. The fair claim is a curve, and the one-line result should name the arrival rate it was measured at.
+
+## Summary
+
+Batching turns a memory-bound decode into nearly free throughput, because one read of the weights serves every sequence in the batch. Its costs are lockstep (a batch runs as long as its longest request) and waiting (for a batch to fill or to finish). Requests arrive as a Poisson stream, and queueing theory says latency explodes near capacity. A **naive** batcher waits for exactly N requests, a **dynamic** batcher launches on size, age or memory, and a **continuous** batcher (vLLM) re-forms the batch at every step. The project's design rests on a request object that carries its own timestamps, two small asyncio schedulers, a padding-aware memory check, and metrics computed from those timestamps, measured fairly across a sweep of arrival rates.
+
+![A map of this post in four columns. Why batch: one read of the weights serves the whole batch, while lockstep, head-of-line blocking and waiting are the costs. Traffic: exponential gaps, a seeded trace, Little's law and the queueing knee. Schedulers: naive and dynamic batching, a padding-aware memory check, and continuous batching. Measure and plan: four timestamps, TTFT, TPOT, end-to-end latency and p99, six phases in about 11 days, and a fair benchmark](/llm-queue-scheduler/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Batching** | One read of the weights serves every sequence in the batch | Nearly free throughput while the weights dominate the step time |
+| **Lockstep** | A static batch runs until its longest sequence ends | Useful work is `Σ o_i ÷ (B × max o_i)` |
+| **Head-of-line blocking** | A slow request delays everyone behind it | The main weakness of request-level batching |
+| **Poisson arrivals** | Exponential gaps between requests, with mean `1/λ` | Realistic, bursty traffic, and a seeded trace keeps comparisons fair |
+| **Little's law** | `L = λ × W` | The concurrency the server must hold |
+| **Utilization and the knee** | `W = (1/μ) ÷ (1 − ρ)` | Latency explodes near capacity, so sweep the load past the knee |
+| **Naive batching** | Launch at exactly N requests | Average fill wait `(N − 1) ÷ 2λ`, terrible at low load |
+| **Dynamic batching** | Launch on size, age or memory | Waits are capped at `max_wait` |
+| **Continuous batching** | The batch is re-formed at every step | The vLLM baseline to beat |
+| **Request and response** | Four timestamps, a status, a done event and a frozen snapshot | The request is its own metrics record |
+| **GPU-aware batch size** | `min(queue, cap, memory)`, with every row padded to `P_max` | Avoids out-of-memory errors as prompts get long |
+| **TTFT, TPOT, E2E and throughput** | Differences between the four timestamps, and tokens per second | What users feel and what the operator pays for |
+| **Percentiles** | Report p50, p90 and p99, not only the mean | Users remember the slow requests |
+| **A fair benchmark** | The same trace, lengths and warm-up, swept across load | The differences come from the scheduler alone |
+
+### Test yourself
+
+<details>
+<summary>Why does a batch of 16 sequences decode almost as fast as a batch of 1?</summary>
+
+Decoding is memory-bound: the step time is mostly reading the weights, and one read serves every sequence in the batch. Only the KV cache reads grow with the batch, so for Llama-2-7B the step goes from 7.1 to 9.1 ms while throughput grows about 12 times.
+
+</details>
+
+<details>
+<summary>Outputs of 50, 120, 500 and 80 tokens share one static batch. What fraction of the decode work is useful?</summary>
+
+`750 ÷ (4 × 500) = 37.5%`. Every row runs for 500 steps, the length of the longest output.
+
+</details>
+
+<details>
+<summary>Requests arrive at 2 per second. What is the average wait to fill a naive batch of 8?</summary>
+
+`(N − 1) ÷ 2λ = 7 ÷ 4 = 1.75` seconds, before the batch has even started.
+
+</details>
+
+<details>
+<summary>A server sees 5 requests per second and each takes 4 seconds end to end. How many requests are in flight on average?</summary>
+
+By Little's law, `L = λ × W = 5 × 4 = 20`, so the server needs room for about 20 at once.
+
+</details>
+
+<details>
+<summary>What are the three triggers that flush a dynamic batch?</summary>
+
+Size (the batch reached `max_batch_size`), age (the oldest request waited `max_wait_ms`) and memory (one more request would break the memory budget).
+
+</details>
+
+<details>
+<summary>Why must the dynamic batcher take every waiting request before it checks the deadline?</summary>
+
+After a long batch, the oldest request is already past its deadline. Checking the clock first would launch a batch of one while many requests are waiting.
+
+</details>
+
+<details>
+<summary>Why does one long prompt shrink how many requests fit in memory with Hugging Face's generate()?</summary>
+
+The batch is padded to its longest prompt, so every row pays for `P_max` tokens of KV cache and activations, not just the row with the long prompt.
+
+</details>
+
+<details>
+<summary>Write TTFT and TPOT in terms of the request's timestamps.</summary>
+
+`TTFT = first_token_time − arrival_time`, and `TPOT = (completion_time − first_token_time) ÷ (n_out − 1)`.
+
+</details>
+
+<details>
+<summary>Why does the scheduler run generate() in a worker thread?</summary>
+
+`generate()` blocks for the whole batch. On the event loop it would freeze the traffic generator, and arrivals would be stamped late. In a worker thread the loop keeps running, and PyTorch releases the GIL inside its kernels.
+
+</details>
+
+The next step is Phase 1: getting the vLLM baseline running and measured.

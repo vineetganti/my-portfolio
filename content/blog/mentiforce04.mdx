@@ -13,6 +13,10 @@ The third post covered the architecture of a Transformer. This one is about runn
 2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
 3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
 4. **04 · Transformer Inference Optimization Strategies** (this post)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
 
 </Callout>
 
@@ -78,7 +82,8 @@ This is why the optimisations in this post target **bytes**, not FLOPs:
 | **Sparsity and pruning** | The number of weights that have to be moved |
 | **Efficient attention (FlashAttention)** | HBM reads and writes during attention |
 | **KV cache optimisation** (PagedAttention, GQA/MQA, KV quantization) | The size of the cache and the cost of reading it |
-| **Batching** | Raises intensity: one weight read serves many sequences |
+| **Batching** (continuous batching, post 05) | Raises intensity: one weight read serves many sequences |
+| **Speculative decoding** | The number of memory-bound steps: a small draft model proposes several tokens, and the big model checks them all in one forward pass |
 
 ### How is the latency per token related to sequence length?
 
@@ -141,7 +146,7 @@ The attention variant decides how many KV heads there are, and so how big the ca
 | --- | --- | --- |
 | **Grow by concatenation** (the classic Hugging Face `past_key_values`) | One `(K, V)` pair per layer. Every step does `torch.cat` along the sequence axis | Allocates a new buffer and copies the whole cache every step. Fragments memory |
 | **Preallocated static cache** | A fixed `[batch, kv_heads, max_seq_len, head_dim]` buffer per layer. New K/V are written in place | No copies, fixed shapes (good for `torch.compile` and CUDA graphs), but it reserves memory for `max_seq_len` even if it is never used |
-| **Paged** (vLLM PagedAttention) | The cache is split into fixed-size blocks, for example 16 tokens each. A per-sequence block table maps logical blocks to physical ones anywhere in memory | Almost no fragmentation, and sequences can share blocks |
+| **Paged** (vLLM PagedAttention) | The cache is split into fixed-size blocks, for example 16 tokens each. A per-sequence block table maps logical blocks to physical ones anywhere in memory | Almost no fragmentation, and sequences can share blocks. Post 05 looks at it in depth |
 
 ![Left: growing by concatenation allocates a new, larger buffer every step and copies the old cache into it. Right: a static cache reserves the maximum length once and writes each new token in place](/llm-inference-optimization/kv-storage.svg)
 
@@ -226,8 +231,8 @@ Per token that is 512 KiB for Llama-2-7B and 128 KiB for Llama-3-8B. Both grow l
 
 ![The engine owns a pool of free KV blocks. A request takes blocks for its prompt at prefill and one more each time its generation fills a block. When it ends, all its blocks go back to the pool automatically. If the pool is empty, new requests wait or a running request is preempted](/llm-inference-optimization/kv-lifecycle.svg)
 
-- With **PagedAttention**, blocks are small and need not be contiguous, so the cache is allocated on demand instead of reserving the maximum length up front. The vLLM paper measured that earlier systems used only about 20–38% of their KV memory for real token states.
-- If the pool runs out, the scheduler stops admitting new requests and, if needed, **preempts** a running one: it swaps that request's blocks to CPU memory, or drops them and recomputes the prefill later.
+- With **PagedAttention**, blocks are small and need not be contiguous, so the cache is allocated on demand instead of reserving the maximum length up front.
+- If the pool runs out, the scheduler stops admitting new requests and, if needed, **preempts** a running one, which frees its blocks and recomputes it later. Post 05 follows this pool in detail.
 - In your own code with a Hugging Face model, the cache lives inside the `past_key_values` object, so it is freed when you drop the reference (and call `torch.cuda.empty_cache()` only if you need the memory back for another process).
 
 ## FlashAttention's low-level implementation and limitations
@@ -353,11 +358,7 @@ Decode still reads the whole KV cache from HBM, so it stays memory-bound. FlashA
 
 ## Quantization and other model compression techniques
 
-Quantization stores numbers with fewer bits. For a 7B-parameter model:
-
-![Weight memory of a 7 billion parameter model: 28 GB in FP32, 14 GB in FP16 or BF16, 7 GB in INT8 and 3.5 GB in INT4. A 24 GB GPU can hold the FP16, INT8 and INT4 versions but not the FP32 one](/llm-nn-fundamentals/dtype-memory.svg)
-
-Because decoding is memory-bound, fewer bytes per weight means faster tokens as well as smaller models.
+Quantization stores numbers with fewer bits. The weights of a 7B-parameter model take 28 GB in FP32, 14 GB in FP16, 7 GB in INT8 and 3.5 GB in INT4 (the chart in post 02). Because decoding is memory-bound, fewer bytes per weight means faster tokens as well as smaller models.
 
 ### What are the principles of INT8 / FP16 / GPTQ? Which ones impact precision?
 
@@ -375,6 +376,7 @@ BF16:  same 8 exponent bits as FP32 (range up to 3.4 × 10³⁸), only 7 mantiss
 
 - Floats are spaced **logarithmically**: small numbers are represented very finely and big ones coarsely. That suits weights and activations, which span a wide range.
 - Neural networks tolerate the lost digits well. FP16 can overflow because of its small range, which is why BF16 is often preferred.
+- **FP8** goes further on Hopper and Ada GPUs. E4M3 (4 exponent bits, 3 mantissa bits, a maximum of 448) is used for weights and activations, and E5M2 (more range, up to 57,344) mostly for gradients.
 
 **INT8 (8-bit integers).** An integer grid is spaced **evenly**, so we need a **scale** to map real values onto it. There are two schemes:
 
@@ -398,7 +400,9 @@ def quantize_int8(x):
 ```
 
 - The scale can be per tensor, per output channel, or per **group** of weights (say 128 values). Finer scales cost a little memory but track the range better.
-- **Outliers** are the real enemy. One huge value inflates `α`, which inflates `s`, and every other value loses resolution. Per-channel scales, outlier handling and smoothing methods exist to deal with this. Activations have more outliers than weights, so quantizing both (W8A8) is harder than quantizing only the weights.
+- **Outliers** are the real enemy. One huge value inflates `α`, which inflates `s`, and every other value loses resolution. Activations have more outliers than weights, so quantizing both (W8A8) is harder than quantizing only the weights. Two well-known fixes:
+    - **SmoothQuant** divides each activation channel by a factor and multiplies the matching weights by the same factor. The product is unchanged, but the outliers move from the activations into the weights, which handle them better.
+    - **AWQ** (activation-aware weight quantization) finds the small share of weight channels that matter most, judged by the size of their activations, and scales them up before quantizing so that they keep more precision.
 
 **GPTQ (post-training weight quantization).** GPTQ (**G**enerative **P**re-trained **T**ransformer **Q**uantization) compresses the weights of a finished model to 4 or 3 bits **without retraining**. Rounding each weight independently adds error. GPTQ rounds the weights of a layer **one column at a time** and pushes each column's rounding error onto the columns that are still in full precision, so the layer's **output** stays close to the original:
 
@@ -539,10 +543,99 @@ The strategies, in order of how often they are used:
 | **Look-up tables with clipping** | Used on some edge accelerators for `exp`, with careful input scaling |
 | **QAT** | Trains the model to tolerate the quantization noise, though sensitive operations still keep higher internal precision |
 
-## Key takeaways
+## Summary
 
-- Decoding is **memory-bound**. Per-token speed is roughly `bytes moved ÷ bandwidth`: the weights (a constant) plus the KV cache (which grows with context and batch).
-- The **KV cache** trades memory for compute: it stores `2 × L × B × H_kv × T × d × bytes`, grows linearly with the context, and is managed automatically. **Paging**, prefix sharing, GQA/MQA and KV quantization all shrink or share it.
-- **FlashAttention** computes exact attention with tiling, fusion and an online softmax. It avoids the `N × N` matrix, so extra memory drops from `O(N²)` to `O(N)`, and it helps training, prefill and (with Flash-Decoding) decode.
-- **Quantization** stores weights in fewer bits: formats spend bits on range or precision, integers need a scale, **GPTQ** compensates rounding error layer by layer, and QAT with the straight-through estimator is how quantization enters training.
-- On the GPU, low-precision **Tensor Core** matmuls accumulate in higher precision, and numerically sensitive operations (**LayerNorm**, **softmax**) stay in FP32 inside fused kernels.
+Decoding is memory-bound. Each step streams the weights and the KV cache from HBM, so the time per token is roughly the bytes moved divided by the bandwidth, and every optimisation here moves fewer bytes or reuses them more. The KV cache stores every earlier token's keys and values (`2 × L × B × H_kv × T × d × b` bytes) so that each step computes only the new token. It grows linearly with the context and the batch, and GQA, MQA, paging and lower precision shrink it. FlashAttention computes exact attention in tiles held in SRAM, with an online softmax, and never materialises the `N × N` matrix, which helps training, prefill and, with Flash-Decoding, decode. Quantization trades bits for memory and speed: floats spend their bits on range and precision, integers need a scale, GPTQ compensates for rounding error, and QAT trains through fake quantization with the straight-through estimator. On the GPU, low-precision Tensor Core matmuls accumulate in higher precision, while LayerNorm and softmax stay in FP32.
+
+![A map of post 04 in four columns. The bottleneck: decoding is memory-bound, the roofline ridge is about 156 FLOPs per byte, per-token time is bytes divided by bandwidth, and batching raises reuse. The KV cache: its size formula, fewer heads with GQA and MQA, paging and prefix sharing, and prefill versus decode. FlashAttention: tiles in SRAM, a fused kernel, online softmax and linear extra memory. Quantization: number formats, scales and zero points, GPTQ and QAT, and FP32 softmax and norms](/llm-inference-optimization/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Memory-bound decode** | Each token streams all the weights from HBM | Bandwidth, not FLOPs, sets the speed |
+| **Roofline** | Speed = min(peak, bandwidth × intensity) | Decode at batch 1 uses about 0.6% of an A100 |
+| **Per-token latency** | `(W_bytes + B × T × c_kv) ÷ BW` | Linear in the context length |
+| **KV cache shape** | `[batch, kv_heads, seq_len, head_dim]` per layer, for both K and V | What is stored, and how it grows |
+| **MHA, GQA, MQA** | How many KV heads the query heads share | Cache size 1×, ¼× or ⅛× |
+| **Storage strategies** | Concatenate, preallocate, or page | Copies, reservation, or almost no waste |
+| **Prefill and decode** | One matrix-matrix pass, then one vector-matrix pass per token | Compute-bound, then memory-bound |
+| **Prefix caching** | Requests with the same prefix share KV blocks | A shorter time to first token |
+| **KV size formula** | `2 × L × B × H_kv × T × d × b` | 2 GiB for Llama-2-7B at 4,096 tokens |
+| **FlashAttention** | Tiling, fusion and an online softmax in SRAM | Exact attention without the N × N matrix |
+| **Online softmax** | A running max and sum, rescaled for every tile | An exact softmax across tiles |
+| **FlashAttention v1 and v2** | The loop order, parallelism over the sequence, fewer non-matmul FLOPs | v2 is about twice as fast |
+| **Number formats** | FP32, BF16, FP16, FP8, INT8, INT4 | Range against precision against bytes |
+| **INT8 quantization** | A scale, and for asymmetric ranges a zero point | Rounding error of at most `s ÷ 2` |
+| **Outliers** | One large value stretches the scale for everyone | Why SmoothQuant and AWQ exist |
+| **GPTQ** | Round column by column, and compensate with the inverse Hessian | 4-bit weights without retraining |
+| **QAT and the STE** | Fake quantization, gradients passed straight through | Training a model to survive quantization |
+| **Tensor Cores** | `D = A × B + C` with low-precision inputs | Fast matmuls with higher-precision accumulation |
+| **Safe softmax and FP32 norms** | Subtract the max; compute the statistics in FP32 | No overflow in low precision |
+
+### Test yourself
+
+<details>
+<summary>Why does decoding at batch size 1 leave an A100 almost idle?</summary>
+
+Each FP16 weight (2 bytes) is read once for one multiply-add (2 FLOPs), an intensity of about 1 FLOP per byte, far below the ridge point of about 156. The arithmetic units wait for memory.
+
+</details>
+
+<details>
+<summary>Roughly how long does one decode step of a 7B FP16 model take on a 2 TB/s GPU, ignoring the KV cache?</summary>
+
+14 GB ÷ 2 TB/s ≈ 7 ms, so at most about 140 tokens per second for a single sequence.
+
+</details>
+
+<details>
+<summary>How large is the KV cache of Llama-2-7B at 4,096 tokens and batch size 1?</summary>
+
+`2 × 32 layers × 1 × 32 KV heads × 4,096 × 128 × 2 bytes = 2 GiB`, or 512 KiB per token.
+
+</details>
+
+<details>
+<summary>Why does grouped-query attention shrink the cache?</summary>
+
+Fewer KV heads are stored. Llama-3-8B keeps 8 KV heads for its 32 query heads, so its cache is a quarter of the multi-head size.
+
+</details>
+
+<details>
+<summary>What does the KV cache change in the cost of one decode step?</summary>
+
+Only the new token's keys, values and MLP are computed, `O(d²)` instead of `O(T · d²)`, and attention becomes one row of scores against the cached keys.
+
+</details>
+
+<details>
+<summary>What does FlashAttention never write to HBM?</summary>
+
+The N × N score and probability matrices. It writes only the output and one log-sum-exp value per row.
+
+</details>
+
+<details>
+<summary>In the online softmax, what happens when a new tile raises the running maximum?</summary>
+
+The old running sum and the output accumulator are multiplied by `e^(m_old − m_new)` before the new tile's terms are added, so the result stays exact.
+
+</details>
+
+<details>
+<summary>Quantize 0.347 to symmetric INT8 with a scale of 0.01.</summary>
+
+`q = round(0.347 ÷ 0.01) = round(34.7) = 35`, which dequantizes to 0.35, an error of 0.003, below the bound of `s ÷ 2 = 0.005`.
+
+</details>
+
+<details>
+<summary>Why is softmax computed in FP32, even in an INT8 model?</summary>
+
+Exponentials overflow low-precision formats quickly (`e^12` is already above FP16's maximum of 65,504). Subtracting the maximum first and accumulating in FP32 keeps it stable.
+
+</details>
+
+Next in the series: [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05).

@@ -13,8 +13,19 @@ The first post stayed on the Python side of things. This one moves to the neural
 2. **02 · Neural Network Fundamentals** (this post)
 3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
 4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
 
 </Callout>
+
+The second post covers four topics:
+
+- What are the basic components of a neural network?
+- How does a model run during inference?
+- Do the optimizer and gradients matter for inference?
+- Memory usage and VRAM allocation during inference
 
 ## What are the basic components of a neural network?
 
@@ -145,13 +156,7 @@ y = model(x)              # now the computation can run on the GPU
 ```
 
 - **Explicit control.** Individual tensors move with `.to(device)` or its alias `.cuda()`. For a `torch.nn.Module`, `module.to(device)` moves all the module's parameters and buffers (such as batch normalization's running statistics).
-- **Placement in more advanced setups.** Large-scale training can move parameters dynamically, partially, or through a distributed framework:
-
-| Technique | What happens to the parameters |
-| --- | --- |
-| **Data parallelism** (`DataParallel`, `DistributedDataParallel`) | The model is replicated on several GPUs, each replica holds its parameters on its own GPU, and each GPU processes a batch of data in parallel |
-| **Model parallelism and CPU offloading** | For models too big for one GPU, layers are sharded across GPUs, or less-used layers sit in CPU memory. Parameters are loaded onto the active GPU only as needed and moved back and forth |
-| **ZeRO** (part of DeepSpeed) | Partitions the model state (optimizer states, gradients and parameters) across devices, so no single GPU holds everything at once, which cuts the memory footprint |
+- **Placement in more advanced setups.** Not every parameter has to sit on the GPU all the time. The multi-GPU strategies from post 01 (data, tensor and pipeline parallelism, and sharding with ZeRO or FSDP) spread parameters across GPUs. **Offloading** goes one step further: parameters that aren't needed yet wait in CPU memory and are copied to the GPU just before their layer runs. Hugging Face's `device_map="auto"` does this when a model doesn't fit, trading speed for memory.
 
 #### Can multiple models share parameters?
 
@@ -229,11 +234,9 @@ When a linear layer is defined and run on a GPU, PyTorch, TensorFlow and JAX aut
 - **Not necessarily** for every numerical computation. Conceptually, distinct operations can map to individual GPU kernel calls, but modern frameworks use optimisation techniques to cut overhead and maximise parallelism.
 - Launching a GPU kernel from the CPU has a cost. It includes CPU-GPU communication (copying parameters, setting up launch configurations), kernel enqueueing, and synchronisation if later operations depend on this kernel finishing.
 - For a sequence of many small operations, the launch overhead adds up and can become a significant bottleneck, especially for memory-bound work.
-- To reduce it, frameworks often use **kernel fusion**.
-    - Kernel fusion combines several consecutive, compatible operations into one larger custom kernel.
-        - This reduces the number of kernel launches, which cuts overhead and improves memory access patterns.
-        - Instead of writing intermediate results to global GPU memory and reading them back for the next operation, a fused kernel can keep the data in faster on-chip memory (registers, shared memory).
-- Advanced deep learning compilers and runtime libraries perform kernel fusion and other graph optimisations automatically.
+- There are two ways to cut that overhead:
+    - **Kernel fusion** merges consecutive operations into one kernel (next question).
+    - **CUDA graphs** record a whole sequence of kernel launches once, then replay it with a single launch. The kernels stay separate, but the CPU cost of launching them almost disappears. vLLM captures CUDA graphs for its decode steps, where every kernel is tiny and launch overhead would otherwise dominate.
 
 ![Three small kernels leave idle gaps between launches while the CPU submits the next one. A single fused kernel runs with one launch and no gaps](/llm-nn-fundamentals/kernel-launch-gaps.svg)
 
@@ -279,8 +282,7 @@ print(c.stride(), c.is_contiguous())    # (2, 1) True
 
 #### Why perform layer fusion?
 
-- It is a fundamental optimisation in deep learning inference and training, aimed mainly at improving computational efficiency on specialised hardware such as GPUs.
-- It combines several consecutive elementary operations (or "layers") into one consolidated kernel. Common examples fuse element-wise operations (activation functions, additions, multiplications) with a preceding convolution or matrix multiplication layer.
+The previous answers showed what fusion does. Here are the reasons for it, side by side:
 
 | Motivation | Why it helps |
 | --- | --- |
@@ -313,7 +315,7 @@ Two common layouts for 4D image tensors:
 
 Advanced buffer management techniques:
 
-- **Tiling and blocking.** For operations like matrix multiplication or convolution, the input activations, weights and output activations are broken into small tiles. The tiles are loaded into faster shared memory, computed on, and written back to global memory. This maximises data reuse and minimises high-latency global memory access.
+- **Tiling and blocking.** The same tiling as in the matrix multiplication above: activations are processed in tiles that fit in shared memory.
 - **Buffer reuse and in-place operations.** Frameworks reuse existing buffers for intermediate results where possible, instead of allocating new ones. In-place operations (such as `relu_(x)` in PyTorch) modify the buffer directly, which reduces memory traffic and allocations.
 - **Quantization.** Storing activations at lower precision (FP16, INT8) cuts the memory footprint a lot, lets more data fit in faster caches and lowers bandwidth needs. It is a common inference optimisation on specialised hardware.
 - **Dynamic paging and virtual memory.** For extremely large models, researchers are exploring techniques where only the active parts of the model (including activations) stay in GPU memory, like CPU virtual memory, to handle models larger than the GPU's VRAM.
@@ -466,11 +468,9 @@ Only the parameters stay fixed. Everything else grows with the batch size B, so 
 
 #### Training needs optimizer states. Does inference?
 
-- **No.** Inference uses a pre-trained, fixed model to make predictions or generate outputs for new, unseen data.
-- Since inference is just a forward pass through a static network, the machinery for parameter updates (gradients and optimizer states) isn't needed, so **no memory is allocated for it**.
-    - This cuts the memory footprint a lot. An Adam optimizer typically stores two extra tensors (the moment vectors) per trainable parameter. Depending on precision (for example FP32 parameters with FP32 states, or FP16 parameters with FP32 states), switching from training to inference can save the equivalent of 2× to 4× the parameter memory.
+- **No.** Inference is a forward pass through fixed weights, so the machinery for updating them (gradients and optimizer states) is never allocated. The table in the optimizer section above shows the saving: 16 bytes per parameter for AdamW training, against 2 for FP16 inference.
 - In specialised settings where models keep adapting (certain online learning systems, meta-learning), a model may do an "inference" step immediately followed by a "micro-training" step. Then a minimal set of optimizer states may be kept or re-initialised. This departs from the conventional meaning of static inference.
-- Optimizer states are different from **recurrent states** or **attention key/value caches** in sequential models. Those belong to the model's architectural design, keeping context across time steps or tokens during inference, and have nothing to do with optimization.
+- Optimizer states are different from **recurrent states** or **attention key/value caches** in sequential models. Those belong to the model's architectural design, keeping context across time steps or tokens during inference, and have nothing to do with optimization. For LLMs the KV cache is the big one, and post 04 is about it.
 
 ![Training in FP32 with Adam needs about four times the parameter memory plus activations, while inference needs the weights plus a small working set](/llm-nn-fundamentals/memory-train-vs-inference.svg)
 
@@ -511,6 +511,12 @@ peak = torch.cuda.max_memory_allocated()           # the highest allocation seen
 print(f"weights: {base / 1e9:.2f} GB, peak: {peak / 1e9:.2f} GB")
 ```
 
+<Callout type="info" title="For LLMs, add the KV cache">
+
+Generating text adds one more big category: the **KV cache**, which grows with every token of every sequence in the batch. For long prompts it can outgrow the weights. Post 04 shows how to size it.
+
+</Callout>
+
 #### Can torch.compile or torch.no_grad save memory?
 
 | | `torch.no_grad()` | `torch.compile` |
@@ -534,11 +540,20 @@ fast_model = torch.compile(model)     # may fuse kernels: faster, and sometimes 
 #### Can temporary intermediate tensors be freed early?
 
 - It depends on whether the intermediate tensors are still needed for later computation, particularly for gradient calculation during training.
-- **During inference:** there is no need to store intermediate activations. `torch.no_grad()` tells the framework explicitly not to build a computational graph for gradients.
-- **During training:** techniques like **activation checkpointing** let certain intermediate tensors be freed early even during training. The activations are recomputed during the backward pass instead of being stored, trading computation for memory.
-- Understanding and using these mechanisms is vital for deploying large models, tuning batch sizes and avoiding VRAM out-of-memory errors. Freeing memory early leaves more VRAM for larger models, bigger batch sizes, or running several models at once.
+- **During inference:** with `torch.no_grad()` (above), each intermediate tensor is freed as soon as the next layer has used it.
+- **During training:** **activation checkpointing** frees most activations during the forward pass and recomputes them during the backward pass, trading computation for memory. Splitting an `n`-layer network into segments of about `√n` layers and keeping only the segment boundaries cuts activation memory from `O(n)` to about `O(√n)`, for roughly one extra forward pass.
 
 ![Storing all 8 activations of an 8-layer network versus keeping a checkpoint every second layer and recomputing the freed ones during the backward pass](/llm-nn-fundamentals/activation-checkpointing.svg)
+
+```python
+from torch.utils.checkpoint import checkpoint
+
+
+def forward(self, x):
+    for block in self.blocks:
+        x = checkpoint(block, x, use_reentrant=False)   # keep only x, recompute inside block on backward
+    return x
+```
 
 ### How is VRAM managed for multiple models and users on the same GPU?
 
@@ -550,7 +565,7 @@ fast_model = torch.compile(model)     # may fuse kernels: faster, and sometimes 
 
 Practical implications and controls:
 
-- **Disable gradient tracking.** Use `torch.no_grad()` or `torch.inference_mode()` during inference or whenever gradients aren't needed. This stops the autograd graph being built and cuts memory use a lot by not keeping intermediate activations.
+- **Disable gradient tracking** with `torch.no_grad()` or `torch.inference_mode()`, as above, so that the graph doesn't keep activations alive.
 - **Detach tensors.** `tensor.detach()` creates a new tensor that shares the same data but is completely removed from the current computation graph. It is useful to stop gradients flowing back through part of the graph, or to save memory on intermediate results you don't need for backpropagation.
 - **Delete explicitly.** Setting a variable to `None`, or using `del` on a tensor, reduces its reference count, so Python can reclaim the memory earlier, provided nothing else references it.
 
@@ -573,37 +588,123 @@ How it shows up:
 - The most common symptom is an **OOM error even when `nvidia-smi` (or an equivalent) shows plenty of "free" VRAM.** That free VRAM just isn't contiguous enough for the next large allocation.
 - Allocators may also spend more time searching for suitable blocks, which can hurt performance, though OOM is the more critical problem.
 
+<Callout type="tip" title="Two ways around it">
+
+Setting `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` lets PyTorch's allocator grow its memory segments instead of reserving new fixed-size ones, which reduces fragmentation when tensor sizes keep changing. LLM engines avoid the problem at the root by allocating the KV cache as one pool of equal-sized blocks, the subject of post 05.
+
+</Callout>
+
 #### How do you manually free memory (del, torch.cuda.empty_cache()) for actual release?
 
-This involves two layers: Python's garbage collection of tensor objects, and PyTorch's CUDA memory cache management.
+It takes two steps, because there are two layers. Python's reference counting decides when a tensor dies, and PyTorch's caching allocator (post 01) decides when its memory goes back to the driver.
 
-- **Mechanism 1.** The `del` keyword decrements an object's reference count. When a PyTorch tensor's count reaches zero, Python reclaims it, and for a GPU tensor the underlying CUDA memory block becomes eligible to be freed.
-- **Mechanism 2.** When a tensor's memory is deallocated, the block is *not* immediately returned to the OS. PyTorch's allocator keeps it in a specialised cache for future tensor allocations, which reduces the overhead of frequent `cudaMalloc` and `cudaFree` calls.
-
-To make sure VRAM is truly released and available to other models, users or processes, follow this sequence:
-
-1. Drop every reference to tensors you no longer need, using `del` or by letting them go out of scope. This tells Python's garbage collector that the memory isn't needed any more.
-2. Then call `torch.cuda.empty_cache()`, which makes PyTorch's allocator give the now-unused cached blocks back to the underlying CUDA driver.
+1. **Drop every reference** to the tensors you no longer need, with `del` or by letting them go out of scope. The block returns to PyTorch's cache, ready for the next tensor in *this* process.
+2. **Call `torch.cuda.empty_cache()`** to hand the unused cached blocks back to the CUDA driver, so that *other* processes can use them.
 
 ```python
 del big_tensor            # drop the last reference: the block returns to PyTorch's cache
 torch.cuda.empty_cache()  # now hand the cached, unused blocks back to the CUDA driver
 ```
 
-<Callout type="tip" title="allocated versus reserved">
-
-`torch.cuda.memory_allocated()` counts memory used by live tensors, while `torch.cuda.memory_reserved()` also counts cached blocks that PyTorch is holding. After `del`, the first number drops straight away, and the second only drops after `empty_cache()`.
-
-</Callout>
-
 ![Three snapshots of PyTorch's CUDA memory pool: after del, memory_allocated drops but memory_reserved stays the same, and only empty_cache lowers memory_reserved](/llm-nn-fundamentals/allocated-reserved.svg)
 
-## Key takeaways
+When several models or users share one GPU, two more facts matter:
 
-- A network is **layers of weights and biases plus activation functions**. Training adds a **loss, gradients and an optimizer**, and inference needs only the forward pass.
-- Parameters are **tensors on a device**. Operations need all their tensors on the same device, and strides let PyTorch reshape views without copying.
-- On the GPU, a Linear layer is a **tiled matrix multiplication**, and **kernel fusion** keeps intermediate results out of slow global memory.
-- Training needs roughly **2–4× the parameter memory** for gradients and optimizer state. Inference skips all of that, and `torch.no_grad()` removes the autograd graph.
-- VRAM use is **weights + batch-size-scaled inputs and activations + overhead**, and **fragmentation** can cause OOM even when total free memory looks sufficient.
+- **A memory cap per process.** `torch.cuda.set_per_process_memory_fraction(0.5)` makes this process's allocator raise an out-of-memory error rather than take more than half of the GPU.
+- **The CUDA context is per process.** Every process that touches CUDA holds its own context, a few hundred megabytes that `empty_cache()` can't release. Only ending the process gives it back.
+
+## Summary
+
+A network is layers of weights and biases with non-linear activations between them, and training adds a loss, gradients and an optimizer on top of the forward pass. Parameters are tensors with a shape, strides, a dtype and a device, and every tensor in an operation must be on the same device. On the GPU, a Linear layer is a tiled matrix multiplication, and fusion and CUDA graphs cut the cost of many small kernels. Training with AdamW needs about 16 bytes per parameter, while FP16 inference needs 2, and `torch.no_grad()` drops the autograd graph. VRAM holds the weights, plus inputs and activations that grow with the batch, plus overhead, and fragmentation can cause an out-of-memory error even when the total free memory looks sufficient.
+
+![A map of post 02 in four columns. Building blocks: layers of neurons, weights and biases, non-linear activations, and the loss that training adds. Parameters: tensors on a device, bytes per element, one device per operation, and weight tying. On the GPU: a Linear layer is a tiled matmul, launch overhead, fusion and CUDA graphs, and the memory hierarchy. Memory: AdamW needs 16 bytes per parameter, FP16 inference 2, no_grad drops the graph, and fragmentation causes out-of-memory errors](/llm-nn-fundamentals/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Neuron and layer** | A weighted sum, a bias and an activation, arranged in layers | The building block of every model |
+| **Parameters and hyperparameters** | Learned weights, and the fixed design choices around them | What training changes, and what you choose |
+| **Forward pass and training** | Inference is the forward pass; training adds a loss, gradients and an optimizer | Why inference is so much cheaper |
+| **Tensor** | Shape, strides, dtype and device, pointing at a block of storage | How parameters live in memory |
+| **Bytes per element** | 4 for FP32, 2 for FP16 and BF16, 1 for INT8 | Model memory = parameters × bytes |
+| **Same-device rule** | Every tensor in an operation must be on one device | The most common beginner error |
+| **Weight tying** | Two layers share one `Parameter` | Fewer parameters and consistent embeddings |
+| **Linear = matmul** | `Y = X·Wᵀ + B`, tiled across thread blocks | Where almost all the FLOPs are |
+| **Kernel launch overhead** | Each kernel costs CPU time to launch | Many small kernels leave the GPU idle |
+| **Fusion and CUDA graphs** | Merge kernels, or replay recorded launches | Fewer trips to memory and fewer launches |
+| **Memory hierarchy** | Registers, shared memory, L2, HBM, host RAM | Fast memory is tiny, and big memory is slow |
+| **Row-major and strides** | Views change the strides; `.contiguous()` copies | The layout decides how fast data is read |
+| **Eval mode** | Dropout off, batch norm on its running statistics | Deterministic inference |
+| **AdamW state** | Two moments per parameter | 16 bytes per parameter to train, against 2 to serve |
+| **`no_grad` and `inference_mode`** | No autograd graph | Activations are freed straight away |
+| **Activation checkpointing** | Recompute activations instead of storing them | Training memory from `O(n)` to about `O(√n)` |
+| **VRAM estimate** | Weights + batch × (inputs + activations) + overhead | Predicting an out-of-memory error before it happens |
+| **Caching and fragmentation** | Freed blocks stay reserved; free memory can be too scattered | Why OOM happens with "free" memory |
+
+### Test yourself
+
+<details>
+<summary>How many parameters does nn.Linear(4, 8) have?</summary>
+
+A weight matrix of 8 × 4 = 32 values, plus 8 biases: 40 in total.
+
+</details>
+
+<details>
+<summary>What does training need that inference doesn't?</summary>
+
+Target labels, a loss function, gradients from backpropagation, an optimizer with its state, and a learning rate.
+
+</details>
+
+<details>
+<summary>How much memory do the weights of a 7-billion-parameter model take in FP16?</summary>
+
+7 × 10⁹ × 2 bytes ≈ 14 GB, before activations or anything else.
+
+</details>
+
+<details>
+<summary>What happens if you multiply a CPU tensor by a GPU tensor?</summary>
+
+A `RuntimeError`: every tensor in an operation must be on the same device, so move both with `.to("cuda")` first.
+
+</details>
+
+<details>
+<summary>Why does x.t() cost nothing, while x.t().contiguous() makes a copy?</summary>
+
+The transpose only swaps the strides, creating a view of the same data. `.contiguous()` rearranges the data physically into row-major order.
+
+</details>
+
+<details>
+<summary>Why are many small kernels slow even when each one is fast?</summary>
+
+Each launch costs CPU time, and each kernel writes its result to HBM for the next one to read back. Fusion removes the round trips, and CUDA graphs remove most of the launch cost.
+
+</details>
+
+<details>
+<summary>Where do the 16 bytes per parameter of AdamW mixed-precision training come from?</summary>
+
+2 for the FP16 weights, 2 for the gradients, 4 for the FP32 master copy, and 4 each for the two moments.
+
+</details>
+
+<details>
+<summary>What does torch.no_grad() save, and what does model.eval() change?</summary>
+
+`no_grad()` skips the autograd graph, so activations aren't kept for a backward pass. `eval()` turns dropout off and makes batch norm use its running statistics. Inference normally uses both.
+
+</details>
+
+<details>
+<summary>Why can an out-of-memory error happen when nvidia-smi shows free memory?</summary>
+
+Fragmentation: the free memory is split into pieces that are each too small for the block being requested, even though together they would be enough.
+
+</details>
 
 Next in the series: [03 · Transformer Architecture Principles](/blog/mentiforce03).

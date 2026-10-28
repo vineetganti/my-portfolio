@@ -13,8 +13,19 @@ The first two posts covered Python internals and neural network fundamentals. Th
 2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
 3. **03 · Transformer Architecture Principles** (this post)
 4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
 
 </Callout>
+
+The third post covers four topics:
+
+- Transformer model basics, from raw text to a prediction
+- Why use Transformers?
+- The core essence of attention
+- Positional encoding methods
 
 ![The pipeline from raw text through a tokenizer, token IDs and an embedding lookup into a stack of Transformer blocks, then a task head for text generation, classification or embeddings](/llm-transformer-basics/transformer-pipeline.svg)
 
@@ -102,14 +113,9 @@ vecs = emb(ids)                      # picks rows 15, 2201 and 7: shape (1, 3, 7
 
 #### How are position encodings added (absolute, relative, rotary)?
 
-- Position encodings are crucial for Transformers to understand the order and relative positions of tokens, because the self-attention mechanism is **permutation-invariant**.
-- They inject information about the absolute or relative position of each token into the input embeddings, so the model can use sequential information.
-
-| Type | What it does | Trade-off |
-| --- | --- | --- |
-| **Absolute** | Gives the model a direct indicator of each token's position in the sequence | Simple, but less effective at generalising to sequence lengths it hasn't seen |
-| **Relative** | Focuses on the pairwise distance or relationship between tokens. It changes the attention mechanism to include relative position, for example by adding biases to the attention scores (the logits) | Better generalisation, but more complex to integrate |
-| **Rotary (RoPE)** | Encodes absolute position with a rotation matrix, so that the self-attention dot products naturally yield relative position | Robust extrapolation, and it has become a state-of-the-art method |
+- Self-attention is **permutation-invariant**: on its own, it can't tell the order of the tokens, so position has to be added somewhere. The [last section of this post](#positional-encoding-methods) explains why, and compares the methods.
+- **Absolute** encodings are added to the embeddings right here, before the first block: `x_i = embedding(token_i) + p_i`, where `p_i` is a fixed (sinusoidal) or learned vector for position `i`.
+- **Relative** encodings (RoPE, ALiBi, T5's bias) are applied inside every attention layer instead, to the queries and keys or to the attention scores. Most modern LLMs use RoPE.
 
 ### Transformer Stack
 
@@ -129,6 +135,29 @@ vecs = emb(ids)                      # picks rows 15, 2201 and 7: shape (1, 3, 7
 The order above, with layer norm after each residual addition, is the layout of the original Transformer. Many modern LLMs normalise *before* each sub-layer instead, which tends to make very deep models easier to train.
 
 </Callout>
+
+#### What does a modern LLM block change, and where are its parameters?
+
+Llama-style decoders keep the same skeleton, with a few upgrades:
+
+| Part | Original Transformer (2017) | A modern decoder (Llama-style) |
+| --- | --- | --- |
+| **Normalization** | LayerNorm after each sub-layer (post-norm) | RMSNorm before each sub-layer (pre-norm) |
+| **Feed-forward network** | Two linear layers with ReLU, hidden size 4d | SwiGLU: three linear layers with a gated SiLU, hidden size about 2.7d |
+| **Position** | Sinusoidal, added to the embeddings | RoPE, applied to the queries and keys in every layer |
+| **Attention heads** | Multi-head attention | Grouped-query attention in newer models, for a smaller KV cache (post 04) |
+| **Biases** | In every linear layer | Usually none |
+
+A block of model width `d` holds about `12 d²` parameters: `4 d²` in the attention projections (Q, K, V and the output) and about `8 d²` in the feed-forward network. That gives a handy rule of thumb:
+
+```text
+parameters ≈ 12 × L × d²  +  embeddings
+
+Llama-2-7B:  L = 32, d = 4,096   →   12 × 32 × 4,096² = 6.44 B
+             + input embedding and output head, 2 × 32,000 × 4,096 = 0.26 B   →   6.70 B   (actual 6.74 B)
+```
+
+![Llama-2-7B's 6.74 billion parameters: the feed-forward networks hold 4.33 billion (64%), attention projections 2.15 billion (32%), and the input embedding and output head 0.26 billion (4%). Each of the 32 layers has 67 million attention and 135 million feed-forward parameters](/llm-transformer-basics/param-breakdown.svg)
 
 #### How is masking applied differently in encoder-only, decoder-only, and encoder–decoder models?
 
@@ -198,6 +227,27 @@ probs = torch.softmax(logits, dim=0)          # about [0.638, 0.235, 0.095, 0.03
 
 greedy = torch.argmax(probs)                  # always the top token: index 0, "cat"
 sampled = torch.multinomial(probs, 1)         # one random draw, weighted by the probabilities
+```
+
+**Temperature, top-k and top-p** reshape the distribution before a token is sampled:
+
+```text
+p_i = e^(z_i / τ) ÷ Σ_j e^(z_j / τ)          τ < 1 sharpens, τ > 1 flattens, τ → 0 approaches greedy
+
+top-k:  keep only the k most likely tokens, renormalise, then sample
+top-p:  keep the smallest set of tokens whose probabilities add up to p (the "nucleus"), renormalise, then sample
+```
+
+![The logits for cat, dog, car and the turned into probabilities at three temperatures: at 0.5 the top token gets 86%, at 1 it gets 64%, and at 2 the distribution flattens to 45%, 27%, 17% and 10%. With top-p of 0.9 at temperature 1, only cat, dog and car are kept and renormalised](/llm-transformer-basics/temperature.svg)
+
+```python
+def sample(logits, temperature=1.0, top_p=0.9):
+    probs = torch.softmax(logits / temperature, dim=-1)
+    sorted_p, idx = probs.sort(descending=True)
+    keep = sorted_p.cumsum(-1) - sorted_p < top_p      # the tokens needed to reach top_p
+    sorted_p[~keep] = 0
+    choice = torch.multinomial(sorted_p / sorted_p.sum(), 1)
+    return idx[choice]
 ```
 
 #### How is detokenization applied for text outputs?
@@ -275,18 +325,8 @@ They differ in how they process sequential data, capture dependencies and scale 
 It comes from a combination of parallelisability, robust architectural components, and the evolution of hardware and distributed training methods.
 
 - **Parallelism in self-attention.** Self-attention processes all input tokens at the same time, which is fundamental to its scalability. It computes, for each output position, a weighted sum of all input values, with weights set by the similarity between queries and keys. This can be expressed entirely with matrix multiplications, which parallelise very well on modern accelerators. The feed-forward networks add to this, since the output of the attention sub-layer is processed independently per position.
-- **Components for deep, stable training:**
-    - **Residual (skip) connections** let information and gradients bypass one or more layers, creating direct paths for gradient flow.
-    - **Layer normalization** normalises the inputs across the features within each layer, for each training example. It stabilises the hidden activations, makes training less sensitive to initialisation, and allows higher learning rates, which is crucial for deep and wide networks.
-- **Hardware and distributed infrastructure.** The steady, exponential improvement in GPUs and TPUs supplies the raw computation for the huge number of matrix multiplications in large Transformers. Training models with hundreds of billions of parameters means spreading the model and the data over thousands of accelerators:
-
-| Parallelism | How the work is split |
-| --- | --- |
-| **Data parallelism** | Each device holds a full copy of the model but processes a different batch of data. Gradients are then aggregated across the devices |
-| **Model parallelism** | The model is partitioned across devices, each holding a portion of the model's layers, or part of a layer (for example by sharding the weights of a large linear layer) |
-| **Pipeline parallelism** | Different layers go to different devices, forming a pipeline. Batches are split into micro-batches to keep the pipeline full and the devices busy |
-
-![Data parallelism replicates the model and averages gradients, tensor parallelism splits a layer's weights, pipeline parallelism streams micro-batches through layer groups, and sharding gives each GPU a slice of the training state](/llm-python-internals/parallelism.svg)
+- **Components for deep, stable training:** the residual connections and layer normalization from the block above. Residuals give gradients a direct path through every layer, and normalization keeps the activations in a stable range, so very deep stacks still train.
+- **Hardware and distributed infrastructure.** GPUs and TPUs keep getting faster at exactly the matrix multiplications a Transformer is made of. A model with hundreds of billions of parameters is spread over thousands of them, using the strategies from post 01: data, tensor and pipeline parallelism, and sharding.
 
 - **Optimisation.** Adaptive optimizers with dynamic learning-rate schedules are crucial for navigating the complex loss landscapes of enormous models and ensuring stable convergence.
 - **Data-driven inductive bias.** A Transformer's ability to learn patterns from massive datasets lets it generalise effectively.
@@ -313,6 +353,14 @@ It comes from a combination of parallelisability, robust architectural component
 2. **Scale the scores.** The raw scores are divided by the square root of the key dimension, √d_k. This is crucial to stop the dot products growing too large, which can push the softmax into regions with extremely small gradients and make learning hard.
 3. **Apply softmax to get attention weights.** The scaled scores go through a softmax along the key dimension, which turns them into a probability distribution: the attention weights.
 4. **Compute the weighted sum of values (A against V).** The attention weights A are multiplied with the value matrix V. This takes a weighted sum of all the value vectors, where the weights are exactly the attention weights from the previous step, and gives a new, context-aware representation.
+
+All four steps in one line, with the shapes for one head:
+
+```text
+Attention(Q, K, V) = softmax( Q·Kᵀ / √d_k  +  M ) · V
+
+Q, K, V: (N, d_k)      Q·Kᵀ: (N, N)      M: the mask, 0 or −∞      output: (N, d_k)
+```
 
 ![The input X is projected into queries, keys and values, Q times K transpose gives an N by N score matrix, which is scaled, passed through softmax into attention weights, and used to take a weighted sum of the values](/llm-transformer-basics/attention-steps.svg)
 
@@ -361,6 +409,11 @@ Techniques like layer normalization are often applied to the logits or to interm
 - The outputs of the individual heads are **concatenated** into the final multi-head output, combining the different perspectives each head learned.
 - **The efficiency side.** It isn't the main semantic driver, but multi-head attention does help parallel computation. Each head can compute its output independently and at the same time, which is a big advantage for efficient use of modern GPUs and TPUs.
 
+```text
+head_i        = Attention( X·W_Q,i ,  X·W_K,i ,  X·W_V,i )          each W: (d, d / h)
+MultiHead(X)  = Concat(head_1, …, head_h) · W_O                     W_O: (d, d)
+```
+
 ![The input is projected into 8 heads of 64 dimensions, each head runs attention on its own, the outputs are concatenated back to 512 dimensions, and a final linear projection mixes them](/llm-transformer-basics/multi-head.svg)
 
 ## Positional Encoding Methods
@@ -381,12 +434,14 @@ Imagine a bag filled with the words of a sentence. A plain bag-of-words model on
 
 ### What is the essential difference between Sinusoidal and Learnable position encodings?
 
-First, their shared goal: to give the Transformer's attention mechanism a sense of token order.
-
-- The core Transformer architecture processes all tokens in parallel, so it has no sense of sequence. Without positional information, a word's meaning is treated as independent of its position in the sentence.
-- Positional encodings provide a unique vector for each position in the input sequence. It is added to the token embeddings before they go into the Transformer blocks.
+Both give each position its own vector, which is added to the token embedding before the first block. They differ in where that vector comes from.
 
 **Sinusoidal** encodings use fixed, predefined sine and cosine functions of different frequencies to generate a unique positional vector for each position. Each dimension of the encoding is a sinusoid with a different frequency and offset. This makes it easy for the model to learn to attend to relative positions.
+
+```text
+PE(pos, 2i)    = sin( pos ÷ 10000^(2i / d) )
+PE(pos, 2i+1)  = cos( pos ÷ 10000^(2i / d) )          low dimensions oscillate fast, high dimensions slowly
+```
 
 **Learnable** encodings treat positions as parameters learned during training, like word embeddings. Typically an embedding or lookup layer gives each possible position a unique, randomly initialised vector, which is then updated by backpropagation along with the rest of the model's parameters to optimise the task objective.
 
@@ -413,6 +468,15 @@ RoPE addresses the challenge of encoding **relative** positional information dir
 
 - **Core mechanism.** RoPE treats pairs of dimensions in the query and key vectors as complex numbers and applies a phase rotation determined by the token's absolute position. This makes the inner product, which forms the attention score, implicitly depend on the relative offset.
 
+```text
+for each pair of dimensions (2i, 2i+1), with θ_i = 10000^(−2i / d), a token at position m is rotated by m·θ_i:
+
+x'_2i    = x_2i · cos(m·θ_i) − x_2i+1 · sin(m·θ_i)
+x'_2i+1  = x_2i · sin(m·θ_i) + x_2i+1 · cos(m·θ_i)
+
+score(m, n) = RoPE(q, m) · RoPE(k, n)      depends only on q, k and the distance n − m
+```
+
 ![RoPE rotates the query and key by an angle proportional to their position, so a query at position 3 with a key at position 1, and a query at position 7 with a key at position 5, both have the same angle between them and the same dot product](/llm-transformer-basics/rope-rotation.svg)
 
 Advantages and the problems it solves:
@@ -431,13 +495,95 @@ Advantages and the problems it solves:
 | **ALiBi** (Attention with Linear Biases) | Biases the attention scores directly, using the relative distance between query and key tokens, so it needs no explicit positional embeddings. It applies a fixed, non-learnable bias to the attention logits before softmax, and the bias is linear in the relative distance | Excels at extrapolating to longer sequences, thanks to its simple, linear dependence on relative distance. It also saves computation by avoiding large positional embedding tables |
 | **T5's relative position bias** | Instead of adding positional embeddings to Q and K, T5 adds a **learnable scalar bias** to the attention logits. The bias is a function of the clamped relative distance, so the model can learn a preference for attending to tokens at certain relative distances, instead of relying on absolute positions | Focuses on relative relationships, which are often more critical for linguistic tasks. It is memory-efficient, needing no full positional embedding matrix, and generalises well to sequence lengths unseen in training, as long as the relative distances fall inside the clamped range |
 
-## Key takeaways
+## Summary
 
-- Text becomes **subword tokens, integer IDs, then embedding vectors**. Special tokens and attention masks handle structure and padding.
-- Each Transformer block is **attention, residual and norm, FFN, residual and norm**. Masks decide which tokens can see which: encoder-only sees everything, decoder-only sees only the past, and encoder-decoder adds cross-attention.
-- A **task head** turns the final hidden states into what you need: logits and a decoding strategy for generation, a `[CLS]` classifier for labels, or the hidden states themselves for embeddings.
-- Transformers win because **attention connects every token directly and in parallel**. The price is O(N²) memory and compute in sequence length.
-- Attention is **Q·Kᵀ, scale, softmax, then weights times V**, and multiple heads let it learn several kinds of relationships at once.
-- Self-attention has **no sense of order**, so position is added: absolute (sinusoidal or learned), or relative (**RoPE**, ALiBi, T5 bias), with relative methods extrapolating better.
+Text becomes subword tokens, integer IDs and then embedding vectors, with special tokens and masks for structure and padding. Each Transformer block is attention followed by a feed-forward network, each wrapped in a residual connection and a normalization, and masks decide what each token is allowed to see. Modern decoders keep that skeleton with pre-norm RMSNorm, SwiGLU, RoPE and grouped-query attention, and hold about `12 d²` parameters per block. A task head turns the final hidden states into logits and a sampled token, a class, or an embedding. Transformers beat RNNs and CNNs because attention connects every pair of tokens directly and in parallel, at an `O(N²)` cost. Attention is `softmax(Q·Kᵀ / √d_k) · V`, split into several heads, and since it has no sense of order, position is added: absolutely (sinusoidal or learned) or relatively (RoPE, ALiBi).
+
+![A map of post 03 in four columns. Input: BPE subword tokens, special tokens and masks, the embedding lookup, and positions. The block: attention and a feed-forward network, residuals and norms, causal masks, and about 12 L d squared parameters. Attention: softmax of Q K transpose over root d times V, an N by N score matrix, multiple heads, and RoPE. Output: logits over the vocabulary, greedy, top-p and beam search, temperature, and CLS or pooled vectors](/llm-transformer-basics/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **BPE tokenization** | Merge the most frequent adjacent pairs into subwords | Text becomes integer IDs |
+| **Special tokens and masks** | `[bos]`, `[eos]`, `[pad]`, `[cls]`; 1 for real tokens, 0 for padding | Structure, and batches that ignore padding |
+| **Embedding lookup** | Row `t` of a V × D matrix | IDs become vectors |
+| **Transformer block** | Attention, residual, norm, FFN, residual, norm | The unit stacked L times |
+| **Modern block** | Pre-norm RMSNorm, SwiGLU, RoPE, GQA, no biases | What Llama-style models actually run |
+| **Parameter count** | About `12 · L · d²` plus embeddings | Sizing a model from its config |
+| **Masks by architecture** | Encoders see everything, decoders see the past, encoder-decoders add cross-attention | What each model can attend to |
+| **Logits and decoding** | Softmax, then greedy, sampling or beam search | How the next token is chosen |
+| **Temperature, top-k, top-p** | Sharpen or flatten, then cut the unlikely tail | Control over randomness |
+| **`[CLS]` and pooling** | One summary vector for the whole input | Classification and embeddings |
+| **Why Transformers** | Direct, parallel connections between all tokens | Long-range dependencies, and training at scale |
+| **Attention** | `softmax(Q·Kᵀ / √d_k + M) · V` | The core operation |
+| **The N × N matrix** | A score for every pair of tokens | Memory and compute grow with N² |
+| **Multi-head attention** | h smaller heads, concatenated and projected | Several relationships at once, at the same cost |
+| **Positional encodings** | Sinusoidal, learned, RoPE, ALiBi, T5 bias | Attention alone has no sense of order |
+
+### Test yourself
+
+<details>
+<summary>How does BPE build its vocabulary?</summary>
+
+It starts from single characters and repeatedly merges the most frequent adjacent pair into a new symbol, until the vocabulary reaches its target size.
+
+</details>
+
+<details>
+<summary>Why does a padded batch need an attention mask?</summary>
+
+So that real tokens don't attend to the padding. The scores at masked positions are set to a very large negative number before the softmax, so their weights become zero.
+
+</details>
+
+<details>
+<summary>What are the sub-layers of one block of the original Transformer, in order?</summary>
+
+Multi-head attention, then add and normalize, then the feed-forward network, then add and normalize again.
+
+</details>
+
+<details>
+<summary>About how many parameters does one block with d = 4,096 have?</summary>
+
+`12 × 4,096² ≈ 201` million. Llama-2-7B has about 202 million per layer, 67 million in attention and 135 million in the feed-forward network.
+
+</details>
+
+<details>
+<summary>What is the difference between greedy decoding and sampling at temperature 0.5?</summary>
+
+Greedy always takes the most likely token. Temperature 0.5 sharpens the distribution (the top token goes from 64% to 86% in the example) but still samples, so other tokens can still appear.
+
+</details>
+
+<details>
+<summary>Why are the attention scores divided by √d_k?</summary>
+
+Dot products grow with the dimension. Without the scaling, softmax would saturate into regions with tiny gradients, and learning would stall.
+
+</details>
+
+<details>
+<summary>Where does attention's memory blow-up come from?</summary>
+
+The N × N matrix of scores and probabilities. Doubling the sequence length quadruples it.
+
+</details>
+
+<details>
+<summary>Why use several heads instead of one big one?</summary>
+
+Each head projects into its own subspace and can learn a different kind of relationship, at the same total cost as a single head of the full width.
+
+</details>
+
+<details>
+<summary>Why does RoPE encode relative position for free?</summary>
+
+The query is rotated by an angle proportional to its position `m` and the key by one proportional to `n`, so their dot product depends only on the difference `n − m`.
+
+</details>
 
 Next in the series: [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04).
