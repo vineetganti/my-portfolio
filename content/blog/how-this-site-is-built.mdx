@@ -1,0 +1,568 @@
+---
+title: "Building this site: sections, series, an audio player and a tour of the code"
+description: "What changed on this site in one round of work, with the code: blog sections and series, renamed posts and redirects, a listen-to-this-post audio player, and then a full tour of how the site's code works, from MDX files to static pages."
+date: "2026-10-29"
+section: "build-logs"
+tags: ["Next.js", "React", "MDX", "Web Speech API", "Portfolio"]
+---
+
+This site started as a flat list of posts. Then the posts piled up: two long series, a few essays, some systems notes, and an average read time that kept growing. So I added three things: **sections and series** to organise the blog, a **Listen to this post** button, and a clean-up of names, URLs and images to match.
+
+This post is the build log for that work, in two parts. **Part 1** explains each change and the code behind it. **Part 2** is a tour of the whole codebase, so I (and anyone reading) can find their way around later. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+| What | Why | Where it lives |
+| --- | --- | --- |
+| Sections, series and tags | Find posts by topic, and read a series in order | `src/lib/sections.ts`, `src/lib/blog.ts`, two new routes |
+| Renamed posts, redirects, image folders | Clear names and URLs now that posts sit under a section | `next.config.ts`, `public/images/` |
+| Audio player | Posts average a long read, so let people listen | `src/components/AudioPlayer.tsx`, `src/lib/speech.ts` |
+
+<Callout type="note" title="How this was built">
+
+The features were built in working sessions with Claude Code, an AI coding assistant: it wrote the code, ran the checks and the browser tests described below, and I directed what to build. Everything here is described from the code as it stands in the repository.
+
+</Callout>
+
+## Part 1: What changed
+
+### Why the blog needed structure
+
+Before this change, `/blog` was one list sorted by date. That has three problems once there are a dozen posts:
+
+- **No way to browse by topic.** An essay about writing sat between two posts on transformer inference.
+- **No reading order.** The LLM Architectures posts and the Agentic AI posts are series, but that was only implied by titles and hand-written lists at the top of each post.
+- **Inconsistent tags.** Tags like "AI", "LLMs" and "AI Engineering" overlap, so they are poor for browsing.
+
+### Three layers: section, series, tag
+
+![Three panels: a section is the shelf a post sits on, a series is a reading order, a tag is free-form detail. One post carries all three, for example section ai-llms, series agentic-ai part 5, tags MCP and Strands](/images/build-logs/how-this-site-is-built/three-layers.svg)
+
+| Layer | Question | How many | Set in frontmatter as |
+| --- | --- | --- | --- |
+| **Section** | Which shelf is this on? | One per post, from a short fixed list | `section: "ai-llms"` |
+| **Series** | In what order should I read it? | Zero or one per post | `series: "agentic-ai"` and `seriesOrder: 5` |
+| **Tag** | What is it about, in detail? | Any number | `tags: ["MCP", "Strands"]` |
+
+The reason for three layers and not one: each does a different job, and a post can sit on a shelf without being in a series. Tags stay as they were. Sections are few and change rarely. Series are as many as I like.
+
+A post's frontmatter now looks like this:
+
+```yaml
+---
+title: "How agents talk: MCP for tools, A2A for other agents"
+date: "2026-10-30"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 5
+tags: ["Agentic AI", "LLMs", "Strands", "MCP"]
+---
+```
+
+### One config file for the shelves
+
+The sections and series are defined in one place, [`src/lib/sections.ts`](https://github.com/vineetganti/my-portfolio/blob/main/src/lib/sections.ts):
+
+```ts
+export const SECTIONS: Section[] = [
+  { slug: "ai-llms", title: "AI & LLMs", description: "How language models work, run and get used: ..." },
+  { slug: "systems", title: "Systems & Engineering", description: "..." },
+  { slug: "build-logs", title: "Build Logs", description: "..." },
+  { slug: "essays", title: "Essays & Ideas", description: "..." },
+];
+
+/** Where a post lands when its `section` is missing or misspelled. */
+export const DEFAULT_SECTION = "essays";
+
+export const SERIES: Series[] = [
+  { slug: "llm-architectures", title: "LLM Architectures", description: "..." },
+  { slug: "agentic-ai", title: "Agentic AI", description: "..." },
+  { slug: "mit-distributed-systems", title: "MIT Distributed Systems", description: "..." },
+];
+```
+
+Adding a new area of writing is one entry in this list. The routes, the chips and the cards all read from it, so none of them change. A series that isn't listed still works: `getSeriesInfo` makes a title from the slug.
+
+The fallback matters for the future. If I write about something I haven't thought of yet, the post lands in **Essays & Ideas** with a tag, and I only add a section once three or more posts need it.
+
+### Reading the new fields: `parsePost`
+
+`blog.ts` used to build a post object in two places, one for the list and one for a single post. I merged them into one helper, so a new field is added once:
+
+```ts
+function parsePost(slug: string, fileContent: string): BlogPost {
+  const { data, content } = matter(fileContent);
+  const stats = readingTime(content);
+  const order = Number(data.seriesOrder);
+
+  return {
+    slug,
+    title: data.title || slug,
+    description: data.description || "",
+    date: data.date || new Date().toISOString(),
+    tags: data.tags || [],
+    section: getSection(data.section) ? data.section : DEFAULT_SECTION,
+    series: data.series || undefined,
+    seriesOrder: Number.isFinite(order) ? order : undefined,
+    readingTime: stats.text,
+    listenMinutes: estimateListenMinutes(content),
+    toc: data.toc !== false,
+    content,
+  };
+}
+```
+
+Three things to notice. A **bad section never breaks a build**: it falls back to the default. A **missing `seriesOrder`** becomes `undefined` and not `NaN`. And **`listenMinutes`** is new, for the audio player later in this post.
+
+On top of it sit small queries, each a filter over `getAllPosts()`:
+
+```ts
+export function getPostsBySection(section: string): BlogPost[] {
+  return getAllPosts().filter((p) => p.section === section);
+}
+
+export function getPostsBySeries(series: string): BlogPost[] {
+  return getAllPosts()
+    .filter((p) => p.series === series)
+    .sort((a, b) => (a.seriesOrder ?? 0) - (b.seriesOrder ?? 0));
+}
+
+export function getSeriesPosition(post: BlogPost): SeriesPosition | null {
+  if (!post.series) return null;
+  const posts = getPostsBySeries(post.series);
+  const i = posts.findIndex((p) => p.slug === post.slug);
+  if (i === -1) return null;
+  return { position: i + 1, total: posts.length, prev: posts[i - 1], next: posts[i + 1] };
+}
+```
+
+A series is ordered by `seriesOrder`, **not by date**. That matters because two posts in one series can be published on the same day, and a post's date can change.
+
+### Two new routes
+
+| Route | File | What it shows |
+| --- | --- | --- |
+| `/blog/topic/[section]` | `src/app/blog/topic/[section]/page.tsx` | One section: chips, its series, its posts |
+| `/blog/series/[series]` | `src/app/blog/series/[series]/page.tsx` | One series, in reading order |
+
+Both are two path segments deep, so they can never collide with `/blog/[slug]`, which is one. Each follows the same pattern as the post page:
+
+```tsx
+export function generateStaticParams() {
+  return SECTIONS.map((s) => ({ section: s.slug }));       // build these pages ahead of time
+}
+
+export default async function BlogSectionPage({ params }: { params: Promise<{ section: string }> }) {
+  const { section: slug } = await params;                   // in this Next.js, params is a Promise
+  const section = getSection(slug);
+  if (!section) notFound();                                  // unknown section: a 404
+  const posts = getPostsBySection(slug);
+  // ...render the header, the chips, the series cards and the posts
+}
+```
+
+I used real routes and not a `?section=` filter on one page, so every section and series has a URL that can be shared, bookmarked and indexed, and every one is built as static HTML.
+
+### The interface
+
+![The blog page: a row of section chips with counts, then series cards, then the latest posts, each labelled with its section and part number](/images/build-logs/how-this-site-is-built/blog-index.png)
+
+| Component | Job |
+| --- | --- |
+| `SectionNav` | The chip row ("All 16", "AI & LLMs 11", ...). Counts come from the posts, and a section with no posts is hidden |
+| `SeriesStrip` | Cards for each series with its post count |
+| `SeriesNav` | Previous and next links at the end of a series post |
+| `PostCard` | Now shows the section and "Series · Part N" |
+| Post page header | The section and "Part 5 of 5" as links above the title |
+
+![A section page: the title and description of AI & LLMs, the chip row with that section highlighted, and the two series inside it](/images/build-logs/how-this-site-is-built/section-page.png)
+
+![The top of a post: AI & LLMs / Agentic AI · Part 5 of 5 above the title, then the date, the title, the tags and the Listen to this post button](/images/build-logs/how-this-site-is-built/post-header.png)
+
+`SectionNav` takes one prop, the active section. It highlights the chip with `aria-current="page"`, which also tells screen readers where they are.
+
+### Renames, redirects and image folders
+
+With sections in place, the old names stopped making sense. The six LLM posts were called `mentiforce01` to `mentiforce06`, which is the name of the person I credit and not a description. They now have readable slugs, and their titles lost the `LLM Architectures - 0N -` prefix, because the section and the "Part N of 6" label say that already.
+
+| Before | After |
+| --- | --- |
+| `mentiforce01` | `python-internals-for-llms` |
+| `mentiforce02` | `neural-network-fundamentals` |
+| `mentiforce03` | `transformer-architecture-principles` |
+| `mentiforce04` | `transformer-inference-optimization` |
+| `mentiforce05` | `vllm-inference-engine-design` |
+| `mentiforce06` | `batching-llm-requests` |
+| a MapReduce post with spaces in its file name | `distributed-systems-mapreduce` |
+
+Renaming a published URL breaks every link to it, so `next.config.ts` redirects the old slugs permanently:
+
+```ts
+const RENAMED_POSTS: Record<string, string> = {
+  mentiforce01: "python-internals-for-llms",
+  // ...
+  "mit-distributed%20systems%20-%20lecture1": "distributed-systems-mapreduce",
+};
+
+async redirects() {
+  return Object.entries(RENAMED_POSTS).map(([from, to]) => ({
+    source: `/blog/${from}`,
+    destination: `/blog/${to}`,
+    permanent: true,        // HTTP 308: browsers and search engines remember it
+  }));
+},
+```
+
+I checked this against a production build: `/blog/mentiforce01` answered `308` with the new location, and so did the old MapReduce URL, spaces and all.
+
+The **images** moved too. They used to sit in loose folders such as `public/llm-vllm-engine/`. They now follow the same shape as the blog:
+
+```text
+public/images/<section>/<series>/<post-slug>/diagram.svg
+public/images/ai-llms/agentic-ai/how-agents-talk/summary-map.svg
+public/images/essays/ideal-chat-app/message_send_flow.png     (no series, so straight under the section)
+```
+
+I put them under `images/` and not `blog/` on purpose: a folder named `public/blog/` would share the `/blog/...` URL space with the pages. In total, about 170 image references were rewritten.
+
+### Checking the move
+
+A migration like this is easy to get subtly wrong, so I wrote a throwaway script that compiles every post with the same MDX plugins as the site and checks:
+
+- every post compiles;
+- every `section` is a known one, and every series has `seriesOrder` values 1 to n with no gaps;
+- every image exists, and lives under its own section's folder;
+- every `/blog/...` link and `#anchor` points at something real;
+- no image in `public/images` is orphaned;
+- no post still mentions an old slug.
+
+Then `next build` for the type-check and the prerendered pages, and a production server to check the redirects and routes over HTTP.
+
+## The audio player
+
+### Why the browser's own voice
+
+The posts here are long: some take well over half an hour to read. A **Listen to this post** button lets someone follow along while doing something else. There are two ways to build it:
+
+| | Browser voice (Web Speech API) | Pre-generated audio files |
+| --- | --- | --- |
+| Cost | Free | A text-to-speech service, per post |
+| New posts | Work automatically | Need a generation step, and again after every edit |
+| Voice quality | Depends on the reader's device | Consistent and natural |
+| Download, lock-screen playback | No | Yes |
+
+I chose the free one, and kept the door open: a post could later point to an MP3 and the player could prefer it.
+
+### The hard part: what to read
+
+Posts here are full of code, tables and diagrams. Read aloud, that is unlistenable. So the player reads the **prose** and, in place of the rest, says what it skipped. The logic lives in [`src/lib/speech.ts`](https://github.com/vineetganti/my-portfolio/blob/main/src/lib/speech.ts), separate from React so it is easy to test.
+
+![Three steps: prepare, where collectChunks turns the rendered article into a list of chunks; speak, where each chunk becomes an utterance and its end triggers the next; and side effects: highlight, progress and saved preferences](/images/build-logs/how-this-site-is-built/audio-pipeline.svg)
+
+```ts
+const SKIPPED: Record<string, string> = {
+  PRE: "Code example skipped.",
+  TABLE: "Table skipped.",
+  IMG: "Diagram skipped.",
+  DETAILS: "Recall questions skipped.",
+};
+
+export function collectChunks(root: Element): SpeechChunk[] {
+  // for each heading, paragraph, list item, code block, table, image and <details>:
+  //   skipped kinds     -> one spoken note, once per run of the same kind
+  //   text inside them  -> ignored
+  //   everything else   -> cleaned, then split into short chunks
+}
+```
+
+It reads the **rendered page** (`#post-content`), not the Markdown source. That has two benefits: the paragraph being read can be highlighted, because each chunk keeps a reference to its element, and whatever the page shows is what gets spoken, including text that comes from components like `Callout`.
+
+Three details make it sound right:
+
+- **Symbols are rewritten.** `→` becomes "to", `×` becomes "times", and dashes become commas, because otherwise a speech engine reads them out as "rightwards arrow".
+- **Splitting avoids decimals.** Sentences are split with a lookbehind, `/(?<=[.!?])\s+/`, which only cuts after punctuation that is followed by a space. So "1.5×" stays whole and doesn't turn into "1" and "5".
+- **Chunks are capped at 180 characters.** Some browsers cut off a long utterance after about 15 seconds, so each piece stays short. It also makes skipping forward and back precise.
+
+### The player: a small state machine
+
+[`AudioPlayer.tsx`](https://github.com/vineetganti/my-portfolio/blob/main/src/components/AudioPlayer.tsx) is a client component. A few decisions are worth explaining.
+
+**Support and voices are read with `useSyncExternalStore`.** Whether the browser can speak, and which voices it has, are facts about the outside world, not component state. Voices arrive late, on a `voiceschanged` event, so the component subscribes to that event. On the server, where nothing can speak, it returns nothing, so the page renders the same on server and client.
+
+**Pause is "cancel and remember".** The Web Speech API's own `pause()` is unreliable in some browsers, so pausing cancels the current utterance, and resuming starts that chunk again. Changing the speed or the voice does the same thing: restart the current chunk with the new setting.
+
+**A generation counter stops stale callbacks.** Cancelling an utterance can still fire its `onend` event, which would start the next chunk and undo the pause. Every call to `speak` takes a new number, and a callback only acts if its number is still the current one:
+
+```ts
+const speak = (i: number) => {
+  const gen = ++genRef.current;          // a new "generation" invalidates every older callback
+  synth.cancel();
+  // ...highlight chunk i, set state...
+  const utterance = new SpeechSynthesisUtterance(chunks[i].text);
+  utterance.rate = prefsRef.current.rate;
+  utterance.onend = () => {
+    if (genRef.current === gen) speakRef.current(i + 1);   // only if nothing newer has started
+  };
+  synth.speak(utterance);
+};
+```
+
+**Highlighting scrolls only when needed.** The block being read gets a `tts-active` class. If it drifts under the sticky header or the player bar, it is scrolled to the centre, and with the browser's reduced-motion setting on, the scroll is instant.
+
+**Settings are remembered.** Speed and voice are saved to `localStorage` inside `try/catch`, because storage can be blocked, and the player works without it.
+
+**The time estimate has two sources.** The button shows a server-computed figure (`listenMinutes`, from the Markdown with code, tables and images stripped, at about 165 words a minute). Once playing, the bar recomputes the time left from the chunks and the chosen speed.
+
+<Callout type="warn" title="What the linter caught">
+
+My first version updated a ref while rendering, which React's rules forbid because it can make a component show stale values. The fix is to assign it in an effect, so `speakRef.current = speak` now lives in a `useEffect`. A second warning was about reading a ref in a cleanup function, solved by copying the ref object first. Running `eslint` before trusting the code earned its keep.
+
+</Callout>
+
+![The player on desktop: a bottom bar with previous, pause and next buttons, "Playing", 19 min left, a 1 times speed button, a settings button and a progress bar, while the paragraph being read is highlighted above it](/images/build-logs/how-this-site-is-built/player-desktop.png)
+
+![The player on a phone: the same bar, with a shorter label so nothing is cut off](/images/build-logs/how-this-site-is-built/player-mobile.png)
+
+### How I tested speech without listening to it
+
+You can't hear a unit test, but you can check everything except the sound. A script drove a headless Chrome over the DevTools protocol, replaced the browser's `speak` with a stub that records each text and fires `onend` a moment later, pressed Listen and let a whole post play through in seconds.
+
+| Post | Chunks spoken | Words | Skip notes |
+| --- | --- | --- | --- |
+| How agents talk | 254 | about 3,170 | 19 code, 18 table, 12 diagram, 1 recall |
+| Building my first AI agent | 140 | about 2,050 | 10 code, 5 diagram, 4 table, 1 recall |
+| MapReduce post | 16 | about 230 | 1 code |
+
+Each run finished by itself. A second test, with a stub that never finishes, pressed next, previous, pause, play, speed, voice settings and stop, and checked that the highlight and the bar came and went. Screenshots in light, dark and mobile found one real issue: the label was cut off on a phone, so the part counter is now hidden on small screens.
+
+What this does *not* prove is how it sounds. That depends on the voices installed in the browser. Edge and Chrome offer "Natural" or "Online" voices that are far better than the defaults, so the voice picker lists those first.
+
+### Limits
+
+- No download, and some phones stop speech when the screen locks.
+- Anything that exists only in code, a table or an image is skipped, so the important point has to be in the prose too.
+- Pronunciation of names and acronyms is whatever the voice decides.
+
+## Part 2: A tour of the website's code
+
+### The stack
+
+| Layer | Choice |
+| --- | --- |
+| Framework | Next.js 16 with the App Router, React 19, TypeScript |
+| Styling | Tailwind CSS 4, with the typography plugin for post text |
+| Content | MDX files in the repo, read with `gray-matter` and rendered by `next-mdx-remote` |
+| Markdown plugins | `remark-gfm` (tables), `rehype-slug` (heading ids), `rehype-highlight` (code colours) |
+| Fonts | Bricolage Grotesque for headings, Atkinson Hyperlegible Next and Mono for body and code |
+| Icons | `lucide-react` |
+| Dates, reading time | `date-fns`, `reading-time` |
+| Hosting | Vercel |
+
+<Callout type="info" title="This is not the Next.js of older tutorials">
+
+The repo's `AGENTS.md` warns that this version of Next.js has breaking changes, and says to read the docs in `node_modules/next/dist/docs/` before relying on memory. One visible example: a page's `params` is a `Promise` that you `await`.
+
+</Callout>
+
+### The folder map
+
+```text
+content/
+  blog/            one .mdx file per post (the filename is the URL)
+  projects/        one .md file per project card
+docs/              the MDX formatting guide
+public/images/     diagrams and screenshots, by section / series / post
+src/
+  app/
+    layout.tsx     fonts, the theme script, header, footer
+    page.tsx       the home page
+    globals.css    theme tokens and all the post styling
+    blog/          /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series]
+    projects/      /projects
+    about/         /about
+  components/      Header, Footer, ThemeToggle, PostCard, ProjectCard, SectionNav,
+                   SeriesStrip, SeriesNav, TableOfContents, MdxContent, Callout,
+                   CopyButton, AudioPlayer
+  lib/
+    blog.ts        reads posts, builds the table of contents, series queries
+    sections.ts    the sections and series
+    speech.ts      the audio player's text logic
+    projects.ts    reads project files
+next.config.ts     redirects and framework options
+```
+
+### The content pipeline
+
+![Three lanes: read, where a content file goes through gray-matter and parsePost to become a BlogPost; ask, where queries feed the blog, section, series and post pages; render, where the body goes through MDXRemote and custom components to static HTML](/images/build-logs/how-this-site-is-built/content-pipeline.svg)
+
+There is no database and no API. The repository is the CMS:
+
+1. **Read.** `getAllPosts()` lists `content/blog/*.mdx`, reads each with `fs`, and `gray-matter` splits the frontmatter from the body. `parsePost` turns that into a `BlogPost` and the list is sorted newest first.
+2. **Ask.** Every page calls a query (`getAllPosts`, `getPostsBySection`, `getPostsBySeries`, `getPostBySlug`) at build time.
+3. **Render.** A post page passes the body to `MdxContent`, which compiles the MDX on the server.
+
+Projects work the same way, a step simpler: `projects.ts` reads `content/projects/*.md` and each file's frontmatter becomes a card.
+
+### Rendering a post: `MdxContent`
+
+```tsx
+<MDXRemote
+  source={source}
+  components={components}
+  options={{ mdxOptions: { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug, rehypeHighlight] } }}
+/>
+```
+
+`next-mdx-remote/rsc` compiles MDX inside a server component, so no MDX compiler is shipped to the browser. Four overrides turn plain Markdown into the site's design:
+
+| Element | What replaces it |
+| --- | --- |
+| `h2`, `h3`, `h4` | The heading plus a hover **#** permalink, using the id `rehype-slug` made |
+| `pre` | A `code-block` with a language label and a **Copy** button |
+| `table` | The table inside a scrollable wrapper, so wide tables don't break the page |
+| `<Callout>` | A tinted box with an icon, in five types: note, info, tip, analogy and warn |
+
+The copy button is a client component that reads the sibling `pre` and writes its text to the clipboard, and it handles a blocked clipboard silently.
+
+### The table of contents
+
+`getHeadings()` in `blog.ts` parses the post with `unified` and `remark-parse`, walks the headings with `unist-util-visit`, and creates ids with **the same slugger that `rehype-slug` uses**, in the same order. That is what keeps the contents entries and the page's real heading ids matching, even when two headings share a name. The shallowest heading level present becomes the top level, with one level of sub-entries.
+
+`TableOfContents` is a client component that adds:
+
+- **scrollspy**: the current section is the last heading above a point near the top of the screen, and at the very bottom it selects the last entry, so short final sections still count;
+- a **reading-progress bar** under the header;
+- a **mobile bar** with a contents menu that closes on Escape;
+- scroll updates **throttled to one per animation frame**.
+
+### Layout, fonts and the theme
+
+`layout.tsx` loads the three fonts as CSS variables, sets the page title template (`%s | Vineet Ganti`), and puts a small inline script in the head:
+
+```ts
+const themeScript = `try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}`;
+```
+
+It runs before the first paint, so a saved theme is applied with no flash of the wrong colours.
+
+The theme itself is a set of CSS variables in `globals.css`: the "vanilla and olive" palette (`--paper`, `--card`, `--ink`, `--accent`, and so on). The light values are on `:root`. Dark values apply in two cases: when the system prefers dark and no theme is chosen (`:root:not([data-theme="light"])`), and when the user picks dark (`:root[data-theme="dark"]`). `ThemeToggle` flips `data-theme` and saves the choice.
+
+`tailwind.config.mts` then maps colour names such as `ink`, `card`, `accent` and `border` to those variables. A component writes `text-ink` or `bg-card`, and the same class is correct in both themes. No component has a `dark:` variant.
+
+### The pages
+
+| Route | Type | Notes |
+| --- | --- | --- |
+| `/` | Static | Hero, featured projects, the three latest posts |
+| `/blog` | Static | Section chips, series cards, all posts |
+| `/blog/[slug]` | Static, one per post | Header, table of contents, content, audio player, series navigation |
+| `/blog/topic/[section]` | Static, one per section | A section's series and posts |
+| `/blog/series/[series]` | Static, one per series | A series in order |
+| `/projects` | Static | All project cards |
+| `/about` | Static | Text and contact links |
+
+Dynamic routes list what to build with `generateStaticParams`, and the build prints each one. The config enables `cacheComponents` and `partialPrefetching`, and the post pages show up as partially prerendered. The header's active link is a simple prefix match on the path, so `/blog/topic/...` keeps "Blog" highlighted without any extra code.
+
+### Guard rails
+
+| What | How |
+| --- | --- |
+| A writing guide | `docs/mdx-formatting-guide.md`: frontmatter, callouts, images, and MDX gotchas such as stray `<` and `{` in prose |
+| The build is the test | `next build` type-checks and prerenders every page, so a broken post fails the build |
+| Lint | `eslint` with the Next.js config |
+| Content checks | The throwaway script described above, run after bulk edits |
+| Fallbacks | An unknown section falls back to Essays, a missing date to today, blocked storage is ignored |
+
+## Summary
+
+The blog now has **three layers**: a **section** (the shelf), a **series** (the reading order) and **tags** (the detail). Sections and series live in one config file, `parsePost` validates the new frontmatter, small queries filter posts, and two new routes give every section and series a shareable, prerendered page. Posts got readable slugs with permanent redirects from the old ones, and images moved to `public/images/<section>/<series>/<post>/`. The **audio player** reads the rendered prose with the browser's text-to-speech, says what it skips, highlights the current paragraph, and stays correct through pauses and skips thanks to a generation counter. The site underneath is simple on purpose: MDX files in, static pages out, with the theme driven by CSS variables.
+
+![A map of the post in four columns: sections and series, the move, the audio player, and the site's code, with the line the repo is the CMS: content files in, static pages out](/images/build-logs/how-this-site-is-built/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Section** | The shelf a post sits on, one per post | Browsing by topic |
+| **Series** | An ordered reading list with `seriesOrder` | Part N of M, previous and next |
+| **Tag** | Free-form detail | Finer topics without a new section |
+| **`sections.ts`** | The one place sections and series are defined | Adding one needs no code changes elsewhere |
+| **`parsePost`** | Turns a file into a `BlogPost`, with fallbacks | A bad value never breaks the build |
+| **`generateStaticParams`** | Lists the pages to prerender | Every section and series is static HTML |
+| **308 redirect** | A permanent redirect from an old URL | Renamed posts keep working links |
+| **Web Speech API** | The browser's built-in text-to-speech | Free audio with no files |
+| **`collectChunks`** | Prose in, short speakable chunks out, with skip notes | Code and tables aren't read aloud |
+| **Generation counter** | Each `speak` call invalidates older callbacks | Pause and skip stay reliable |
+| **`useSyncExternalStore`** | Reads browser facts (support, voices) | Server and client render the same |
+| **Theme tokens** | CSS variables mapped to Tailwind colour names | One class works in light and dark |
+| **`MdxContent`** | Compiles MDX on the server with custom components | Callouts, copy buttons and heading links |
+
+### Test yourself
+
+<details>
+<summary>Why are there three layers (section, series, tag) and not one?</summary>
+
+Each does a different job. A section is a small, stable shelf. A series is an order. A tag is free-form detail. A post can be on a shelf without being in a series, and tags alone can't express order.
+
+</details>
+
+<details>
+<summary>What happens to a post with a missing or misspelled section?</summary>
+
+`parsePost` falls back to the default, Essays & Ideas, so the build doesn't break and the post still appears.
+
+</details>
+
+<details>
+<summary>Why is a series ordered by `seriesOrder` and not by date?</summary>
+
+Two posts in a series can share a date, and a date can change. An explicit order is stable.
+
+</details>
+
+<details>
+<summary>Why did renaming the posts need `redirects()`, and why is it permanent?</summary>
+
+Old URLs may be linked from elsewhere. A permanent (308) redirect sends visitors to the new slug, and browsers and search engines remember it.
+
+</details>
+
+<details>
+<summary>Why does the audio player read the rendered page and not the Markdown?</summary>
+
+So each spoken chunk can point at a real element to highlight, and so that whatever the page actually shows (including text from components) is what gets read.
+
+</details>
+
+<details>
+<summary>What does the generation counter protect against?</summary>
+
+A cancelled utterance can still fire its end event, which would start the next chunk and undo a pause. Each `speak` call takes a new number, and a callback only acts if its number is still current.
+
+</details>
+
+<details>
+<summary>How can the whole player be tested without hearing anything?</summary>
+
+Replace the browser's `speak` with a stub that records the text and fires the end event, drive the page in a headless browser, and check what was spoken, what was skipped and that the controls behave.
+
+</details>
+
+<details>
+<summary>How does one CSS class work in both light and dark mode?</summary>
+
+Tailwind colour names point at CSS variables, and the dark theme only redefines those variables, so `text-ink` or `bg-card` stays the same in every component.
+
+</details>
+
+## What's next
+
+- Tags are still free-form and a little inconsistent. A small fixed list would make them a better filter.
+- The older essays haven't had the recall treatment the series posts got.
+- No sitemap, RSS feed or search yet.
+- If listening becomes popular, generate an MP3 per post and let the player prefer it, which would also allow downloads.
+
+## Resources
+
+- [The repository](https://github.com/vineetganti/my-portfolio) and the [writing guide](https://github.com/vineetganti/my-portfolio/blob/main/docs/mdx-formatting-guide.md)
+- [Web Speech API: SpeechSynthesis](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis) on MDN
+- [Next.js: redirects](https://nextjs.org/docs/app/api-reference/config/next-config-js/redirects) and [generateStaticParams](https://nextjs.org/docs/app/api-reference/functions/generate-static-params)
+- [next-mdx-remote](https://github.com/hashicorp/next-mdx-remote)

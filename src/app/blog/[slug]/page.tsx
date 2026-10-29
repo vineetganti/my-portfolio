@@ -3,6 +3,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { getAllPosts, getHeadings, getPostBySlug, getSeriesPosition } from "@/lib/blog";
 import { getSection, getSeriesInfo } from "@/lib/sections";
+import AudioPlayer from "@/components/AudioPlayer";
 import MdxContent from "@/components/MdxContent";
 import SeriesNav from "@/components/SeriesNav";
 import TableOfContents from "@/components/TableOfContents";
@@ -104,9 +105,12 @@ export default async function BlogPostPage({
               ))}
             </div>
           )}
+          <AudioPlayer minutes={post.listenMinutes} />
         </header>
 
-        <MdxContent source={post.content} />
+        <div id="post-content">
+          <MdxContent source={post.content} />
+        </div>
 
         <SeriesNav post={post} />
       </article>
