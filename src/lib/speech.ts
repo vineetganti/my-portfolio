@@ -1,9 +1,11 @@
 /**
  * Turns the rendered post body into short chunks the browser can speak.
  *
- * Prose is read; code, tables, diagrams and the collapsed recall questions are
- * skipped, with a short spoken note in their place ("Code example skipped.").
- * A run of the same kind of skipped block gets one note, not one per block.
+ * Prose is read. Diagrams are read from their alt text (the written description
+ * of the picture) when it is a real description. Code, tables and the collapsed
+ * recall questions are skipped, with a short spoken note in their place
+ * ("Code example skipped."). A run of the same kind of skipped block gets one
+ * note, not one per block.
  */
 export interface SpeechChunk {
   /** The element to highlight while this chunk is spoken. */
@@ -70,7 +72,19 @@ export function splitForSpeech(text: string): string[] {
 
 const countWords = (s: string) => s.split(/\s+/).filter(Boolean).length;
 
-export function collectChunks(root: Element): SpeechChunk[] {
+export interface CollectOptions {
+  /** Read an image's alt text aloud instead of skipping the image. Default true. */
+  describeImages?: boolean;
+}
+
+/** Alt text counts as a description only if it is a real sentence, not a file name like `flow_chart`. */
+function imageDescription(el: Element): string {
+  const alt = (el.getAttribute("alt") ?? "").trim();
+  return alt.length >= 12 && /\s/.test(alt) ? alt : "";
+}
+
+export function collectChunks(root: Element, options: CollectOptions = {}): SpeechChunk[] {
+  const describeImages = options.describeImages ?? true;
   const chunks: SpeechChunk[] = [];
   let item = -1;
   let lastSkip = "";
@@ -82,6 +96,19 @@ export function collectChunks(root: Element): SpeechChunk[] {
     if (note) {
       // A skipped block nested inside another skipped block adds nothing.
       if (el.parentElement?.closest(SKIP_CONTAINERS)) continue;
+
+      const description = tag === "IMG" && describeImages ? imageDescription(el) : "";
+      if (description) {
+        lastSkip = "";
+        item++;
+        let spoken = cleanForSpeech(`Image: ${description}`);
+        if (!/[.!?:]$/.test(spoken)) spoken += ".";
+        for (const part of splitForSpeech(spoken)) {
+          chunks.push({ el, text: part, item, words: countWords(part) });
+        }
+        continue;
+      }
+
       if (lastSkip === tag) continue;
       lastSkip = tag;
       chunks.push({ el, text: note, item: ++item, words: countWords(note) });

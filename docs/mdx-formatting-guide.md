@@ -274,7 +274,7 @@ The one custom component. Use it to pull a point out of the flow.
   up to the full text width. This keeps transparent diagrams drawn on white readable
   on both the light and dark olive themes. Diagrams with a white or transparent
   background look best. Dark screenshots will sit inside a white frame.
-- **Write real alt text** that says what the image shows, not the filename
+- **Write real alt text** that says what the image shows, not the filename. The audio player reads it aloud as the diagram's description (alt text under 12 characters or without a space is treated as a file name and skipped)
   (`![full_system_architecture](…)` is read aloud as "full system architecture").
 - Name files in kebab-case, with one folder per post named after its slug. Keep
   images out of `public/blog/`, which would sit beside the `/blog/...` routes.
@@ -448,7 +448,7 @@ What you learned and where to go next.
 - [ ] Every code fence has a language; output is in `text` fences
 - [ ] Links have no space between `]` and `(`
 - [ ] Images live in `public/images/<section>/<series>/<post-slug>/` and have descriptive alt text
-- [ ] Anything essential is also in the prose: the audio player skips code, tables, images and `<details>`
+- [ ] Anything essential is also in the prose or the alt text: the audio player reads image alt text, and skips code, tables and `<details>`
 - [ ] No stray `<`, `{` or `}` outside backticks
 - [ ] Previewed with `npm run dev` at `http://localhost:3000/blog/<slug>` in both
       light and dark mode (theme toggle in the header)

@@ -65,13 +65,13 @@ export function getHeadings(content: string): TocHeading[] {
     .map((h) => ({ id: h.id, text: h.text, level: h.depth === top ? 0 : 1 }));
 }
 
-/** Approximate listening time: the prose only, as the audio player reads it. */
+/** Approximate listening time: the prose and image descriptions, as the audio player reads them. */
 function estimateListenMinutes(markdown: string): number {
   const prose = markdown
     .replace(/<details>[\s\S]*?<\/details>/g, " ")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s*\|.*$/gm, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, " $1 ") // diagrams are read from their alt text
     .replace(/<[^>]+>/g, " ");
   const words = prose.split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.round(words / WORDS_PER_MINUTE));

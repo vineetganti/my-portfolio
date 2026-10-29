@@ -1,6 +1,6 @@
 ---
 title: "Building this site: sections, series, an audio player and a tour of the code"
-description: "What changed on this site in one round of work, with the code: blog sections and series, renamed posts and redirects, a listen-to-this-post audio player, and then a full tour of how the site's code works, from MDX files to static pages."
+description: "What changed on this site in one round of work, with the code: blog sections and series, renamed posts and redirects, a listen-to-this-post audio player (with a follow-up fix for phones and diagram reading), and then a full tour of how the site's code works, from MDX files to static pages."
 date: "2026-10-29"
 section: "build-logs"
 tags: ["Next.js", "React", "MDX", "Web Speech API", "Portfolio"]
@@ -10,11 +10,18 @@ This site started as a flat list of posts. Then the posts piled up: two long ser
 
 This post is the build log for that work, in two parts. **Part 1** explains each change and the code behind it. **Part 2** is a tour of the whole codebase, so I (and anyone reading) can find their way around later. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
 
+<Callout type="warn" title="Update: feature fix for the audio player">
+
+The first version of the audio player **didn't play on phones** (Safari and Chrome), and it **skipped diagrams**. A follow-up fix, described in [Making it work on phones](#making-it-work-on-phones) and [Diagrams are read, too](#diagrams-are-read-too), repaired playback and made the player read each diagram from its alt text. Everything below describes the player as it is after the fix. The [update log](#update-log) at the end lists what changed and when.
+
+</Callout>
+
 | What | Why | Where it lives |
 | --- | --- | --- |
 | Sections, series and tags | Find posts by topic, and read a series in order | `src/lib/sections.ts`, `src/lib/blog.ts`, two new routes |
 | Renamed posts, redirects, image folders | Clear names and URLs now that posts sit under a section | `next.config.ts`, `public/images/` |
 | Audio player | Posts average a long read, so let people listen | `src/components/AudioPlayer.tsx`, `src/lib/speech.ts` |
+| Audio fix: phones and diagrams | Playback failed on mobile browsers, and diagrams were skipped | The same two files, plus `src/lib/blog.ts` for the time estimate |
 
 <Callout type="note" title="How this was built">
 
@@ -253,7 +260,7 @@ I chose the free one, and kept the door open: a post could later point to an MP3
 
 ### The hard part: what to read
 
-Posts here are full of code, tables and diagrams. Read aloud, that is unlistenable. So the player reads the **prose** and, in place of the rest, says what it skipped. The logic lives in [`src/lib/speech.ts`](https://github.com/vineetganti/my-portfolio/blob/main/src/lib/speech.ts), separate from React so it is easy to test.
+Posts here are full of code, tables and diagrams. Read aloud, code and tables are unlistenable. So the player reads the **prose**, reads each **diagram from its alt text** (the written description every image already carries), and for code, tables and the collapsed recall questions says what it skipped. The logic lives in [`src/lib/speech.ts`](https://github.com/vineetganti/my-portfolio/blob/main/src/lib/speech.ts), separate from React so it is easy to test.
 
 ![Three steps: prepare, where collectChunks turns the rendered article into a list of chunks; speak, where each chunk becomes an utterance and its end triggers the next; and side effects: highlight, progress and saved preferences](/images/build-logs/how-this-site-is-built/audio-pipeline.svg)
 
@@ -267,8 +274,9 @@ const SKIPPED: Record<string, string> = {
 
 export function collectChunks(root: Element): SpeechChunk[] {
   // for each heading, paragraph, list item, code block, table, image and <details>:
-  //   skipped kinds     -> one spoken note, once per run of the same kind
-  //   text inside them  -> ignored
+  //   images            -> their alt text, spoken as "Image: ..." (a skip note if the alt is only a file name)
+  //   code, tables, details -> one spoken note, once per run of the same kind
+  //   text inside those -> ignored
   //   everything else   -> cleaned, then split into short chunks
 }
 ```
@@ -280,6 +288,19 @@ Three details make it sound right:
 - **Symbols are rewritten.** `→` becomes "to", `×` becomes "times", and dashes become commas, because otherwise a speech engine reads them out as "rightwards arrow".
 - **Splitting avoids decimals.** Sentences are split with a lookbehind, `/(?<=[.!?])\s+/`, which only cuts after punctuation that is followed by a space. So "1.5×" stays whole and doesn't turn into "1" and "5".
 - **Chunks are capped at 180 characters.** Some browsers cut off a long utterance after about 15 seconds, so each piece stays short. It also makes skipping forward and back precise.
+
+### Diagrams are read, too
+
+The posts rely on diagrams, so skipping them lost half the lesson. Every image already has alt text, which is the description a screen reader would read, so the player reads that after the words "Image:". The rule that decides whether an alt text is a real description is deliberately simple: at least 12 characters and at least one space. An alt like `flow_chart` is a file name, not a description, so that image gets the skip note instead.
+
+```ts
+function imageDescription(el: Element): string {
+  const alt = (el.getAttribute("alt") ?? "").trim();
+  return alt.length >= 12 && /\s/.test(alt) ? alt : "";
+}
+```
+
+Two consequences. First, **good alt text now matters twice**: it helps screen readers and it is what the player says, so the formatting guide says to write it as a description of what the picture shows. Second, there is a **setting** in the player to turn diagram reading off. Changing it mid-play rebuilds the chunk list and carries on from the same paragraph, and the choice is saved. The listening-time estimate counts the alt text too.
 
 ### The player: a small state machine
 
@@ -317,9 +338,33 @@ My first version updated a ref while rendering, which React's rules forbid becau
 
 </Callout>
 
-![The player on desktop: a bottom bar with previous, pause and next buttons, "Playing", 19 min left, a 1 times speed button, a settings button and a progress bar, while the paragraph being read is highlighted above it](/images/build-logs/how-this-site-is-built/player-desktop.png)
+![The player on desktop: a bottom bar with previous, pause and next buttons, "Playing", the time left, a 1 times speed button, a settings button and a progress bar, while the paragraph being read is highlighted above it](/images/build-logs/how-this-site-is-built/player-desktop.png)
 
 ![The player on a phone: the same bar, with a shorter label so nothing is cut off](/images/build-logs/how-this-site-is-built/player-mobile.png)
+
+### Making it work on phones
+
+After the first release, audio didn't play on phones, in Safari or in Chrome. I couldn't hold a phone to the code, so I read the player for the failure points that are known to bite mobile browsers, and found four real ones:
+
+| Symptom on a phone | Cause in the code | Fix |
+| --- | --- | --- |
+| Nothing is spoken | `cancel()` and `speak()` were called in the same instant. Mobile Safari and Chrome can drop speech queued like that | Only cancel when something is actually speaking or queued, and when restarting, wait 80 ms before speaking |
+| It speaks one sentence, then freezes | The utterance object wasn't kept anywhere, and Chrome can garbage-collect it mid-speech, after which its end event never fires | Keep the current utterance in a ref |
+| It stays silent after a pause | Mobile Chrome can leave the engine in a stuck "paused" state | Call `resume()` before every `speak()` |
+| "Paused" and no explanation | A failed utterance was caught and ignored | Show the reason in the player |
+
+Two safety nets sit on top, because phone browsers are inconsistent:
+
+- **A watchdog** checks every half second. If speech started but the engine has gone idle without an end event, it moves on to the next chunk. If speech never started within 4.5 seconds, it stops and says so: "Nothing was spoken. Check the volume (and the silent switch on iPhone), then tap play again."
+- **Plain messages** for refusals: if the browser blocks the audio (its autoplay rule) the player says to tap play again, instead of failing quietly.
+
+The first tap still calls `speak()` straight away inside the click handler, because phones only allow speech that starts from a tap. The bar also now sits above the iPhone's home indicator, using `env(safe-area-inset-bottom)`.
+
+<Callout type="warn" title="What I could and couldn't verify">
+
+I tested all of this in a phone-sized emulated browser with a stubbed speech engine that simulated each failure: end events that never arrive, speech that never starts, and a browser that refuses. Every one now recovers or explains itself. I have **not** heard it on a real iPhone or Android phone, and I can't from here. Two things are outside the code's control: the iPhone silent switch can mute speech, and some phones stop speaking when the screen locks or the tab goes to the background.
+
+</Callout>
 
 ### How I tested speech without listening to it
 
@@ -327,18 +372,18 @@ You can't hear a unit test, but you can check everything except the sound. A scr
 
 | Post | Chunks spoken | Words | Skip notes |
 | --- | --- | --- | --- |
-| How agents talk | 254 | about 3,170 | 19 code, 18 table, 12 diagram, 1 recall |
-| Building my first AI agent | 140 | about 2,050 | 10 code, 5 diagram, 4 table, 1 recall |
+| How agents talk | 264 | about 3,600 | 19 code, 18 table, 1 recall (12 diagrams read) |
+| Building my first AI agent | 144 | about 2,220 | 10 code, 4 table, 1 recall (5 diagrams read) |
 | MapReduce post | 16 | about 230 | 1 code |
 
-Each run finished by itself. A second test, with a stub that never finishes, pressed next, previous, pause, play, speed, voice settings and stop, and checked that the highlight and the bar came and went. Screenshots in light, dark and mobile found one real issue: the label was cut off on a phone, so the part counter is now hidden on small screens.
+Each run finished by itself. The phone failure modes were tested the same way, in an emulated phone. A second test, with a stub that never finishes, pressed next, previous, pause, play, speed, voice settings and stop, and checked that the highlight and the bar came and went. Screenshots in light, dark and mobile found one real issue: the label was cut off on a phone, so the part counter is now hidden on small screens.
 
 What this does *not* prove is how it sounds. That depends on the voices installed in the browser. Edge and Chrome offer "Natural" or "Online" voices that are far better than the defaults, so the voice picker lists those first.
 
 ### Limits
 
 - No download, and some phones stop speech when the screen locks.
-- Anything that exists only in code, a table or an image is skipped, so the important point has to be in the prose too.
+- Anything that exists only in code or a table is skipped, and a diagram is only as good as its alt text, so the important point has to be in the prose or the description.
 - Pronunciation of names and acronyms is whatever the voice decides.
 
 ## Part 2: A tour of the website's code
@@ -473,7 +518,7 @@ Dynamic routes list what to build with `generateStaticParams`, and the build pri
 
 ## Summary
 
-The blog now has **three layers**: a **section** (the shelf), a **series** (the reading order) and **tags** (the detail). Sections and series live in one config file, `parsePost` validates the new frontmatter, small queries filter posts, and two new routes give every section and series a shareable, prerendered page. Posts got readable slugs with permanent redirects from the old ones, and images moved to `public/images/<section>/<series>/<post>/`. The **audio player** reads the rendered prose with the browser's text-to-speech, says what it skips, highlights the current paragraph, and stays correct through pauses and skips thanks to a generation counter. The site underneath is simple on purpose: MDX files in, static pages out, with the theme driven by CSS variables.
+The blog now has **three layers**: a **section** (the shelf), a **series** (the reading order) and **tags** (the detail). Sections and series live in one config file, `parsePost` validates the new frontmatter, small queries filter posts, and two new routes give every section and series a shareable, prerendered page. Posts got readable slugs with permanent redirects from the old ones, and images moved to `public/images/<section>/<series>/<post>/`. The **audio player** reads the rendered prose and each diagram's description with the browser's text-to-speech, says what it skips, highlights the current paragraph, and stays correct through pauses and skips thanks to a generation counter. Playback on phones needed four fixes and a watchdog, and it has been tested only in an emulated phone. The site underneath is simple on purpose: MDX files in, static pages out, with the theme driven by CSS variables.
 
 ![A map of the post in four columns: sections and series, the move, the audio player, and the site's code, with the line the repo is the CMS: content files in, static pages out](/images/build-logs/how-this-site-is-built/summary-map.svg)
 
@@ -491,6 +536,8 @@ The blog now has **three layers**: a **section** (the shelf), a **series** (the 
 | **Web Speech API** | The browser's built-in text-to-speech | Free audio with no files |
 | **`collectChunks`** | Prose in, short speakable chunks out, with skip notes | Code and tables aren't read aloud |
 | **Generation counter** | Each `speak` call invalidates older callbacks | Pause and skip stay reliable |
+| **Alt-text reading** | Diagrams are spoken from their image description | Pictures aren't lost, and alt text matters twice |
+| **Watchdog** | A timer that notices speech that never started or never ended | Phones drop events, so it moves on or explains |
 | **`useSyncExternalStore`** | Reads browser facts (support, voices) | Server and client render the same |
 | **Theme tokens** | CSS variables mapped to Tailwind colour names | One class works in light and dark |
 | **`MdxContent`** | Compiles MDX on the server with custom components | Callouts, copy buttons and heading links |
@@ -540,6 +587,20 @@ A cancelled utterance can still fire its end event, which would start the next c
 </details>
 
 <details>
+<summary>Why might speech work on a laptop but not on a phone?</summary>
+
+Phone browsers are stricter: speech must start from a tap, cancelling and speaking in the same instant can drop the speech, an utterance can be garbage-collected so its end event never fires, and the engine can be left paused. The player avoids each of those and has a watchdog for what slips through.
+
+</details>
+
+<details>
+<summary>How does the player read a diagram?</summary>
+
+It reads the image's alt text after the words "Image:". Alt text counts only if it is a real description (at least 12 characters with a space), so a file name is skipped with a note.
+
+</details>
+
+<details>
 <summary>How can the whole player be tested without hearing anything?</summary>
 
 Replace the browser's `speak` with a stub that records the text and fires the end event, drive the page in a headless browser, and check what was spoken, what was skipped and that the controls behave.
@@ -552,6 +613,18 @@ Replace the browser's `speak` with a stub that records the text and fires the en
 Tailwind colour names point at CSS variables, and the dark theme only redefines those variables, so `text-ink` or `bg-card` stays the same in every component.
 
 </details>
+
+## Update log
+
+| Date | Type | Change |
+| --- | --- | --- |
+| 2026-10-29 | Feature | Sections, series and tags, with `/blog/topic` and `/blog/series` pages, "Part N of M" and previous/next links |
+| 2026-10-29 | Change | LLM Architectures posts renamed to readable slugs, with permanent redirects. Images moved to `public/images/<section>/<series>/<post>/` |
+| 2026-10-29 | Feature | **Listen to this post** audio player: browser text-to-speech, reads prose, skips code, tables and diagrams with a spoken note, highlights the paragraph, speed and voice controls |
+| 2026-10-29 | **Fix** | **Audio did not play on mobile Safari and Chrome.** Four causes fixed: cancel and speak in the same instant, an utterance discarded before it finished, a stuck paused engine, and failures hidden from the reader. Added a watchdog and visible messages, and lifted the bar above the iPhone home indicator |
+| 2026-10-29 | **Feature** | **Diagram reading.** The player now reads each image's alt text, with a setting to turn it off, and the listening-time estimate counts it |
+
+The phone fix was tested in an emulated phone with a stubbed speech engine, not on a physical device. If it still fails on yours, the player now shows a message saying why.
 
 ## What's next
 

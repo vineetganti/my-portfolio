@@ -14,6 +14,12 @@ const CONTENT_ID = "post-content";
 const ACTIVE_CLASS = "tts-active";
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const PREF_KEY = "post-audio-prefs";
+/** Wait this long after cancelling before speaking again; phones can drop speech queued at the same instant. */
+const RESTART_DELAY_MS = 80;
+/** If speech hasn't begun after this long, tell the reader instead of sitting silent. */
+const START_TIMEOUT_MS = 4500;
+/** How often to check that speech is still making progress. */
+const WATCHDOG_MS = 500;
 
 // ---- browser support and voices, kept out of React state ------------------
 
@@ -55,6 +61,8 @@ const noVoices: SpeechSynthesisVoice[] = [];
 interface Prefs {
   rate: number;
   voice: string;
+  /** Read image descriptions aloud. */
+  diagrams: boolean;
 }
 
 function loadPrefs(): Prefs {
@@ -63,9 +71,10 @@ function loadPrefs(): Prefs {
     return {
       rate: RATES.includes(raw.rate) ? raw.rate : 1,
       voice: typeof raw.voice === "string" ? raw.voice : "",
+      diagrams: raw.diagrams !== false,
     };
   } catch {
-    return { rate: 1, voice: "" };
+    return { rate: 1, voice: "", diagrams: true };
   }
 }
 
@@ -106,12 +115,13 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
   const [playing, setPlaying] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [index, setIndex] = useState(0);
+  const [notice, setNotice] = useState("");
   const [track, setTrack] = useState<{ chunks: SpeechChunk[]; wordsLeft: number[] }>({
     chunks: [],
     wordsLeft: [],
   });
   const [prefs, setPrefs] = useState<Prefs>(() =>
-    typeof window === "undefined" ? { rate: 1, voice: "" } : loadPrefs()
+    typeof window === "undefined" ? { rate: 1, voice: "", diagrams: true } : loadPrefs()
   );
 
   // Latest values for use inside speech callbacks, which outlive a render.
@@ -121,6 +131,10 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
   const indexRef = useRef(0);
   const genRef = useRef(0);
   const litRef = useRef<Element | null>(null);
+  // Chrome can garbage-collect an utterance mid-speech and then never fire its end event,
+  // so the current one is kept alive here.
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const statusRef = useRef({ gen: 0, spokenAt: 0, startedAt: 0 });
   useEffect(() => {
     prefsRef.current = prefs;
     voicesRef.current = voices;
@@ -140,6 +154,7 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
     setPlaying(false);
     setActive(false);
     setShowSettings(false);
+    setNotice("");
   }, [clearHighlight]);
 
   const speakRef = useRef<(i: number) => void>(() => {});
@@ -151,7 +166,11 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
       return;
     }
     const gen = ++genRef.current;
-    synth.cancel();
+    // Only cancel when something is actually queued: cancelling an idle engine and speaking in the
+    // same instant makes iOS Safari and Android Chrome drop the new speech.
+    const wasBusy = synth.speaking || synth.pending;
+    if (wasBusy) synth.cancel();
+    synth.resume(); // clears a stuck "paused" state, which mobile Chrome can leave behind
     indexRef.current = i;
     setIndex(i);
     setPlaying(true);
@@ -167,6 +186,13 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
       utterance.lang = "en-US";
     }
     utterance.rate = prefsRef.current.rate;
+    statusRef.current = { gen, spokenAt: Date.now(), startedAt: 0 };
+    utterance.onstart = () => {
+      if (genRef.current === gen) {
+        statusRef.current.startedAt = Date.now();
+        setNotice("");
+      }
+    };
     utterance.onend = () => {
       if (genRef.current === gen) speakRef.current(i + 1);
     };
@@ -175,25 +201,67 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
       if (genRef.current === gen && e.error !== "interrupted" && e.error !== "canceled") {
         genRef.current++;
         setPlaying(false);
+        setNotice(
+          e.error === "not-allowed"
+            ? "Your browser blocked the audio. Tap play to try again."
+            : `Speech failed (${e.error}). Tap play to try again.`
+        );
       }
     };
-    synth.speak(utterance);
+    utteranceRef.current = utterance;
+    // Straight away when idle (so the first tap's permission still applies), after a beat when restarting.
+    if (wasBusy) {
+      setTimeout(() => {
+        if (genRef.current === gen) synth.speak(utterance);
+      }, RESTART_DELAY_MS);
+    } else {
+      synth.speak(utterance);
+    }
   };
   useEffect(() => {
     speakRef.current = speak;
   });
 
-  const start = () => {
+  const buildTrack = (diagrams: boolean): SpeechChunk[] | null => {
     const root = document.getElementById(CONTENT_ID);
-    if (!root) return;
-    const chunks = collectChunks(root);
-    if (chunks.length === 0) return;
+    if (!root) return null;
+    const chunks = collectChunks(root, { describeImages: diagrams });
+    if (chunks.length === 0) return null;
     const wordsLeft: number[] = new Array(chunks.length + 1).fill(0);
     for (let i = chunks.length - 1; i >= 0; i--) wordsLeft[i] = wordsLeft[i + 1] + chunks[i].words;
     chunksRef.current = chunks;
     setTrack({ chunks, wordsLeft });
+    return chunks;
+  };
+
+  const start = () => {
+    if (!buildTrack(prefs.diagrams)) return;
+    setNotice("");
     setActive(true);
     speakRef.current(0);
+  };
+
+  /** Re-reads the page with the new diagram setting and carries on from the same place. */
+  const changeDiagrams = (diagrams: boolean) => {
+    const here = chunksRef.current[indexRef.current]?.el;
+    const next = { ...prefs, diagrams };
+    prefsRef.current = next;
+    setPrefs(next);
+    savePrefs(next);
+    const chunks = buildTrack(diagrams);
+    if (!chunks) return;
+    let i = chunks.findIndex(
+      (c) => c.el === here || (here && here.compareDocumentPosition(c.el) & Node.DOCUMENT_POSITION_FOLLOWING)
+    );
+    if (i === -1) i = chunks.length - 1;
+    if (playing) {
+      speakRef.current(i);
+    } else {
+      indexRef.current = i;
+      setIndex(i);
+      highlight(chunks[i].el, litRef.current);
+      litRef.current = chunks[i].el;
+    }
   };
 
   const pause = () => {
@@ -220,6 +288,29 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
     savePrefs(next);
     if (playing) speakRef.current(indexRef.current);
   };
+
+  // Phones sometimes never report that speech finished, or never start it. Check that it is progressing.
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => {
+      const synth = window.speechSynthesis;
+      const st = statusRef.current;
+      if (st.gen !== genRef.current) return;
+      const now = Date.now();
+      if (!st.startedAt) {
+        if (now - st.spokenAt > START_TIMEOUT_MS && !synth.speaking) {
+          genRef.current++;
+          setPlaying(false);
+          setNotice(
+            "Nothing was spoken. Check the volume (and the silent switch on iPhone), then tap play again."
+          );
+        }
+      } else if (!synth.speaking && !synth.pending && now - st.startedAt > 600) {
+        speakRef.current(indexRef.current + 1); // the end event never came, so move on
+      }
+    }, WATCHDOG_MS);
+    return () => clearInterval(id);
+  }, [playing]);
 
   // Stop speaking when leaving the post or closing the tab.
   useEffect(() => {
@@ -259,7 +350,7 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
           <span className="block text-sm text-ink-muted">
             {active
               ? "Controls are at the bottom of the screen"
-              : `About ${minutes} min · reads the text, skips code, tables and diagrams`}
+              : `About ${minutes} min · reads the text and diagram descriptions, skips code and tables`}
           </span>
         </span>
       </button>
@@ -268,7 +359,8 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
         <div
           role="region"
           aria-label="Audio player"
-          className="fixed bottom-4 left-1/2 z-40 w-[min(44rem,calc(100%-2rem))] -translate-x-1/2 rounded-2xl border border-border bg-card p-3 shadow-lg"
+          className="fixed left-1/2 z-40 w-[min(44rem,calc(100%-2rem))] -translate-x-1/2 rounded-2xl border border-border bg-card p-3 shadow-lg"
+          style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}
         >
           <div className="flex items-center gap-2 sm:gap-3">
             <button
@@ -334,6 +426,12 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
             </button>
           </div>
 
+          {notice && (
+            <p role="status" className="mt-3 rounded-lg bg-accent-tint px-3 py-2 text-sm text-ink-strong">
+              {notice}
+            </p>
+          )}
+
           <div className="mt-3 h-1 overflow-hidden rounded-full bg-border" aria-hidden="true">
             <div
               className="h-full bg-tool transition-[width]"
@@ -343,7 +441,17 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
 
           {showSettings && (
             <div className="mt-3 border-t border-border pt-3">
-              <label className="block text-sm font-bold text-ink-2" htmlFor="audio-voice">
+              <label className="flex items-center gap-2 text-sm font-bold text-ink-2" htmlFor="audio-diagrams">
+                <input
+                  id="audio-diagrams"
+                  type="checkbox"
+                  checked={prefs.diagrams}
+                  onChange={(e) => changeDiagrams(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Describe diagrams (reads each image&apos;s description)
+              </label>
+              <label className="mt-3 block text-sm font-bold text-ink-2" htmlFor="audio-voice">
                 Voice
               </label>
               <select

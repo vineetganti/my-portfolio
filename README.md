@@ -87,8 +87,9 @@ If you rename a published post, add its old slug to `RENAMED_POSTS` in `next.con
 
 Every post has a **Listen to this post** button under its title. It uses the browser's built-in text-to-speech (the Web Speech API), so it costs nothing and needs no audio files, and new posts get it automatically.
 
-- It reads prose and headings, highlights the paragraph being read, and says "Code example skipped", "Table skipped" and so on in place of code, tables, diagrams and the collapsed recall questions. Put anything essential in the prose, not only in those blocks.
-- Controls: play/pause, previous/next paragraph, speed (0.75× to 2×), a voice picker and a time-left estimate. Speed and voice are remembered in the browser.
+- It reads prose and headings, reads each diagram from its alt text (so write alt text as a real description of the picture), highlights the paragraph being read, and says "Code example skipped", "Table skipped" and so on in place of code, tables and the collapsed recall questions. Put anything essential in the prose or the alt text, not only in code or tables. Diagram reading can be switched off in the player's settings.
+- Controls: play/pause, previous/next paragraph, speed (0.75× to 2×), a voice picker, a diagram toggle and a time-left estimate. Speed, voice and the diagram setting are remembered in the browser.
+- **Phones:** playback avoids the known mobile pitfalls (no cancel and speak in the same instant, the current utterance is kept alive, the engine is resumed before speaking) and has a watchdog that moves on if an end event never arrives, or explains if speech never starts. It has been tested in an emulated phone with a stubbed speech engine, not on a physical iPhone or Android phone. The iPhone silent switch can still mute speech.
 - Voice quality depends on the browser and device: Edge and Chrome offer "Natural" or "Online" voices that sound far better than the defaults. Browsers without speech support simply don't show the button.
 - A post can't be downloaded as audio with this approach. If that's wanted later, generate an MP3 per post and let the player prefer it when present.
 
@@ -99,6 +100,7 @@ Everything done so far, newest first. Dates are from the git history.
 | Date | What changed |
 | --- | --- |
 | 2026-10-29 | **Build-log post.** *Building this site* explains the sections, series and audio-player changes with code, then tours the whole codebase. It is the link on the Portfolio Website project card. |
+| 2026-10-29 | **Audio player: phones and diagrams.** Fixed playback on mobile Safari and Chrome (four causes, plus a watchdog and visible error messages) and made the player read each diagram from its alt text, with a setting to turn that off. |
 | 2026-10-29 | **Audio player.** A *Listen to this post* button on every post that reads it aloud with the browser's text-to-speech: prose only, with skip notes for code, tables and diagrams, paragraph highlighting, previous/next, speed, voice choice and time left. |
 | 2026-10-29 | **Blog sections and series.** Added `section`, `series` and `seriesOrder` frontmatter, `src/lib/sections.ts`, section chips and series cards on `/blog`, `/blog/topic/[section]` and `/blog/series/[series]` pages, "Part N of M" and previous/next links on posts. Renamed the six LLM Architectures posts (dropped the `LLM Architectures - 0N -` title prefix, replaced `mentiforce0N` slugs) and the MapReduce post, with permanent redirects from the old URLs. Moved all post images into `public/images/<section>/<series>/<post>/`. Fixed the shell post title typo and the chat-app description placeholder. Rewrote this README. |
 | 2026-10-29 | **Agentic AI posts 4 and 5.** *Agents that work together* (supervisor, agent as tool, graph, swarm) and *How agents talk* (MCP and A2A, with a Groq rate-limit error read line by line). Added a Summary with a summary-map, concepts table and recall questions to posts 1–3, and a series list to every agent post. |
@@ -123,3 +125,4 @@ Everything done so far, newest first. Dates are from the git history.
 - The `llm-scheduler` project card still has a placeholder GitHub URL.
 - There is no sitemap, RSS feed or search yet.
 - The audio player has no downloadable audio and depends on the reader's browser voices. Pre-generated MP3s are the upgrade path.
+- The player's phone fixes are untested on a physical device. Try it on a real iPhone and Android phone and report what happens.
