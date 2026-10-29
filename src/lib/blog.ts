@@ -9,6 +9,7 @@ import { toString } from "mdast-util-to-string";
 import { visit } from "unist-util-visit";
 import type { Heading as MdastHeading } from "mdast";
 import { DEFAULT_SECTION, getSection } from "@/lib/sections";
+import { WORDS_PER_MINUTE } from "@/lib/speech";
 
 export interface BlogPost {
   slug: string;
@@ -23,6 +24,8 @@ export interface BlogPost {
   /** Position in the series, used for ordering. */
   seriesOrder?: number;
   readingTime: string;
+  /** Minutes to listen to the prose read aloud (code, tables and diagrams are skipped). */
+  listenMinutes: number;
   /** Set `toc: false` in frontmatter to hide the table of contents */
   toc: boolean;
   content: string;
@@ -62,6 +65,18 @@ export function getHeadings(content: string): TocHeading[] {
     .map((h) => ({ id: h.id, text: h.text, level: h.depth === top ? 0 : 1 }));
 }
 
+/** Approximate listening time: the prose only, as the audio player reads it. */
+function estimateListenMinutes(markdown: string): number {
+  const prose = markdown
+    .replace(/<details>[\s\S]*?<\/details>/g, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*\|.*$/gm, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/<[^>]+>/g, " ");
+  const words = prose.split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.round(words / WORDS_PER_MINUTE));
+}
+
 function parsePost(slug: string, fileContent: string): BlogPost {
   const { data, content } = matter(fileContent);
   const stats = readingTime(content);
@@ -77,6 +92,7 @@ function parsePost(slug: string, fileContent: string): BlogPost {
     series: data.series || undefined,
     seriesOrder: Number.isFinite(order) ? order : undefined,
     readingTime: stats.text,
+    listenMinutes: estimateListenMinutes(content),
     toc: data.toc !== false,
     content,
   };

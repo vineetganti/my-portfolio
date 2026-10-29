@@ -480,3 +480,11 @@ body {
 .prose details > :last-child {
   margin-bottom: 0.2rem;
 }
+
+/* ---------- Audio player: the block being read aloud ---------- */
+.tts-active {
+  background: var(--accent-t);
+  box-shadow: -0.5rem 0 0 var(--accent-t), 0.5rem 0 0 var(--accent-t);
+  border-radius: 0.25rem;
+  transition: background-color 0.2s;
+}

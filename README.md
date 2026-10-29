@@ -9,7 +9,7 @@ My personal site: a blog where I write up what I'm learning (LLM internals, agen
 | Framework | Next.js 16 (App Router, Turbopack), React 19, TypeScript |
 | Styling | Tailwind CSS 4 with `@tailwindcss/typography`; a "vanilla and olive" theme with light and dark modes, tokens in `src/app/globals.css` |
 | Posts | MDX read from `content/blog/` with `gray-matter`, rendered by `next-mdx-remote` (RSC) with `remark-gfm`, `rehype-slug` and `rehype-highlight` |
-| Extras | Auto-generated table of contents, reading time, a `<Callout>` component, styled `<details>` for recall questions, copy buttons on code blocks |
+| Extras | Auto-generated table of contents, reading time, an audio player that reads posts aloud, a `<Callout>` component, styled `<details>` for recall questions, copy buttons on code blocks |
 | Diagrams | Hand-built SVGs, stored next to the post they belong to |
 | Hosting | Vercel |
 
@@ -36,10 +36,11 @@ public/
   images/<section>/<series>/<post-slug>/   diagrams and screenshots, by post
 src/
   app/             routes: /, /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series], /projects, /about
-  components/      Header, PostCard, SectionNav, SeriesStrip, SeriesNav, Callout, TableOfContents, ...
+  components/      Header, PostCard, SectionNav, SeriesStrip, SeriesNav, AudioPlayer, Callout, TableOfContents, ...
   lib/
     blog.ts        reads posts, builds the table of contents, series and section queries
     sections.ts    the list of sections and series (edit this to add one)
+    speech.ts      turns the rendered post into chunks for the audio player
     projects.ts    reads project files
 next.config.ts     redirects for renamed posts
 ```
@@ -82,12 +83,23 @@ Three layers, each with one job:
 
 If you rename a published post, add its old slug to `RENAMED_POSTS` in `next.config.ts` so old links redirect.
 
+### Listening to a post
+
+Every post has a **Listen to this post** button under its title. It uses the browser's built-in text-to-speech (the Web Speech API), so it costs nothing and needs no audio files, and new posts get it automatically.
+
+- It reads prose and headings, highlights the paragraph being read, and says "Code example skipped", "Table skipped" and so on in place of code, tables, diagrams and the collapsed recall questions. Put anything essential in the prose, not only in those blocks.
+- Controls: play/pause, previous/next paragraph, speed (0.75× to 2×), a voice picker and a time-left estimate. Speed and voice are remembered in the browser.
+- Voice quality depends on the browser and device: Edge and Chrome offer "Natural" or "Online" voices that sound far better than the defaults. Browsers without speech support simply don't show the button.
+- A post can't be downloaded as audio with this approach. If that's wanted later, generate an MP3 per post and let the player prefer it when present.
+
 ## Build log
 
 Everything done so far, newest first. Dates are from the git history.
 
 | Date | What changed |
 | --- | --- |
+| 2026-10-29 | **Build-log post.** *Building this site* explains the sections, series and audio-player changes with code, then tours the whole codebase. It is the link on the Portfolio Website project card. |
+| 2026-10-29 | **Audio player.** A *Listen to this post* button on every post that reads it aloud with the browser's text-to-speech: prose only, with skip notes for code, tables and diagrams, paragraph highlighting, previous/next, speed, voice choice and time left. |
 | 2026-10-29 | **Blog sections and series.** Added `section`, `series` and `seriesOrder` frontmatter, `src/lib/sections.ts`, section chips and series cards on `/blog`, `/blog/topic/[section]` and `/blog/series/[series]` pages, "Part N of M" and previous/next links on posts. Renamed the six LLM Architectures posts (dropped the `LLM Architectures - 0N -` title prefix, replaced `mentiforce0N` slugs) and the MapReduce post, with permanent redirects from the old URLs. Moved all post images into `public/images/<section>/<series>/<post>/`. Fixed the shell post title typo and the chat-app description placeholder. Rewrote this README. |
 | 2026-10-29 | **Agentic AI posts 4 and 5.** *Agents that work together* (supervisor, agent as tool, graph, swarm) and *How agents talk* (MCP and A2A, with a Groq rate-limit error read line by line). Added a Summary with a summary-map, concepts table and recall questions to posts 1–3, and a series list to every agent post. |
 | 2026-10-28 | **LLM Architectures posts 05 and 06.** *vLLM Framework and Inference Engine Design*, and *Batching LLM Requests*, the foundation for the queue-scheduler project. Revised posts 01–04 with summaries, new diagrams and the "About this series" note crediting Mentiforce. |
@@ -101,7 +113,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 ### Content today
 
-16 posts: 11 in AI & LLMs (two series), 2 in Systems & Engineering, 1 in Build Logs and 2 in Essays & Ideas. 4 project cards.
+17 posts: 11 in AI & LLMs (two series), 2 in Systems & Engineering, 2 in Build Logs and 2 in Essays & Ideas. 4 project cards.
 
 ## Open items
 
@@ -110,3 +122,4 @@ Everything done so far, newest first. Dates are from the git history.
 - Tags are free-form and a bit inconsistent (AI, LLMs, AI Engineering). A small fixed vocabulary would make them useful as a filter.
 - The `llm-scheduler` project card still has a placeholder GitHub URL.
 - There is no sitemap, RSS feed or search yet.
+- The audio player has no downloadable audio and depends on the reader's browser voices. Pre-generated MP3s are the upgrade path.

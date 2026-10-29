@@ -448,6 +448,7 @@ What you learned and where to go next.
 - [ ] Every code fence has a language; output is in `text` fences
 - [ ] Links have no space between `]` and `(`
 - [ ] Images live in `public/images/<section>/<series>/<post-slug>/` and have descriptive alt text
+- [ ] Anything essential is also in the prose: the audio player skips code, tables, images and `<details>`
 - [ ] No stray `<`, `{` or `}` outside backticks
 - [ ] Previewed with `npm run dev` at `http://localhost:3000/blog/<slug>` in both
       light and dark mode (theme toggle in the header)
