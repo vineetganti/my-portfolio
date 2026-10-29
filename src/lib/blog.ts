@@ -26,6 +26,11 @@ export interface BlogPost {
   readingTime: string;
   /** Minutes to listen to the prose read aloud (code, tables and diagrams are skipped). */
   listenMinutes: number;
+  /**
+   * Public URL of a recorded narration, if the post has one. Found by convention at
+   * `public/audio/<slug>.m4a`, or set `audio: /audio/other-name.m4a` in frontmatter.
+   */
+  audioSrc?: string;
   /** Set `toc: false` in frontmatter to hide the table of contents */
   toc: boolean;
   content: string;
@@ -77,6 +82,17 @@ function estimateListenMinutes(markdown: string): number {
   return Math.max(1, Math.round(words / WORDS_PER_MINUTE));
 }
 
+const PUBLIC_DIR = path.join(process.cwd(), "public");
+
+/** A recording named in frontmatter, else `public/audio/<slug>.m4a` when that file exists. */
+function findAudio(slug: string, declared: unknown): string | undefined {
+  const url =
+    typeof declared === "string" && declared.startsWith("/")
+      ? declared
+      : `/audio/${slug}.m4a`;
+  return fs.existsSync(path.join(PUBLIC_DIR, url)) ? url : undefined;
+}
+
 function parsePost(slug: string, fileContent: string): BlogPost {
   const { data, content } = matter(fileContent);
   const stats = readingTime(content);
@@ -93,6 +109,7 @@ function parsePost(slug: string, fileContent: string): BlogPost {
     seriesOrder: Number.isFinite(order) ? order : undefined,
     readingTime: stats.text,
     listenMinutes: estimateListenMinutes(content),
+    audioSrc: findAudio(slug, data.audio),
     toc: data.toc !== false,
     content,
   };

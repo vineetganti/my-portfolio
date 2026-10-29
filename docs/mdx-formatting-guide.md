@@ -294,6 +294,10 @@ The one custom component. Use it to pull a point out of the flow.
 
 ---
 
+### Recorded audio (m4a)
+
+To attach a recording to a post, put the file at `public/audio/<post-slug>.m4a`, for example `public/audio/hello-agent.m4a`. No frontmatter is needed: the post page finds it at build time and shows a "Listen to the recording" player (with a download link) in place of the text-to-speech player. To use a different file name, set `audio: /audio/my-file.m4a` in the frontmatter. Keep files small (AAC at 64 to 96 kbps mono is plenty for speech), because they live in the git repo.
+
 ## 9. Blockquotes
 
 ```md
