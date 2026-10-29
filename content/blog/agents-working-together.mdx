@@ -1,0 +1,558 @@
+---
+title: "Agents that work together: supervisor, agent as tool, graph and swarm"
+description: "A first-timer's guide to multi-agent patterns with Strands and Groq: a supervisor with workers, an agent used as a tool, a graph with explicit routing, and a swarm that hands off work, with the lessons each one teaches."
+date: "2026-10-29"
+tags: ["Agentic AI", "LLMs", "AI Engineering", "Strands"]
+---
+
+So far in this series one agent did everything. In [my first agent](/blog/hello-agent) a model, a tool and a loop were enough to act. In [giving agents tools](/blog/giving-agents-tools) that grew to several tools, and in [how agents remember](/blog/how-ai-agents-remember) the agent gained memory. This post is about what happens when one agent is not enough: **several agents, each with one job, working on the same problem**.
+
+<Callout type="analogy" title="A company, not a genius">
+
+One person who does sales, legal, shipping and design makes mistakes in all four. A team of specialists is better, as long as someone decides who does what. The four patterns below are four ways of answering that question: a **boss**, a **teacher who borrows experts**, a **written procedure**, or **colleagues who ask each other**.
+
+</Callout>
+
+All four examples use a model hosted on Groq and the Strands SDK, as before. Every pattern comes with a diagram first, then the code. Long outputs are trimmed to a few lines, marked with `…`.
+
+<Callout type="info" title="This is part of a series">
+
+1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
+3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
+4. **Agents that work together** (this post): supervisor, agent as tool, graph and swarm.
+5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+
+</Callout>
+
+## Why split one agent into many?
+
+| One big agent | Several small agents |
+| --- | --- |
+| One long prompt that covers every job | One short prompt per job, so each one is easier to get right |
+| Every tool is visible to the model, so it can pick the wrong one | Each agent sees only its own tools |
+| Everything lands in one context window | Each agent has its own context, and only results travel between them |
+| Hard to test one part | Each agent can be tested alone |
+
+The price: more model calls, more cost and more places for something to go wrong. Use several agents when the jobs are really different, not just to look sophisticated.
+
+![Four small diagrams: a supervisor delegating to workers, a teacher using specialists as tools, a graph with fixed edges, and a swarm of agents joined to each other, each labelled with who decides what happens next](/multi-agent/patterns-overview.svg)
+
+| Pattern | Who decides the next step | Best for | Notebook |
+| --- | --- | --- | --- |
+| **Supervisor + workers** | A supervisor agent | A question that needs several kinds of research | Market research |
+| **Agent as tool** | An orchestrator agent | Routing a question to the right expert | Tutoring assistant |
+| **Graph** | Your Python code | Fixed, auditable procedures | Order processing |
+| **Swarm** | The agents themselves | Creative, back-and-forth work | Game level design |
+
+## The setup every example shares
+
+Each notebook starts with the same model setup, so it is worth reading once.
+
+```python
+import os
+from dotenv import load_dotenv
+from strands.models.openai import OpenAIModel
+
+load_dotenv()  # reads GROQ_API_KEY from a .env file, if present
+
+MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
+
+model = OpenAIModel(
+    client_args={
+        "api_key": os.environ["GROQ_API_KEY"],
+        "base_url": "https://api.groq.com/openai/v1",  # Groq speaks the OpenAI protocol
+        "max_retries": 5,                               # retry dropped connections
+    },
+    model_id=MODEL_ID,
+    # Reasoning models stream their thinking by default; hide it so only the answer prints.
+    params={"extra_body": {"include_reasoning": False}},
+)
+```
+
+Two details that are easy to miss:
+
+- **`OpenAIModel` works for Groq** because Groq offers an OpenAI-compatible API. Changing `base_url` is all it takes to point at another provider or a local server.
+- **`callback_handler=None`** (used on every worker below) stops an agent from printing its own streaming output. Without it, a worker's whole answer would be printed in the middle of the supervisor's work.
+
+## Pattern 1: Supervisor and workers
+
+A market-research assistant. A **supervisor** splits the question and delegates to three **workers**, then writes one recommendation.
+
+![A question goes to the supervisor, which delegates to a news agent using web search, a financial agent using Yahoo Finance tools and a sentiment agent using web search, and combines their answers into one answer with a disclaimer](/multi-agent/supervisor-workers.svg)
+
+| Worker | Job | Tools |
+| --- | --- | --- |
+| **News agent** | Recent news and developments | Tavily web search |
+| **Financial agent** | Prices, history, fundamentals | `yfinance` functions: price, history, financials |
+| **Sentiment agent** | What investors are saying | Tavily web search |
+
+### Workers are agents with a name and a description
+
+```python
+news_agent = Agent(
+    name="news_agent",
+    description="Researches recent news and developments about companies and industries.",
+    model=model,
+    system_prompt="You are a news research specialist. ... Make at most two web_search calls.",
+    tools=[web_search],
+    callback_handler=None,
+)
+```
+
+The **name** and **description** matter here. When the supervisor sees its tools, those two fields are all it has to decide which one fits the job.
+
+### The supervisor wraps them with `as_tool()`
+
+```python
+supervisor = Agent(
+    name="research_supervisor",
+    model=model,
+    system_prompt="""You are a market research coordinator. ...
+Do not ask the user clarifying questions: pick sensible defaults and delegate straight away.""",
+    tools=[news_agent.as_tool(), financial_agent.as_tool(), sentiment_agent.as_tool()],
+)
+
+response = supervisor("Should I invest in electric vehicle companies?")
+```
+
+`agent.as_tool()` turns a worker into something the supervisor can call like any other tool, so the idea from [the tools post](/blog/giving-agents-tools) carries over unchanged: a tool is just something with a name, a description and an input.
+
+<Callout type="warn" title="Two things that went wrong, and the fixes">
+
+**1. The supervisor asked questions instead of working.** `gpt-oss` tends to answer a broad question by asking you to narrow it down. The last line of the system prompt (`Do not ask the user clarifying questions...`) tells it to pick sensible defaults and delegate.
+
+**2. Groq's free tier rejects any request over 8,000 tokens.** A normal Tavily search returns about 3,700 tokens, and every result is sent again with the worker's next request, so a worker that searches twice overflows. The fix is a small wrapper that keeps the top 3 results (about 1,100 tokens) and refuses a third search:
+
+```python
+@tool(context=True)
+async def web_search(query: str, tool_context: ToolContext, time_range: str = "month"):
+    """Search the web with Tavily and return the top 3 results."""
+    searches = tool_context.agent.state.get("searches") or 0   # reset for each task
+    if searches >= 2:
+        return "Search limit reached: answer with the results you already have."
+    tool_context.agent.state.set("searches", searches + 1)
+    return await tavily_search(query=query, max_results=3, time_range=time_range)
+```
+
+The limit is also written into the worker's prompt, so the model knows about it before it hits it. The 8,000 is Groq's tokens-per-minute limit; [post 5](/blog/how-agents-talk#groqs-four-free-tier-limits) lists all four limits and reads a daily-limit error line by line.
+
+</Callout>
+
+### What the run looked like
+
+The supervisor called `news_agent` twice, and the notebook printed each Tavily search as a large boxed table, which I have cut down to this:
+
+```text
+Tool #1: news_agent
+DEPRECATION WARNING: tavily is deprecated ... use the official Tavily MCP server
+  Query: Tesla BYD Nio Rivian Lucid Ford GM electric vehicle news week
+  Results: 3 found   [1] EV news site (2021 posts)  [2] BYD video page  [3] InsideEVs: Rivian vs Lucid earnings
+Unexpected error in tavily_search: closing tag '[/caption]' doesn't match any open tag
+agent invocation failed: tool call validation failed: attempted to call tool 'open_file'
+                         which was not in request.tools
+
+Tool #2: news_agent
+  Query: Tesla news week electric vehicle developments ... October 2026
+  Results: 3 found   [1] EVWorld headlines (Oct 2026)  [2] Roadster interface  [3] Tesla hiring in Vietnam
+```
+
+Three lessons from that short trace:
+
+- **The first search returned 2021 pages.** A recent-news query can still return old content, so a worker should check dates, and the prompt should say so.
+- **A parser error inside a tool and a model that called a tool it didn't have (`open_file`) both failed one worker call, not the whole run.** The agent was invoked again and carried on. Failures inside workers are normal, so a supervisor should be able to survive one.
+- **Warnings are worth reading.** The Tavily tool is deprecated, and the message names the replacement (the Tavily MCP server; [the next post](/blog/how-agents-talk) explains MCP).
+
+<Callout type="tip" title="Keys stay out of notebooks">
+
+Put `GROQ_API_KEY`, `TAVILY_API_KEY` and the optional `ALPHA_VANTAGE_API_KEY` in a `.env` file or in your shell, and print only whether each one is set. Never commit a real key to a notebook.
+
+</Callout>
+
+## Pattern 2: Agent as tool
+
+The simplest multi-agent idea. A **teacher** receives a student's question and hands it to the right **specialist**: a math tutor, a writing coach or a science helper.
+
+![A student asks the teacher, who calls one of three specialists as a tool and gets the answer back, then presents it to the student](/multi-agent/agent-as-tool.svg)
+
+```python
+math_tutor = Agent(
+    name="math_tutor",
+    description="Solves mathematical equations and explains math concepts step by step",
+    model=model,
+    system_prompt="You are a math tutor. Solve math problems and explain your solutions clearly.",
+    callback_handler=None,
+)
+# writing_coach and science_helper are built the same way
+
+teacher = Agent(
+    model=model,
+    system_prompt="""You are a teacher who helps students by delegating to specialist tutors.
+Never solve problems yourself. Always delegate to the appropriate specialist: ...
+After receiving the specialist's response, present it to the student in a friendly way.""",
+    tools=[math_tutor, writing_coach, science_helper],   # Strands wraps each agent as a tool
+)
+
+teacher("Can you help me solve this quadratic equation: x^2 + 5x + 6 = 0?")
+```
+
+Here the agents go **straight into `tools=[...]`**, with no `as_tool()` call. Strands wraps them for you. In the supervisor example, `as_tool()` was written out, which is the same thing done by hand and lets you customise it.
+
+| Question | Tool the teacher called |
+| --- | --- |
+| A quadratic equation | `math_tutor` |
+| How to write a thesis statement | `writing_coach` |
+| Why does ice float? | `science_helper` |
+
+Each answer arrived as a long, formatted lesson, so only the shape is kept here:
+
+```text
+Tool #1: math_tutor      → steps: identify a, b, c → factor → roots x = −2 and x = −3 → quick check
+Tool #2: writing_coach   → a table of what makes a thesis effective → pick an angle → a template → checklist
+Tool #3: science_helper  → density → hydrogen bonds → open crystal lattice → ice is less dense, so it floats
+```
+
+Why this is called **agent as tool**:
+
+- The **name** becomes the tool name and the **description** tells the teacher when to call it. A vague description means wrong routing.
+- **The teacher stays in control.** The specialists never talk to the student or to each other. They return text to the teacher, and the teacher is the only voice the student hears.
+- Each specialist has its own prompt and its own context, so the math tutor's reasoning doesn't clutter the writing coach's.
+
+<Callout type="info" title="Supervisor and agent as tool are the same idea">
+
+Both are one agent calling other agents as tools. The market-research supervisor adds real tools to the workers (search, Yahoo Finance) and combines several answers. The teacher mostly routes one question to one expert. Neither lets the specialists decide what happens next.
+
+</Callout>
+
+## Pattern 3: Graph, explicit routing in code
+
+An order-processing system, where every order must follow an **auditable path**. A **graph** is made of **nodes** (agents) and **edges** (the arrows between them). Some edges have a **condition**: a plain Python function that returns `True` or `False`, deciding whether the edge is followed.
+
+![Risk analysis routes to manual review if high value, to fraud check if suspicious, or straight to inventory if low risk. Review and fraud check lead to inventory, which routes to shipping if in stock or to refund if out of stock. Three example orders take three different paths](/multi-agent/order-graph.svg)
+
+### Make the model's decision easy to read
+
+The risk analyzer and the inventory agent end their answer with a **fixed final line**:
+
+```text
+RISK_CATEGORY: <HIGH_VALUE|SUSPICIOUS|LOW_RISK>
+STOCK_STATUS: <IN_STOCK|OUT_OF_STOCK>
+```
+
+The routing code reads only that line, so an explanation that merely *mentions* another category can't send the order the wrong way.
+
+```python
+import re
+
+def decision(state, node_id: str, label: str) -> str:
+    """Return the value of the final 'LABEL: VALUE' line written by a node."""
+    text = str(state.results.get(node_id, ""))
+    matches = re.findall(rf"{label}\s*:\s*([A-Z_]+)", text.upper())
+    return matches[-1] if matches else ""      # the LAST match wins
+
+def is_high_value(state):
+    return decision(state, "risk_analysis", "RISK_CATEGORY") == "HIGH_VALUE"
+# is_suspicious, is_low_risk, is_in_stock and is_out_of_stock follow the same pattern
+```
+
+<Callout type="tip" title="Conditions are plain Python">
+
+This is the whole point of a graph. The model *analyses*, but your code *routes*. You can unit-test `is_high_value` with a fake string, without calling any model.
+
+</Callout>
+
+### Build it
+
+```python
+from strands.multiagent import GraphBuilder
+
+builder = GraphBuilder()
+
+builder.add_node(risk_analyzer, "risk_analysis")      # add_node(agent, node_id)
+builder.add_node(manual_review_agent, "manual_review")
+builder.add_node(fraud_detection_agent, "fraud_check")
+builder.add_node(inventory_agent, "inventory_check")
+builder.add_node(shipping_agent, "shipping")
+builder.add_node(refund_agent, "refund")
+
+# conditional edges out of the risk analysis
+builder.add_edge("risk_analysis", "manual_review",   condition=is_high_value)
+builder.add_edge("risk_analysis", "fraud_check",     condition=is_suspicious)
+builder.add_edge("risk_analysis", "inventory_check", condition=is_low_risk)
+
+# unconditional edges
+builder.add_edge("manual_review", "inventory_check")
+builder.add_edge("fraud_check",   "inventory_check")
+
+# inventory decides: ship or refund
+builder.add_edge("inventory_check", "shipping", condition=is_in_stock)
+builder.add_edge("inventory_check", "refund",   condition=is_out_of_stock)
+
+builder.set_entry_point("risk_analysis")
+graph = builder.build()
+```
+
+<Callout type="warn" title="The warning worth reading">
+
+`UserWarning: graph has no max_node_executions or execution_timeout set; execution is unbounded`. This graph has no loops, so it ends anyway. A graph with a loop, or one that calls slow models, should set a limit.
+
+</Callout>
+
+### What each node receives
+
+A node doesn't see the whole run. The **entry node** gets the original order text. Every **other node** gets the original order plus the outputs of the nodes that led to it. That is how the inventory agent knows what the risk analyzer decided without anyone passing it along by hand, and it is also why each node's output should be short: it becomes part of the next node's request.
+
+### Three orders, three paths
+
+`graph("Order #12345: ...")` returns a result with a status, the nodes in the order they ran, and each node's output. A small helper prints the path and the last step:
+
+```python
+def show_path(result):
+    path = " → ".join(node.node_id for node in result.execution_order)
+    print(f"Status: {result.status}\nPath:   {path}")
+    last = result.execution_order[-1].node_id
+    print(f"\nFinal step ({last}):\n{result.results[last].result}")
+```
+
+| Order | Path taken |
+| --- | --- |
+| $1,500 laptop, existing customer, matching addresses | `risk_analysis → manual_review → inventory_check → shipping` |
+| $45 book, returning customer with 50+ orders | `risk_analysis → inventory_check → shipping` |
+| $800 limited-edition headphones, account 5 minutes old, different shipping country | `risk_analysis → fraud_check → inventory_check → refund` |
+
+All three finished with `Status.COMPLETED`. The last step's output was a long confirmation, so here is the refund one, trimmed:
+
+```text
+Refund Confirmation – Order #11111
+- Item: Limited edition headphones   - Amount: $800   - Reason: out of stock
+- What's next: payment reversal in 3–5 business days, a confirmation email, a reference number
+```
+
+Two things to notice. The suspicious order never reached manual review, because the edge conditions sent it to fraud check. And the inventory prompt treats the words "limited edition" as out of stock, which is why that order ended in a refund.
+
+| Strength | Why |
+| --- | --- |
+| **Explicit routing** | Every path is visible in code |
+| **Auditable** | "How do you handle fraud?" can be answered by pointing at the graph |
+| **Acyclic** | Edges only point forward, so every order reaches an end state |
+
+**Use it** when you have an established procedure (compliance, approvals, order processing). **Don't use it** when the path can't be predicted up front.
+
+## Pattern 4: Swarm, agents that hand off to each other
+
+A game-level design team with four agents: a **level designer**, a **game designer** (playtests), a **narrative designer** and a **difficulty balancer**. There is **no central coordinator**. Each agent does its part and then decides who should go next.
+
+![The handoff chain of the run: level designer, difficulty balancer, game designer, difficulty balancer, game designer, with the last turn ending without a handoff. Every agent gets a handoff tool, and safety limits are set](/multi-agent/swarm-handoffs.svg)
+
+Each agent's prompt says what to do, what **not** to do, and who to hand off to:
+
+```python
+level_designer = Agent(
+    name="level_designer",
+    model=model,
+    callback_handler=None,
+    system_prompt="""You are a Level Designer in a game design swarm.
+Focus ONLY on layout and visual design. Do NOT write narrative or balance difficulty.
+After completing your layout, hand off to narrative_designer ... and difficulty_balancer ...""",
+)
+# game_designer: playtests, hands issues to the right specialist, gives the final summary
+# narrative_designer, difficulty_balancer: same shape
+```
+
+The "Focus ONLY on ..." line keeps each agent in its lane. Without it, every agent tries to do the whole job.
+
+### Create the swarm, with safety limits
+
+```python
+from strands.multiagent import Swarm
+
+swarm = Swarm(
+    [level_designer, game_designer, narrative_designer, difficulty_balancer],
+    entry_point=level_designer,                 # who starts
+    max_handoffs=20,                            # stop runaway loops
+    max_iterations=20,
+    execution_timeout=1200.0,                   # seconds for the whole swarm
+    node_timeout=300.0,                         # seconds per agent turn
+    repetitive_handoff_detection_window=8,      # look at the last 8 handoffs...
+    repetitive_handoff_min_unique_agents=3,     # ...and require at least 3 different agents
+)
+```
+
+The swarm gives every agent one extra tool and a **shared context**: the original task, which agents have worked on it, what each one contributed, and the list of agents it can hand off to. The extra tool looks like this:
+
+```python
+handoff_to_agent(
+    agent_name="difficulty_balancer",
+    message="Patrol patterns too predictable - need more variation",
+)
+```
+
+<Callout type="analogy" title="Passing a document around a table">
+
+A swarm is a document passed between colleagues. Each one reads everything written so far, adds their part, and hands it to whoever should look at it next. Nobody assigns the order. It comes from the issues that turn up.
+
+</Callout>
+
+### What happened
+
+The notebook turned on debug logging for `strands.multiagent`, which printed about 30 lines. The useful part is the handoff chain, which a short loop over the result prints:
+
+```python
+for node in result.node_history:      # every agent turn, in order
+    print(f"  → {node.node_id}")
+```
+
+```text
+→ level_designer → difficulty_balancer → game_designer → difficulty_balancer → game_designer
+
+Status: COMPLETED | iterations: 5 | time: 154s
+```
+
+- The run ended on its own: the game designer finished **without handing off**, and the swarm treats "no handoff" as "done".
+- The level designer named two possible next agents (narrative and difficulty), and the swarm went to the difficulty balancer. Only one agent runs at a time.
+- The difficulty balancer and game designer passed the work back and forth once, which is the kind of loop the limits exist to cap.
+- The final answer was a long play-test report. Here is its outline:
+
+```text
+"Derelict Echo": stealth mission in an abandoned space station
+1. Gameplay feel: three zones (Docking Bay, Engineering Core, Bio-Lab), playstyles: aggressive, patient, ghost
+2. Narrative: why the station was abandoned, told through logs and environment
+3. Difficulty curve: guards, cameras, puzzle steps and time limits grow per zone
+4. Verdict: all three playstyles viable   5. Summary for production
+```
+
+<Callout type="warn" title="Watch the cost and the clock">
+
+This run took 154 seconds and five full model turns, each one seeing the growing shared context. A swarm is slower and costs more than a graph for the same amount of work. That is the price of not deciding the path up front.
+
+</Callout>
+
+## Which pattern should I use?
+
+![Is the procedure known in advance? Yes: a graph. No: should one agent stay in charge? Yes: a supervisor or agent as tool. No: a swarm](/multi-agent/choose-pattern.svg)
+
+| | Supervisor / agent as tool | Graph | Swarm |
+| --- | --- | --- | --- |
+| **Control** | One agent in charge | Your code | Shared between agents |
+| **Predictable?** | Mostly | Fully | Not at all |
+| **Auditable?** | By reading the tool calls | By reading the graph | By reading the handoff chain |
+| **Cost and speed** | Moderate | Lowest | Highest |
+| **Failure mode** | Wrong specialist picked | A wrong label breaks the route | Endless handoffs |
+| **Use for** | Research, routing questions | Compliance, approvals, orders | Creative, iterative work |
+
+### What each agent sees
+
+The patterns also differ in what travels between agents, and that decides both what a worker can know and how big its requests get.
+
+| Pattern | A worker receives | What it sends back |
+| --- | --- | --- |
+| **Supervisor / agent as tool** | Only the request the coordinator writes for it, as the tool's input | Its answer, as a tool result to the coordinator |
+| **Graph** | The original task plus the outputs of the nodes that led to it | Its result, stored under its node id for the conditions to read |
+| **Swarm** | The original task, the handoff message and the shared context of everyone's work | A handoff to the next agent, or the final answer |
+
+A swarm agent sees the most, and its context grows with every turn. That is the other half of why a swarm is the slowest and most expensive pattern.
+
+## Things that can trip you up
+
+- **Vague names and descriptions.** The name and description are all a supervisor sees. "Helper" tells it nothing.
+- **The orchestrator answers itself.** Say "never solve problems yourself, always delegate" in its prompt.
+- **The orchestrator asks the user instead of working.** Tell it to pick sensible defaults.
+- **Routing on free text.** Make the model end with a fixed `LABEL: VALUE` line, and read the last match only.
+- **Unbounded runs.** Set `max_handoffs`, `max_iterations` and timeouts on a swarm, and a limit on any graph that could loop.
+- **Context size limits.** On Groq's free tier a request over 8,000 tokens fails, and each tool result is sent again with the next request. Cap results. There is a daily token budget too, which [post 5](/blog/how-agents-talk) runs into.
+- **Prompts that overlap.** If two agents both think a job is theirs, they'll both do it. Say what each one must not do.
+- **Not reading failures.** A tool can fail inside a worker while the run carries on, so read the trace.
+
+## Summary
+
+Several small agents beat one big one when the jobs differ, but someone has to decide who does what. A **supervisor** or an **agent used as a tool** keeps one agent in charge: the others are tools with a name, a description and their own prompt, and their answers go back to the boss. A **graph** moves the decision into your code: agents are nodes, edges are arrows, and conditions are Python functions that read a fixed label from the previous answer, which makes every path auditable. A **swarm** gives the decision to the agents: each gets a handoff tool and a shared context, the path emerges from the work, and limits keep it from looping.
+
+![A map of the post in four columns, one per pattern. Supervisor: one coordinator, named workers, combined answers, capped tokens and searches. Agent as tool: name and description, teacher in charge, never asks back. Graph: nodes and edges, conditions in Python, a final label line, acyclic and auditable. Swarm: handoff to agent, shared context, an emerging path, limits stop loops](/multi-agent/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Multi-agent system** | Several agents, each with one job | Smaller prompts, fewer tools per agent |
+| **Name and description** | What a coordinator sees of a worker | They decide whether it gets called |
+| **`as_tool()`** | Wraps an agent so another agent can call it | The bridge from agents to tools |
+| **Supervisor** | Splits a question, delegates, combines | Research that needs several skills |
+| **Agent as tool** | A teacher routes one question to an expert | The simplest pattern |
+| **`callback_handler=None`** | Silences a worker's own printing | Keeps the output readable |
+| **Token cap** | Limit results and searches per worker | Avoids Groq's 8,000-token request limit |
+| **Graph** | Nodes (agents) and edges (arrows) | Fixed procedures |
+| **Condition** | A Python function on the previous node's output | Routing lives in code, not in the model |
+| **Final label line** | `RISK_CATEGORY: ...` | Reliable parsing of a model's decision |
+| **Acyclic** | Edges only point forward | Every run reaches an end |
+| **Node input** | The original task plus the outputs of the nodes that led to it | How a graph passes results along |
+| **Swarm** | Agents hand control to each other | Creative and iterative work |
+| **`handoff_to_agent`** | The tool that passes control on | How a swarm moves |
+| **Shared context** | The task, who worked on it and what each one added | Every swarm agent sees it, so it grows each turn |
+| **Safety limits** | Max handoffs, iterations, timeouts, repeat detection | Stops infinite loops and surprise bills |
+
+### Test yourself
+
+<details>
+<summary>What does a supervisor know about its workers?</summary>
+
+Only their names and descriptions (and what they return). That is why both must be specific.
+
+</details>
+
+<details>
+<summary>What is the difference between a supervisor and a graph?</summary>
+
+In a supervisor, a model decides which worker to call next. In a graph, your code decides, through edges and conditions.
+
+</details>
+
+<details>
+<summary>Why does the graph read a final `LABEL: VALUE` line instead of searching the whole answer?</summary>
+
+An explanation might mention another category in passing. Only the last labelled line is the real decision, so reading just that line keeps the routing correct.
+
+</details>
+
+<details>
+<summary>Which path does a suspicious order for an out-of-stock item take?</summary>
+
+`risk_analysis → fraud_check → inventory_check → refund`.
+
+</details>
+
+<details>
+<summary>What does a node in the graph receive as input?</summary>
+
+The entry node gets the original task. Every other node gets the original task plus the outputs of the nodes that led to it.
+
+</details>
+
+<details>
+<summary>In a swarm, how does the run end?</summary>
+
+An agent finishes without calling `handoff_to_agent`. The limits (max handoffs, iterations, timeouts, repeat detection) stop it if it never does.
+
+</details>
+
+<details>
+<summary>Why was each worker's search capped at 3 results and 2 searches?</summary>
+
+Groq's free tier rejects a request over 8,000 tokens, and every tool result is sent again with the next request, so uncapped searches overflowed the limit.
+
+</details>
+
+<details>
+<summary>When would you choose a graph over a swarm?</summary>
+
+When the procedure is known and has to be auditable, such as compliance, approvals or order processing. A swarm suits work where the next step depends on what turns up.
+
+</details>
+
+Next: [How agents talk](/blog/how-agents-talk), where tools and agents move into other programs: MCP for tools, A2A for other agents.
+
+## Resources
+
+- [Agents that work together](https://pulkit-scaler.github.io/agents-that-work-together/), the course material behind the notebooks
+- [Building my first AI agent with Strands and Groq](/blog/hello-agent)
+- [Giving an AI agent tools](/blog/giving-agents-tools)
+- [How AI agents remember](/blog/how-ai-agents-remember)

@@ -24,6 +24,16 @@ This builds on [my first agent](/blog/hello-agent) and on [giving an agent tools
 
 Both parts use a model hosted on Groq. Any idea that is likely to be new is explained in plain language before the code that uses it, and every code block has comments.
 
+<Callout type="info" title="This is part of a series">
+
+1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
+3. **How AI agents remember** (this post): long-term and short-term memory.
+4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+
+</Callout>
+
 ## Two kinds of memory
 
 Agents solve the "stateless" problem in two different ways, and it helps to keep them apart from the start.
@@ -979,9 +989,74 @@ This diagram is the general pattern, not something either notebook builds on its
 - **Groq rate limits.** On a free tier, expect an occasional HTTP 429. `max_retries=5` helps with some of it.
 - **Leaving the AWS resource behind.** If the notebook stops before the last cell, delete the memory resource yourself.
 
+## Summary
+
+An LLM is stateless, so an agent's memory is whatever text is put back into its prompt. Short-term memory is the transcript of one conversation, kept by checkpointing the agent's state per thread (LangGraph with AgentCore Memory). Long-term memory is facts pulled out of conversations, stored as embeddings and searched by meaning (Mem0 with a local FAISS index), one store per user. Real assistants want both.
+
+![A map of post 3 in four columns. Two kinds: short-term transcript and long-term facts, with memory refilling the prompt. Mem0: an LLM extracts facts, they are embedded and stored in FAISS, then searched. LangGraph: state, a checkpoint at each step and a thread id per chat. AgentCore: a managed memory store with actor and session ids, which needs AWS access and cleanup](/agent-memory/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Stateless model** | Forgets everything between sessions | Memory means putting text back into the prompt |
+| **Short-term memory** | The messages of one conversation | Continue a chat from a saved checkpoint |
+| **Long-term memory** | Facts and preferences across sessions | Knows the user next week |
+| **Embedding and FAISS** | Text as vectors, searched by meaning | Finds related memories without exact words |
+| **Mem0** | Extracts, stores, updates and searches facts | One agent per user keeps memories apart |
+| **Checkpointer** | Saves the graph state after each step | Resume by `thread_id` |
+| **AgentCore Memory** | A managed store with `actor_id` and `session_id` | No database to run yourself |
+
+### Test yourself
+
+<details>
+<summary>Why does an agent need memory at all?</summary>
+
+The model is stateless: it only knows what is in the current prompt. Memory puts the right information back in.
+
+</details>
+
+<details>
+<summary>What is the difference between short-term and long-term memory?</summary>
+
+Short-term is the transcript of one conversation. Long-term is facts kept across conversations.
+
+</details>
+
+<details>
+<summary>Why must storing and searching use the same embedding model?</summary>
+
+Vectors from different models aren't comparable.
+
+</details>
+
+<details>
+<summary>What identifies a conversation to the checkpointer?</summary>
+
+The `thread_id`, and the `actor_id` for AgentCore.
+
+</details>
+
+<details>
+<summary>Why use `SequentialToolExecutor` with a local FAISS index?</summary>
+
+Parallel writes can silently lose memories.
+
+</details>
+
+<details>
+<summary>What do you do if the notebook stops before the cleanup cell?</summary>
+
+Delete the AWS memory resource yourself.
+
+</details>
+
+Next: [Agents that work together](/blog/agents-working-together).
+
 ## Resources
 
 - [Agents that remember](https://scaler-content.github.io/Agents-that-remember/), the course material behind Part 1
 - The course notebook behind Part 2: `math_agent_with_checkpointing_groq`
 - [Building my first AI agent with Strands and Groq](/blog/hello-agent)
 - [Giving an AI agent tools](/blog/giving-agents-tools)
+- [Agents that work together](/blog/agents-working-together)

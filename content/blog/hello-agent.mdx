@@ -14,6 +14,8 @@ Agentic AI has been around for more than a couple of years, and I finally wanted
 1. **Building my first AI agent** (this post): what an agent is, and a first working agent.
 2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
 3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
+4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
 
 </Callout>
 
@@ -340,12 +342,51 @@ A system prompt asks the model to behave a certain way, but it can't force it. W
 
 </Callout>
 
-## Recap
+## Summary
 
-1. An agent is a loop: the model decides, calls a tool, reads the result and decides again, until the task is done.
-2. Strands gives you that loop in one class, `Agent`, and works with any OpenAI-compatible API, including Groq.
-3. A tool is a plain Python function. The decorator, type hints and docstring tell the model what it does and how to call it.
-4. Prebuilt tools save you from writing common ones yourself.
-5. A system prompt shapes the agent's role and tone, but it is guidance and not a guarantee.
+An agent is a loop: the model decides, calls a tool, reads the result and decides again until the task is done. Strands gives you that loop in one `Agent` class and works with any OpenAI-compatible API, including Groq. A tool is a plain Python function that the decorator, the type hints and the docstring describe to the model. Prebuilt tools save you from writing common ones, and a system prompt shapes the role and tone, as guidance and not a guarantee.
+
+![A map of post 1 in four columns. Agent: the model decides, calls a tool, reads the result and repeats until done. Strands: one Agent class taking a model, tools and a prompt. Groq: an OpenAI-compatible API where you swap the base URL. Building: tools from functions, prebuilt tools and system prompts, which are guidance and not a guarantee](/first-agent/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Agent** | A model in a loop that can call tools | It can act, not just answer |
+| **Strands `Agent`** | One class: model, tools, system prompt | The loop is built in |
+| **Groq** | Fast hosted models behind an OpenAI-compatible API | Swap `base_url` to change provider |
+| **Tool** | A Python function with a decorator, type hints and a docstring | The model reads those, never the body |
+| **Prebuilt tool** | A ready-made tool such as a calculator | No need to rewrite what exists |
+| **System prompt** | Standing instructions for role and tone | Guidance only: enforce hard rules in code |
+
+### Test yourself
+
+<details>
+<summary>What is the difference between a chat and an agent?</summary>
+
+A chat is one prompt in and one answer out. An agent loops: it decides, calls a tool, reads the result and decides again until the task is done.
+
+</details>
+
+<details>
+<summary>What tells the model what a tool does?</summary>
+
+The function's name, type hints and docstring. The model never sees the body.
+
+</details>
+
+<details>
+<summary>How do you point the same code at a different provider?</summary>
+
+Change `base_url` and `api_key`, as long as the provider is OpenAI-compatible.
+
+</details>
+
+<details>
+<summary>Can a system prompt guarantee a rule?</summary>
+
+No. It is guidance. When a rule must hold, enforce it in code.
+
+</details>
 
 Next: [Giving an AI agent tools](/blog/giving-agents-tools), where a plain function becomes a tool and we build a tip calculator, a sales assistant and an inventory checker.

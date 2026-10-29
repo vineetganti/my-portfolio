@@ -17,6 +17,16 @@ We start from an ordinary function the agent can't see, turn it into a tool, and
 
 The material follows the course page [Giving agents tools](https://scaler-content.github.io/giving-agents-tools/). It builds on the Groq and Strands setup from the first post, so the setup code comes first.
 
+<Callout type="info" title="This is part of a series">
+
+1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
+2. **Giving an AI agent tools** (this post): from a plain function to a multi-tool assistant.
+3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
+4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+
+</Callout>
+
 ## Set up the model
 
 This is the same setup as before: read the Groq key from the environment and build a model object that Strands can talk to.
@@ -435,26 +445,65 @@ if product_id not in inventory:
 
 </Callout>
 
-## Recap
+## Summary
 
-Three agents, three lessons about tools:
+A tool is a plain function plus a name, type hints and a docstring, and the model reads those but never the body. The tip calculator showed the model turning a sentence into arguments, the sales assistant showed it choosing the order of several small tools and chaining their results, and the inventory checker showed intent mapping to a tool without keyword matching. The model decides whether a tool is used, a tool that acts in the world deserves the most care, and the agent is only as accurate as its tools.
 
-| Agent | The lesson |
-| --- | --- |
-| Tip calculator | The model turns a sentence into arguments, guided by the docstring and the type hints |
-| Sales assistant | With several small tools, the model works out the order and chains them through results |
-| Inventory checker | The model maps intent to a tool, so a clear description replaces keyword matching |
+![A map of post 2 in four columns. Tool anatomy: decorator, type hints as the schema, docstring as the menu. Tip calculator: a sentence becomes arguments. Sales assistant: the model chains several tools. Inventory checker: intent maps to a tool, a typo is not out of stock, and use is not guaranteed](/agent-tools/summary-map.svg)
 
-And a few ideas that apply to every tool you write:
+### Concepts at a glance
 
-- A tool is a plain function plus a name, type hints and a docstring. The model reads those and never the body.
-- The model decides whether to use a tool, and with what arguments. Say so in the system prompt if a tool must be used.
-- A tool that does something in the world, such as sending an email, deserves the most care. Check what the model adds around it.
-- The agent is only as accurate as its tools, and it repeats what they return.
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Decorator, hints, docstring** | Become the tool name, input schema and description | The model reads the menu, never the kitchen |
+| **Tip calculator** | A sentence turns into arguments | The docstring guides the values |
+| **Multi-tool agent** | The model picks the order and chains results | Small tools compose |
+| **Intent to tool** | A clear description replaces keyword matching | Different phrasings, same tool |
+| **Tool use is not guaranteed** | The model decides if and how to call a tool | Say so in the system prompt if it must |
+| **Side effects** | Tools such as sending email act in the world | Check what the model adds around them |
+
+### Test yourself
+
+<details>
+<summary>What does the model see of a tool?</summary>
+
+Its name, input schema (from the type hints) and description (from the docstring).
+
+</details>
+
+<details>
+<summary>Why does the docstring of the tip tool list 15, 18 and 20?</summary>
+
+It gives the model sensible values to choose from when the user says only 'a good tip'.
+
+</details>
+
+<details>
+<summary>How does the sales assistant know which tool comes first?</summary>
+
+The model works out the order from the request and chains each result into the next call.
+
+</details>
+
+<details>
+<summary>Why can a typo answer 'out of stock'?</summary>
+
+A product ID that isn't found can be reported as if it were out of stock, so check what the agent says.
+
+</details>
+
+<details>
+<summary>Must the model use a tool you provide?</summary>
+
+No. If a tool is required, say so in the system prompt.
+
+</details>
 
 ## What's next
 
-Tools let an agent act. The next step is memory, so it can remember what happened.
+Tools let an agent act. The next steps:
 
 - [How AI agents remember](/blog/how-ai-agents-remember): long-term memory with Mem0, and short-term memory with LangGraph and AgentCore Memory.
-- The remaining course topics, still to come: [Agents that work together](https://pulkit-scaler.github.io/agents-that-work-together/), [How Agents Talk](https://scaler-content.github.io/How-agents-talk/#glossary) and [Shipping Agents to Production](https://scaler-content.github.io/shipping-agents-to-production/).
+- [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+- [How agents talk](/blog/how-agents-talk): MCP for tools and data, A2A for other agents.
+- Still to come from the course: [Shipping Agents to Production](https://scaler-content.github.io/shipping-agents-to-production/).
