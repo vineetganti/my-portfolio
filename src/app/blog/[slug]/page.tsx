@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { format } from "date-fns";
-import { getAllPosts, getHeadings, getPostBySlug } from "@/lib/blog";
+import { getAllPosts, getHeadings, getPostBySlug, getSeriesPosition } from "@/lib/blog";
+import { getSection, getSeriesInfo } from "@/lib/sections";
 import MdxContent from "@/components/MdxContent";
+import SeriesNav from "@/components/SeriesNav";
 import TableOfContents from "@/components/TableOfContents";
 import { ArrowLeft } from "lucide-react";
 
@@ -35,6 +37,8 @@ export default async function BlogPostPage({
 
   const headings = post.toc ? getHeadings(post.content) : [];
   const hasToc = headings.length > 1;
+  const section = getSection(post.section);
+  const position = getSeriesPosition(post);
 
   return (
     <div
@@ -57,6 +61,22 @@ export default async function BlogPostPage({
         </Link>
 
         <header className="mb-10 border-b border-border pb-8">
+          {(section || post.series) && (
+            <p className="text-sm font-bold uppercase tracking-wide text-ink-2 mb-3">
+              {section && (
+                <Link href={`/blog/topic/${section.slug}`} className="hover:text-accent transition-colors">
+                  {section.title}
+                </Link>
+              )}
+              {section && post.series && <span className="mx-2 text-ink-light">/</span>}
+              {post.series && (
+                <Link href={`/blog/series/${post.series}`} className="hover:text-accent transition-colors">
+                  {getSeriesInfo(post.series).title}
+                  {position && position.total > 1 && ` · Part ${position.position} of ${position.total}`}
+                </Link>
+              )}
+            </p>
+          )}
           <p className="font-bold text-ink-muted mb-4">
             <time dateTime={post.date}>
               {format(new Date(post.date), "MMMM d, yyyy")}
@@ -87,6 +107,8 @@ export default async function BlogPostPage({
         </header>
 
         <MdxContent source={post.content} />
+
+        <SeriesNav post={post} />
       </article>
     </div>
   );

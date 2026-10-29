@@ -1,7 +1,8 @@
 ---
 title: "My idea of an ideal chat app"
-description: "A one or two sentence summary of what this post is about."
+description: "Why BlackBerry Messenger still feels ahead of its time, how modern messengers compare on encryption and identity, and a sketch of what an ideal chat app could look like today."
 date: "2026-09-01"
+section: "essays"
 tags: ["Messaging", "Communications", "Cryptography"]
 ---
 
@@ -32,7 +33,7 @@ The weakness was that the whole system was tightly coupled to BlackBerry hardwar
 
 Here’s how that architecture compares to today’s major platforms:
 
-![bbm_vs_modern_messengers](/ideal-chat-app/bbm_vs_modern_messengers.png)
+![bbm_vs_modern_messengers](/images/essays/ideal-chat-app/bbm_vs_modern_messengers.png)
 
 
 **The BBM legacy in one line**: every feature in that table’s “Key BBM DNA” column that says “receipts,” “typing,” or “group chat” was either directly borrowed from or pushed into existence by BBM. WhatsApp’s double blue ticks, iMessage’s “Read 9:41 AM,” Signal’s minimal metadata philosophy — BBM planted those seeds.
@@ -53,7 +54,7 @@ Modern Signal-Protocol-based apps broke that ceiling entirely. The server mathem
 
 The honest ranking:
 
-![messaging_security_spectrum](/ideal-chat-app/messaging_security_spectrum.png)
+![messaging_security_spectrum](/images/essays/ideal-chat-app/messaging_security_spectrum.png)
 
 **Signal** is the clear winner, and the closest spiritual successor — but it actually goes far beyond what BBM ever achieved. The key difference is philosophical: BBM asked you to *trust BlackBerry*. Signal is architected so you *don’t need to* trust Signal.
 
@@ -87,7 +88,7 @@ The answer is to generate a keypair locally on first launch. The public key beco
 
 The private key never leaves the device, but it can be exported as an encrypted backup phrase (12-24 words, like a crypto wallet seed) so the user can restore their identity on a new device without coupling to hardware.
 
-![identity_generation_flow](/ideal-chat-app/identity_generation_flow.png)
+![identity_generation_flow](/images/essays/ideal-chat-app/identity_generation_flow.png)
 
 **Layer 2 — Messaging: Signal’s protocol underneath**
 
@@ -95,7 +96,7 @@ Once two parties have each other’s public keys, the actual message encryption 
 
 What you add on top is the BBM-style receipt system, but implemented without the server ever seeing who is messaging whom.
 
-![message_send_flow](/ideal-chat-app/message_send_flow.png)
+![message_send_flow](/images/essays/ideal-chat-app/message_send_flow.png)
 
 Layer 3 — Transport: the hardest unsolved piece
 
@@ -109,7 +110,7 @@ The last problem — spam and abuse prevention without any identity — is the g
 
 Here’s the full architecture stitched together:
 
-![full_system_architecture](/ideal-chat-app/full_system_architecture.png)
+![full_system_architecture](/images/essays/ideal-chat-app/full_system_architecture.png)
 
 The practical build order
 

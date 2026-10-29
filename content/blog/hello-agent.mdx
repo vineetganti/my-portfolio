@@ -2,6 +2,9 @@
 title: "Building my first AI agent with Strands and Groq"
 description: "What an agent really is, how the Strands SDK and Groq fit together, and a step-by-step first agent with a tool, a prebuilt calculator and a system prompt."
 date: "2026-10-25"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 1
 tags: ["Agentic AI", "LLMs", "AI Engineering"]
 ---
 
@@ -27,7 +30,7 @@ The limitation is that a chat is a **single round trip**: one prompt in, one ans
 
 An **agent** takes over that stitching. It automates the repeated prompting and runs multiple jobs behind the scenes, so the user gets a complete solution and not just an answer that may not solve the actual request. In practice, an agent is a loop: the model decides what to do next, calls a tool (a search, a calculator, an API, a function I wrote), reads the result, and decides again, until it judges that the task is done.
 
-![On the left, a chat is one prompt in and one answer out, with the user copying results into the next prompt. On the right, an agent is a loop where the model decides, calls a tool, reads the result and repeats until done](/first-agent/chat-vs-agent.svg)
+![On the left, a chat is one prompt in and one answer out, with the user copying results into the next prompt. On the right, an agent is a loop where the model decides, calls a tool, reads the result and repeats until done](/images/ai-llms/agentic-ai/hello-agent/chat-vs-agent.svg)
 
 <Callout type="analogy" title="Brain, hands and loop">
 
@@ -78,7 +81,7 @@ What each part does:
 - **`Agent(model=model)`** creates the agent and its loop. With no tools, it behaves like a chat model. Adding tools is what makes it act.
 - **`agent("...")`** sends your prompt through the loop and returns the response.
 
-![An Agent takes a model, optional tools and an optional system prompt, runs the loop, and returns an AgentResult with the message, the stop reason and the metrics](/first-agent/agent-anatomy.svg)
+![An Agent takes a model, optional tools and an optional system prompt, runs the loop, and returns an AgentResult with the message, the stop reason and the metrics](/images/ai-llms/agentic-ai/hello-agent/agent-anatomy.svg)
 
 <Callout type="tip" title="Takeaway">
 
@@ -99,7 +102,7 @@ A first agent in Strands is a model plus an `Agent` wrapper. You add tools, memo
 
 The "OpenAI-compatible" part is what makes the model swappable. The Strands code stays the same, and only two settings change:
 
-![The same Strands code points at Groq, another OpenAI-compatible provider or a local server by changing only the api_key and base_url settings](/first-agent/swap-provider.svg)
+![The same Strands code points at Groq, another OpenAI-compatible provider or a local server by changing only the api_key and base_url settings](/images/ai-llms/agentic-ai/hello-agent/swap-provider.svg)
 
 <Callout type="warn" title="Free tier limits">
 
@@ -294,7 +297,7 @@ The two `Tool #` lines are log messages: the agent called `current_time` twice. 
 4. **Strands runs the Python.** Each call executes the real function and returns a string like `Sunday, 25 October 2026 06:30 PM IST`.
 5. **The results go back to the model.** It now has both times and writes the final answer in plain English.
 
-![The user asks for the time in two cities. The model calls the current_time tool once for Asia/Kolkata and once for America/New_York, reads both results and writes the answer](/first-agent/tool-call-sequence.svg)
+![The user asks for the time in two cities. The model calls the current_time tool once for Asia/Kolkata and once for America/New_York, reads both results and writes the answer](/images/ai-llms/agentic-ai/hello-agent/tool-call-sequence.svg)
 
 Steps 2 to 5 are the agent loop. The model may make the two calls one after the other or together, and the log doesn't say which. Either way, we wrote none of the control flow. The model chose which tool to call, how many times, and with what arguments.
 
@@ -346,7 +349,7 @@ A system prompt asks the model to behave a certain way, but it can't force it. W
 
 An agent is a loop: the model decides, calls a tool, reads the result and decides again until the task is done. Strands gives you that loop in one `Agent` class and works with any OpenAI-compatible API, including Groq. A tool is a plain Python function that the decorator, the type hints and the docstring describe to the model. Prebuilt tools save you from writing common ones, and a system prompt shapes the role and tone, as guidance and not a guarantee.
 
-![A map of post 1 in four columns. Agent: the model decides, calls a tool, reads the result and repeats until done. Strands: one Agent class taking a model, tools and a prompt. Groq: an OpenAI-compatible API where you swap the base URL. Building: tools from functions, prebuilt tools and system prompts, which are guidance and not a guarantee](/first-agent/summary-map.svg)
+![A map of post 1 in four columns. Agent: the model decides, calls a tool, reads the result and repeats until done. Strands: one Agent class taking a model, tools and a prompt. Groq: an OpenAI-compatible API where you swap the base URL. Building: tools from functions, prebuilt tools and system prompts, which are guidance and not a guarantee](/images/ai-llms/agentic-ai/hello-agent/summary-map.svg)
 
 ### Concepts at a glance
 

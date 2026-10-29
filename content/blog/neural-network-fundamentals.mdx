@@ -1,7 +1,10 @@
 ---
-title: "LLM Architectures - 02 - Neural Network Fundamentals"
+title: "Neural Network Fundamentals"
 description: "A walkthrough of what I learnt on Neural network fundamentals and hardware execution with a broader scope on learning about LLM architectures."
 date: "2026-10-10"
+section: "ai-llms"
+series: "llm-architectures"
+seriesOrder: 2
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
@@ -9,14 +12,14 @@ The first post stayed on the Python side of things. This one moves to the neural
 
 <Callout type="note" title="The LLM Architectures series">
 
-1. [01 · Python Internals](/blog/mentiforce01)
+1. [01 · Python Internals](/blog/python-internals-for-llms)
 2. **02 · Neural Network Fundamentals** (this post)
-3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
-4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
-5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
-6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+3. [03 · Transformer Architecture Principles](/blog/transformer-architecture-principles)
+4. [04 · Transformer Inference Optimization Strategies](/blog/transformer-inference-optimization)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/vllm-inference-engine-design)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/batching-llm-requests)
 
-Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/python-internals-for-llms#about-this-series)).
 
 </Callout>
 
@@ -41,7 +44,7 @@ Neurons are organised into **layers**:
 - **Hidden layers** perform complex feature extraction and transformation, through successive weighted sums and activation functions.
 - The **output layer** produces the final predictions or classifications.
 
-![One neuron computes a weighted sum of its inputs plus a bias and applies an activation function. A network arranges neurons in input, hidden and output layers, fully connected, here 4, 5 and 2 neurons with 37 parameters](/llm-nn-fundamentals/neuron-layers.svg)
+![One neuron computes a weighted sum of its inputs plus a bias and applies an activation function. A network arranges neurons in input, hidden and output layers, fully connected, here 4, 5 and 2 neurons with 37 parameters](/images/ai-llms/llm-architectures/neural-network-fundamentals/neuron-layers.svg)
 
 | Component | What it does |
 | --- | --- |
@@ -83,7 +86,7 @@ print(sum(p.numel() for p in model.parameters()))  # 4*8 + 8 + 8*2 + 2 = 58 para
 
 In short, trainable parameters are the adaptive elements that encode what the network has learned. Constants (hyperparameters) are the design choices around them.
 
-![Hyperparameters such as layer sizes, learning rate and dropout rate are chosen by the designer and fixed. Trainable parameters, the weights and biases, are updated by gradient descent](/llm-nn-fundamentals/params-vs-hyperparams.svg)
+![Hyperparameters such as layer sizes, learning rate and dropout rate are chosen by the designer and fixed. Trainable parameters, the weights and biases, are updated by gradient descent](/images/ai-llms/llm-architectures/neural-network-fundamentals/params-vs-hyperparams.svg)
 
 #### Which are used during the forward pass, and what extra is used during training?
 
@@ -94,7 +97,7 @@ In short, trainable parameters are the adaptive elements that encode what the ne
 | **Activation functions**, which transform each summed input into the output passed to the next layer | **Gradients**, from backpropagation |
 | The **output**: the final result after the input has passed through all the layers | **Optimizer** and its state, plus the **learning rate** |
 
-![The forward pass takes input through the model to a prediction. Training adds a loss against the target, gradients from backpropagation, and an optimizer that updates the weights](/llm-nn-fundamentals/training-loop.svg)
+![The forward pass takes input through the model to a prediction. Training adds a loss against the target, gradients from backpropagation, and an optimizer that updates the weights](/images/ai-llms/llm-architectures/neural-network-fundamentals/training-loop.svg)
 
 The training phase extends the forward pass with ways to learn from errors and adjust the learnable parameters step by step.
 
@@ -119,7 +122,7 @@ The training phase extends the forward pass with ways to learn from errors and a
 | **CPU (host)** | PyTorch's C++ backend (powered by the ATen library) uses standard system memory allocation routines (such as `malloc` or equivalent) to reserve a contiguous block of RAM. This is typically the default device |
 | **GPU (device)** | PyTorch uses the GPU's programming model, mainly CUDA for NVIDIA GPUs or ROCm for AMD GPUs. It calls low-level runtime APIs (such as `cudaMalloc`) to request dedicated video RAM (VRAM) from the GPU's memory controller, and the tensor stores a pointer to that block |
 
-![A torch.Tensor object holds shape, strides, dtype, device and a pointer to a storage block, which lives in host RAM or in GPU VRAM and is copied across PCIe by .to cuda](/llm-nn-fundamentals/tensor-device-memory.svg)
+![A torch.Tensor object holds shape, strides, dtype, device and a pointer to a storage block, which lives in host RAM or in GPU VRAM and is copied across PCIe by .to cuda](/images/ai-llms/llm-architectures/neural-network-fundamentals/tensor-device-memory.svg)
 
 - **Device transfer.** Moving a tensor from CPU to GPU (with `tensor.to('cuda')` or `model.cuda()`) copies its data from host RAM to device VRAM. This is a crucial step for using parallel computation, and the transfer bandwidth can be a significant bottleneck.
 - **Memory layout and contiguity.** Tensors are often stored in one contiguous block to optimise access patterns and efficiency. PyTorch uses **strides** to handle non-contiguous views without copying data, and an explicit `.contiguous()` call forces contiguity when needed, possibly at the cost of a copy.
@@ -131,7 +134,7 @@ The training phase extends the forward pass with ways to learn from errors and a
 | `torch.float16`, `torch.bfloat16` | 2 |
 | `torch.int8` | 1 |
 
-![Weight memory of a 7 billion parameter model is 28 GB in FP32, 14 GB in FP16 or BF16, 7 GB in INT8 and 3.5 GB in INT4, and only the FP32 version does not fit a 24 GB GPU](/llm-nn-fundamentals/dtype-memory.svg)
+![Weight memory of a 7 billion parameter model is 28 GB in FP32, 14 GB in FP16 or BF16, 7 GB in INT8 and 3.5 GB in INT4, and only the FP32 version does not fit a 24 GB GPU](/images/ai-llms/llm-architectures/neural-network-fundamentals/dtype-memory.svg)
 
 - **Parameter management in `nn.Module`.** When you define a network with `torch.nn.Module`, parameters are registered with `self.register_parameter()` (or implicitly through `nn.Parameter`). That lets the module track them, move them between devices, and include them in the optimizer's parameter list for gradient updates.
 
@@ -147,7 +150,7 @@ Weight memory is roughly the parameter count times the bytes per parameter. A 7-
 - Not all parameters *must* be on the GPU, but for a computation to use GPU acceleration, the relevant parameters and input data must sit on the same GPU as the operation.
 - Parameters move to the GPU when the user asks for it explicitly, or when a framework (for example for distributed training) arranges the placement. This usually happens just before or at the point of computation.
 
-![Multiplying a CPU tensor by a GPU tensor raises a RuntimeError, while moving both to cuda lets the operation run on the GPU](/llm-nn-fundamentals/same-device-rule.svg)
+![Multiplying a CPU tensor by a GPU tensor raises a RuntimeError, while moving both to cuda lets the operation run on the GPU](/images/ai-llms/llm-architectures/neural-network-fundamentals/same-device-rule.svg)
 
 ```python
 model = model.to("cuda")  # moves every parameter and buffer of the module
@@ -171,7 +174,7 @@ proj = nn.Linear(64, 1000, bias=False)   # its weight is also 1000 x 64
 proj.weight = embed.weight               # both now share one Parameter (weight tying)
 ```
 
-![In weight tying the embedding matrix selects rows at the input and is reused, transposed, to turn the final hidden state into logits at the output, saving about 38.6 million parameters in GPT-2 small](/llm-nn-fundamentals/weight-tying.svg)
+![In weight tying the embedding matrix selects rows at the input and is reused, transposed, to turn the final hidden state into logits at the output, saving about 38.6 million parameters in GPT-2 small](/images/ai-llms/llm-architectures/neural-network-fundamentals/weight-tying.svg)
 
 Common patterns:
 
@@ -197,7 +200,7 @@ A Linear layer transforms an input matrix (or a batch of vectors) **X** into an 
 | **B**, the bias | (out_features) |
 | **Y**, the output | (batch_size, out_features) |
 
-![The input X, shaped batch by in_features, is multiplied by the transposed weight matrix and the bias row is added to give Y, where each output cell is a dot product of one input row and one weight column](/llm-nn-fundamentals/linear-matmul.svg)
+![The input X, shaped batch by in_features, is multiplied by the transposed weight matrix and the bias row is added to give Y, where each output cell is a dot product of one input row and one weight column](/images/ai-llms/llm-architectures/neural-network-fundamentals/linear-matmul.svg)
 
 **The GPU execution paradigm is massive parallelism.** GPUs are designed for Single Instruction, Multiple Threads (SIMT) execution, which suits matrix multiplication perfectly, because each output element can be computed independently. Computation is organised in a hierarchy:
 
@@ -216,7 +219,7 @@ For the general matrix multiplication `C = A × B`, where A is M × K and B is K
     3. Once the tiles are in shared memory, the threads perform many dot products (or partial dot products) on the fast shared data. This gives a high ratio of computation to memory access.
 - This dramatically reduces memory latency, lets data be reused, and keeps the GPU's arithmetic logic units (ALUs) busy, reaching near peak performance. Individual threads also use fast **registers** for intermediate calculations, and compilers and hardware pipeline the instructions aggressively to keep execution continuous.
 
-![C equals A times B. One thread block computes one tile of C, loading tiles of A and B from global memory into shared memory and accumulating in registers](/llm-nn-fundamentals/gpu-tiling.svg)
+![C equals A times B. One thread block computes one tile of C, loading tiles of A and B from global memory into shared memory and accumulating in registers](/images/ai-llms/llm-architectures/neural-network-fundamentals/gpu-tiling.svg)
 
 Deep learning frameworks hide these low-level details and rely on highly optimised libraries to run matrix multiplications:
 
@@ -238,7 +241,7 @@ When a linear layer is defined and run on a GPU, PyTorch, TensorFlow and JAX aut
     - **Kernel fusion** merges consecutive operations into one kernel (next question).
     - **CUDA graphs** record a whole sequence of kernel launches once, then replay it with a single launch. The kernels stay separate, but the CPU cost of launching them almost disappears. vLLM captures CUDA graphs for its decode steps, where every kernel is tiny and launch overhead would otherwise dominate.
 
-![Three small kernels leave idle gaps between launches while the CPU submits the next one. A single fused kernel runs with one launch and no gaps](/llm-nn-fundamentals/kernel-launch-gaps.svg)
+![Three small kernels leave idle gaps between launches while the CPU submits the next one. A single fused kernel runs with one launch and no gaps](/images/ai-llms/llm-architectures/neural-network-fundamentals/kernel-launch-gaps.svg)
 
 #### Is there kernel fusion? Can multiple layers be merged?
 
@@ -246,7 +249,7 @@ When a linear layer is defined and run on a GPU, PyTorch, TensorFlow and JAX aut
 - **Standard execution model.** Without fusion, each operation (matrix multiplication, ReLU, bias addition) goes through: launch a new kernel on the GPU → load the input data from global memory → compute → write the intermediate result back to global memory.
 - **Fused execution model.** With fusion, a compiler finds chances to chain these operations directly in the GPU's faster on-chip memory (registers, shared memory) for the intermediate results, avoiding costly round trips to global memory.
 
-![Without fusion, matmul, bias and ReLU are three kernels with six trips to global memory. With fusion they are one kernel with two trips, and the intermediates stay in registers and shared memory](/llm-nn-fundamentals/kernel-fusion.svg)
+![Without fusion, matmul, bias and ReLU are three kernels with six trips to global memory. With fusion they are one kernel with two trips, and the intermediates stay in registers and shared memory](/images/ai-llms/llm-architectures/neural-network-fundamentals/kernel-fusion.svg)
 
 ### How does memory layout affect performance?
 
@@ -273,7 +276,7 @@ c = t.contiguous()                      # the data is now physically rearranged 
 print(c.stride(), c.is_contiguous())    # (2, 1) True
 ```
 
-![A 2 by 3 tensor in flat memory, its transposed view that only changes the strides, and the contiguous copy with the data rearranged](/llm-nn-fundamentals/tensor-strides.svg)
+![A 2 by 3 tensor in flat memory, its transposed view that only changes the strides, and the contiguous copy with the data rearranged](/images/ai-llms/llm-architectures/neural-network-fundamentals/tensor-strides.svg)
 
 **Performance implications for neural networks.** Memory layout matters because of cache locality and vectorisation efficiency on modern hardware such as GPUs:
 
@@ -304,14 +307,14 @@ The previous answers showed what fusion does. Here are the reasons for it, side 
 | **Shared memory (on-chip)** | A small, very fast memory shared by the threads of one thread block. It is used for tiling or blocking: sections of activations are loaded from global memory once, then reused many times by the local threads, which sharply reduces global memory traffic |
 | **Registers (on-chip)** | The fastest memory, private to each thread. Single scalar values or small fragments of activations stay in registers during computation |
 
-![GPU memory hierarchy from registers and shared memory, through the L2 cache, to HBM and host RAM, getting larger and slower at each step, with A100 figures](/llm-nn-fundamentals/gpu-memory-hierarchy.svg)
+![GPU memory hierarchy from registers and shared memory, through the L2 cache, to HBM and host RAM, getting larger and slower at each step, with A100 figures](/images/ai-llms/llm-architectures/neural-network-fundamentals/gpu-memory-hierarchy.svg)
 
 Two common layouts for 4D image tensors:
 
 - **NCHW (channels-first):** Batch × Channels × Height × Width. Width varies fastest in memory, so each channel's H × W plane is stored contiguously.
 - **NHWC (channels-last):** the channels are the innermost dimension (`Activations[N, H, W, C]`). This gives better spatial locality for pixel-wise operations (element-wise additions, non-linearities), because all the channel values for one (H, W) position sit together.
 
-![A 2 by 2 image with three channels stored in NCHW order has the whole red plane first, while NHWC order keeps the three channel values of each pixel together](/llm-nn-fundamentals/nchw-nhwc.svg)
+![A 2 by 2 image with three channels stored in NCHW order has the whole red plane first, while NHWC order keeps the three channel values of each pixel together](/images/ai-llms/llm-architectures/neural-network-fundamentals/nchw-nhwc.svg)
 
 Advanced buffer management techniques:
 
@@ -320,7 +323,7 @@ Advanced buffer management techniques:
 - **Quantization.** Storing activations at lower precision (FP16, INT8) cuts the memory footprint a lot, lets more data fit in faster caches and lowers bandwidth needs. It is a common inference optimisation on specialised hardware.
 - **Dynamic paging and virtual memory.** For extremely large models, researchers are exploring techniques where only the active parts of the model (including activations) stay in GPU memory, like CPU virtual memory, to handle models larger than the GPU's VRAM.
 
-![During inference two activation buffers alternate: each layer reads one and writes the other, so peak activation memory is two layer outputs, not the sum of all layers](/llm-nn-fundamentals/buffer-reuse.svg)
+![During inference two activation buffers alternate: each layer reads one and writes the other, so peak activation memory is two layer outputs, not the sum of all layers](/images/ai-llms/llm-architectures/neural-network-fundamentals/buffer-reuse.svg)
 
 ## Do optimizer and gradients matter for inference?
 
@@ -347,7 +350,7 @@ Advanced buffer management techniques:
 | **Dropout** | Randomly sets a fraction p of input units to zero at each update, to prevent overfitting. The surviving activations are scaled by 1/(1 − p). This adds noise and prevents neurons from co-adapting | Passes the inputs straight through, with no dropping and no scaling. The full learned capacity of the model is used and the results are deterministic |
 | **Batch Normalization** | Normalises inputs with the mean and variance of the current mini-batch | Uses the learned population (running) statistics instead |
 
-![In training mode dropout zeroes a random half of the activations and scales the rest, and batch norm uses the mini-batch statistics. In eval mode dropout passes everything through and batch norm uses its saved running statistics](/llm-nn-fundamentals/train-vs-eval.svg)
+![In training mode dropout zeroes a random half of the activations and scales the rest, and batch norm uses the mini-batch statistics. In eval mode dropout passes everything through and batch norm uses its saved running statistics](/images/ai-llms/llm-architectures/neural-network-fundamentals/train-vs-eval.svg)
 
 ```python
 model.eval()               # dropout off; batch norm uses its running statistics
@@ -373,7 +376,7 @@ opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
 # same shape: "exp_avg" (the first moment) and "exp_avg_sq" (the second moment).
 ```
 
-![AdamW keeps a first-moment and a second-moment tensor of the same shape as every parameter. Per parameter, FP32 training and mixed-precision training both need 16 bytes, while FP16 inference needs 2](/llm-nn-fundamentals/adamw-state.svg)
+![AdamW keeps a first-moment and a second-moment tensor of the same shape as every parameter. Per parameter, FP32 training and mixed-precision training both need 16 bytes, while FP16 inference needs 2](/images/ai-llms/llm-architectures/neural-network-fundamentals/adamw-state.svg)
 
 #### How does the optimizer "scan" through all parameters?
 
@@ -450,7 +453,7 @@ Putting these together:
 
 Only the parameters stay fixed. Everything else grows with the batch size B, so increasing B steadily raises VRAM consumption.
 
-![Stacked bars for batch sizes 1, 8, 32 and 64: weights and overhead stay constant while inputs and activations grow with the batch, crossing a 24 GB limit](/llm-nn-fundamentals/vram-vs-batch.svg)
+![Stacked bars for batch sizes 1, 8, 32 and 64: weights and overhead stay constant while inputs and activations grow with the batch, crossing a 24 GB limit](/images/ai-llms/llm-architectures/neural-network-fundamentals/vram-vs-batch.svg)
 
 ### Differences in memory usage between inference and training
 
@@ -472,7 +475,7 @@ Only the parameters stay fixed. Everything else grows with the batch size B, so 
 - In specialised settings where models keep adapting (certain online learning systems, meta-learning), a model may do an "inference" step immediately followed by a "micro-training" step. Then a minimal set of optimizer states may be kept or re-initialised. This departs from the conventional meaning of static inference.
 - Optimizer states are different from **recurrent states** or **attention key/value caches** in sequential models. Those belong to the model's architectural design, keeping context across time steps or tokens during inference, and have nothing to do with optimization. For LLMs the KV cache is the big one, and post 04 is about it.
 
-![Training in FP32 with Adam needs about four times the parameter memory plus activations, while inference needs the weights plus a small working set](/llm-nn-fundamentals/memory-train-vs-inference.svg)
+![Training in FP32 with Adam needs about four times the parameter memory plus activations, while inference needs the weights plus a small working set](/images/ai-llms/llm-architectures/neural-network-fundamentals/memory-train-vs-inference.svg)
 
 ### Causes of VRAM OOM (out-of-memory) and prediction
 
@@ -528,7 +531,7 @@ Generating text adds one more big category: the **KV cache**, which grows with e
 - PyTorch's automatic differentiation engine, **Autograd**, builds a computational graph dynamically during the forward pass. That graph retains intermediate activations and the metadata needed to compute gradients in the backward pass.
 - Inside a `torch.no_grad()` block, graph construction and gradient tracking are switched off. So intermediate tensors that would otherwise be kept for backpropagation are either never allocated for gradient purposes or freed at once, and no memory is allocated for gradient storage.
 
-![With autograd every layer's output is saved for the backward pass, so memory grows with depth. Inside no_grad each output is freed once the next layer has used it](/llm-nn-fundamentals/autograd-no-grad.svg)
+![With autograd every layer's output is saved for the backward pass, so memory grows with depth. Inside no_grad each output is freed once the next layer has used it](/images/ai-llms/llm-architectures/neural-network-fundamentals/autograd-no-grad.svg)
 
 ```python
 with torch.no_grad():                 # or torch.inference_mode(): no autograd graph is built
@@ -543,7 +546,7 @@ fast_model = torch.compile(model)     # may fuse kernels: faster, and sometimes 
 - **During inference:** with `torch.no_grad()` (above), each intermediate tensor is freed as soon as the next layer has used it.
 - **During training:** **activation checkpointing** frees most activations during the forward pass and recomputes them during the backward pass, trading computation for memory. Splitting an `n`-layer network into segments of about `√n` layers and keeping only the segment boundaries cuts activation memory from `O(n)` to about `O(√n)`, for roughly one extra forward pass.
 
-![Storing all 8 activations of an 8-layer network versus keeping a checkpoint every second layer and recomputing the freed ones during the backward pass](/llm-nn-fundamentals/activation-checkpointing.svg)
+![Storing all 8 activations of an 8-layer network versus keeping a checkpoint every second layer and recomputing the freed ones during the backward pass](/images/ai-llms/llm-architectures/neural-network-fundamentals/activation-checkpointing.svg)
 
 ```python
 from torch.utils.checkpoint import checkpoint
@@ -574,7 +577,7 @@ Practical implications and controls:
 - VRAM fragmentation is the state in which free GPU memory is scattered in small, non-contiguous pieces. A new tensor that needs one large contiguous block can't be allocated, **even if the total free memory is enough**.
 - Unlike CPU RAM, GPU memory often prefers contiguous allocation for performance. When a program requests a block, the allocator tries to find a single contiguous region. If only small separated regions are free, a larger allocation fails.
 
-![A row of GPU memory blocks has eight free blocks scattered in runs of at most two, so a request for four contiguous blocks fails even though enough total memory is free](/llm-nn-fundamentals/vram-fragmentation.svg)
+![A row of GPU memory blocks has eight free blocks scattered in runs of at most two, so a request for four contiguous blocks fails even though enough total memory is free](/images/ai-llms/llm-architectures/neural-network-fundamentals/vram-fragmentation.svg)
 
 The main causes:
 
@@ -606,7 +609,7 @@ del big_tensor            # drop the last reference: the block returns to PyTorc
 torch.cuda.empty_cache()  # now hand the cached, unused blocks back to the CUDA driver
 ```
 
-![Three snapshots of PyTorch's CUDA memory pool: after del, memory_allocated drops but memory_reserved stays the same, and only empty_cache lowers memory_reserved](/llm-nn-fundamentals/allocated-reserved.svg)
+![Three snapshots of PyTorch's CUDA memory pool: after del, memory_allocated drops but memory_reserved stays the same, and only empty_cache lowers memory_reserved](/images/ai-llms/llm-architectures/neural-network-fundamentals/allocated-reserved.svg)
 
 When several models or users share one GPU, two more facts matter:
 
@@ -617,7 +620,7 @@ When several models or users share one GPU, two more facts matter:
 
 A network is layers of weights and biases with non-linear activations between them, and training adds a loss, gradients and an optimizer on top of the forward pass. Parameters are tensors with a shape, strides, a dtype and a device, and every tensor in an operation must be on the same device. On the GPU, a Linear layer is a tiled matrix multiplication, and fusion and CUDA graphs cut the cost of many small kernels. Training with AdamW needs about 16 bytes per parameter, while FP16 inference needs 2, and `torch.no_grad()` drops the autograd graph. VRAM holds the weights, plus inputs and activations that grow with the batch, plus overhead, and fragmentation can cause an out-of-memory error even when the total free memory looks sufficient.
 
-![A map of post 02 in four columns. Building blocks: layers of neurons, weights and biases, non-linear activations, and the loss that training adds. Parameters: tensors on a device, bytes per element, one device per operation, and weight tying. On the GPU: a Linear layer is a tiled matmul, launch overhead, fusion and CUDA graphs, and the memory hierarchy. Memory: AdamW needs 16 bytes per parameter, FP16 inference 2, no_grad drops the graph, and fragmentation causes out-of-memory errors](/llm-nn-fundamentals/summary-map.svg)
+![A map of post 02 in four columns. Building blocks: layers of neurons, weights and biases, non-linear activations, and the loss that training adds. Parameters: tensors on a device, bytes per element, one device per operation, and weight tying. On the GPU: a Linear layer is a tiled matmul, launch overhead, fusion and CUDA graphs, and the memory hierarchy. Memory: AdamW needs 16 bytes per parameter, FP16 inference 2, no_grad drops the graph, and fragmentation causes out-of-memory errors](/images/ai-llms/llm-architectures/neural-network-fundamentals/summary-map.svg)
 
 ### Concepts at a glance
 
@@ -707,4 +710,4 @@ Fragmentation: the free memory is split into pieces that are each too small for 
 
 </details>
 
-Next in the series: [03 · Transformer Architecture Principles](/blog/mentiforce03).
+Next in the series: [03 · Transformer Architecture Principles](/blog/transformer-architecture-principles).

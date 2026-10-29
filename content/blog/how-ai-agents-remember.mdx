@@ -2,6 +2,9 @@
 title: "How AI agents remember: Mem0, LangGraph and AgentCore Memory"
 description: "A first-timer's guide to agent memory: long-term facts with Mem0 and FAISS, short-term conversation state with LangGraph checkpointing, and every block of code explained."
 date: "2026-10-27"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 3
 tags: ["Agentic AI", "LLMs", "AI Engineering", "LangGraph"]
 ---
 
@@ -38,7 +41,7 @@ Both parts use a model hosted on Groq. Any idea that is likely to be new is expl
 
 Agents solve the "stateless" problem in two different ways, and it helps to keep them apart from the start.
 
-![Two chat sessions that each hold a transcript, which is short-term memory, with a long-term store below that keeps facts from session 1 and recalls them in session 2](/agent-memory/memory-kinds.svg)
+![Two chat sessions that each hold a transcript, which is short-term memory, with a long-term store below that keeps facts from session 1 and recalls them in session 2](/images/ai-llms/agentic-ai/how-ai-agents-remember/memory-kinds.svg)
 
 | | Short-term memory | Long-term memory |
 | --- | --- | --- |
@@ -68,7 +71,7 @@ It works in four moves:
 3. **Update:** when a new fact contradicts an old one, Mem0 can update or delete the old memory instead of piling up duplicates.
 4. **Search:** before each model call, search with the user's message, take the top few matching memories and put them in the prompt.
 
-![Storing a memory: you say something, an LLM extracts facts, fastembed embeds them, FAISS stores them. Recalling: you ask, the model calls the memory tool, the query is embedded with the same model, FAISS returns the nearest facts](/agent-memory/mem0-pipeline.svg)
+![Storing a memory: you say something, an LLM extracts facts, fastembed embeds them, FAISS stores them. Recalling: you ask, the model calls the memory tool, the query is embedded with the same model, FAISS returns the nearest facts](/images/ai-llms/agentic-ai/how-ai-agents-remember/mem0-pipeline.svg)
 
 ### Embeddings, FAISS and fastembed
 
@@ -76,7 +79,7 @@ The word "searched by meaning" hides three ideas that are worth understanding be
 
 **Embeddings.** An embedding is a list of numbers that captures the meaning of a piece of text. Texts with similar meaning get lists that are close together, and texts with different meaning end up far apart. This is how "Suggest a restaurant" can land near "I'm vegetarian", even though they share no words.
 
-![A simplified two-dimensional map where food-related memories cluster together, the query Suggest a restaurant lands among them, and work-related text sits far away](/agent-memory/embeddings-map.svg)
+![A simplified two-dimensional map where food-related memories cluster together, the query Suggest a restaurant lands among them, and work-related text sits far away](/images/ai-llms/agentic-ai/how-ai-agents-remember/embeddings-map.svg)
 
 **FAISS.** FAISS (Facebook AI Similarity Search) is an open-source library from Meta for fast similarity search over vectors. It is the "vector store" Mem0 uses here. A FAISS *index* is the data structure that holds all the vectors and answers the question "which stored vectors are nearest to this one?" quickly.
 
@@ -304,7 +307,7 @@ The `{user_name}` placeholders are filled in later with `.format(...)`, so one t
 
 `Mem0MemoryTool(user_id=...)` binds the memory to one user. `PythonAgentTool` then wraps that bound function with Mem0's tool description, so the agent sees an ordinary `mem0_memory` tool, but it can only ever reach that one user's memories.
 
-![Mona's agent holds a memory tool fixed to the user_id mona_mona, so it can read and write Mona's memories in the shared FAISS index but cannot reach another user's](/agent-memory/per-user-memory.svg)
+![Mona's agent holds a memory tool fixed to the user_id mona_mona, so it can read and write Mona's memories in the shared FAISS index but cannot reach another user's](/images/ai-llms/agentic-ai/how-ai-agents-remember/per-user-memory.svg)
 
 `SequentialToolExecutor` makes the agent run tool calls one at a time. A model often saves several facts in one turn, and by default Strands runs those calls in parallel. Every call loads the same local FAISS file, adds a vector and writes the file back, so run in parallel they overwrite each other and memories are silently lost. Any tool that writes to a shared local file needs this.
 
@@ -386,7 +389,7 @@ agent1("\n".join(user1_comments))
 
 The memory tool prints what it stored:
 
-![Terminal output of the memory tool showing five ADD operations: User is a veggie lover, Requires low-sodium food, Decaffeinated drinks only, Prefers full-service restaurants, Liked Indian restaurant chai](/agent-memory/hello_agent_memory_list.png)
+![Terminal output of the memory tool showing five ADD operations: User is a veggie lover, Requires low-sodium food, Decaffeinated drinks only, Prefers full-service restaurants, Liked Indian restaurant chai](/images/ai-llms/agentic-ai/how-ai-agents-remember/hello_agent_memory_list.png)
 
 And the agent replies:
 
@@ -499,7 +502,7 @@ The fields that matter:
 
 The two cycles are the agent loop from the first post: decide, call a tool, read the result, answer.
 
-![A sequence diagram: you send your preferences, the model calls the memory tool with a store action, the tool works for 6.4 seconds and returns, then the model writes its reply. Cycle 1 took 7.85 seconds and cycle 2 took 1.23 seconds](/agent-memory/agent-loop-store.svg)
+![A sequence diagram: you send your preferences, the model calls the memory tool with a store action, the tool works for 6.4 seconds and returns, then the model writes its reply. Cycle 1 took 7.85 seconds and cycle 2 took 1.23 seconds](/images/ai-llms/agentic-ai/how-ai-agents-remember/agent-loop-store.svg)
 
 - **Cycle 1** (566 tokens in, 120 out): the model read the message and decided to call `mem0_memory` with `action: store`. Then the tool ran.
 - **Cycle 2** (881 in, 131 out): the tool result went back to the model, which wrote the friendly confirmation.
@@ -526,7 +529,7 @@ agent1("Show what you remember about me")
 Tool #2: mem0_memory
 ```
 
-![Terminal output of the memory tool titled Memories List, a table with an ID, the memory text, a creation time, the user ID mona_mona and metadata for each of the five stored memories](/agent-memory/hello_agent_memory_list_2.png)
+![Terminal output of the memory tool titled Memories List, a table with an ID, the memory text, a creation time, the user ID mona_mona and metadata for each of the five stored memories](/images/ai-llms/agentic-ai/how-ai-agents-remember/hello_agent_memory_list_2.png)
 
 The agent then summarises it in its own words:
 
@@ -681,7 +684,7 @@ A **checkpoint** is a snapshot of the state, taken after a step. A **checkpointe
 
 By default a checkpointer can simply keep snapshots in RAM, and they disappear when the program stops. The point of this notebook is to swap in a **durable** one that stores them in the cloud.
 
-![A LangGraph agent: START leads to a model node and a tools node that loop until the model makes no tool call, then END. After every step a snapshot is saved to AgentCore Memory, and the latest state is loaded when a run begins](/agent-memory/langgraph-checkpointer.svg)
+![A LangGraph agent: START leads to a model node and a tools node that loop until the model makes no tool call, then END. After every step a snapshot is saved to AgentCore Memory, and the latest state is loaded when a run begins](/images/ai-llms/agentic-ai/how-ai-agents-remember/langgraph-checkpointer.svg)
 
 ### Amazon Bedrock AgentCore Memory
 
@@ -896,7 +899,7 @@ for checkpoint in graph.get_state_history(config):
 
 This is the part that shows what a checkpointer really is. The list starts at the newest checkpoint, with every message, and goes back in time with fewer and fewer messages, until the empty start. Every step in the run left a snapshot behind.
 
-![Seven checkpoint cards from an empty start to the final answer, with the message count growing from 0 to 6. get_state reads the newest one and get_state_history walks back through all of them](/agent-memory/checkpoint-timeline.svg)
+![Seven checkpoint cards from an empty start to the final answer, with the message count growing from 0 to 6. get_state reads the newest one and get_state_history walks back through all of them](/images/ai-llms/agentic-ai/how-ai-agents-remember/checkpoint-timeline.svg)
 
 <Callout type="info" title="Why keep history at all?">
 
@@ -934,7 +937,7 @@ for chunk in graph.stream(inputs, stream_mode="updates", config=config):
     print(chunk)
 ```
 
-![Under one actor, session-1 holds the saved messages of the math conversation while session-2 is a new thread with no checkpoints, so a question about the earlier numbers has nothing to draw on](/agent-memory/session-isolation.svg)
+![Under one actor, session-1 holds the saved messages of the math conversation while session-2 is a new thread with no checkpoints, so a question about the earlier numbers has nothing to draw on](/images/ai-llms/agentic-ai/how-ai-agents-remember/session-isolation.svg)
 
 Now the agent has no history to work from, because `session-2` has no checkpoints. It should say it doesn't know what you mean. The `actor_id` is the same as before and it makes no difference: short-term memory is per *session*, not per actor.
 
@@ -973,7 +976,7 @@ The key difference is that the agent never *chooses* to save a checkpoint. It ha
 
 The two aren't alternatives. A real assistant normally wants both: checkpoints so a conversation can continue, and long-term memory so it knows the user next week.
 
-![Recent messages from the checkpointer and relevant facts from Mem0 both go into the prompt. After the model answers, the new state is saved to the checkpointer and any new facts are stored in Mem0](/agent-memory/memory-together.svg)
+![Recent messages from the checkpointer and relevant facts from Mem0 both go into the prompt. After the model answers, the new state is saved to the checkpointer and any new facts are stored in Mem0](/images/ai-llms/agentic-ai/how-ai-agents-remember/memory-together.svg)
 
 This diagram is the general pattern, not something either notebook builds on its own: they use different frameworks, so combining them would take extra wiring.
 
@@ -993,7 +996,7 @@ This diagram is the general pattern, not something either notebook builds on its
 
 An LLM is stateless, so an agent's memory is whatever text is put back into its prompt. Short-term memory is the transcript of one conversation, kept by checkpointing the agent's state per thread (LangGraph with AgentCore Memory). Long-term memory is facts pulled out of conversations, stored as embeddings and searched by meaning (Mem0 with a local FAISS index), one store per user. Real assistants want both.
 
-![A map of post 3 in four columns. Two kinds: short-term transcript and long-term facts, with memory refilling the prompt. Mem0: an LLM extracts facts, they are embedded and stored in FAISS, then searched. LangGraph: state, a checkpoint at each step and a thread id per chat. AgentCore: a managed memory store with actor and session ids, which needs AWS access and cleanup](/agent-memory/summary-map.svg)
+![A map of post 3 in four columns. Two kinds: short-term transcript and long-term facts, with memory refilling the prompt. Mem0: an LLM extracts facts, they are embedded and stored in FAISS, then searched. LangGraph: state, a checkpoint at each step and a thread id per chat. AgentCore: a managed memory store with actor and session ids, which needs AWS access and cleanup](/images/ai-llms/agentic-ai/how-ai-agents-remember/summary-map.svg)
 
 ### Concepts at a glance
 

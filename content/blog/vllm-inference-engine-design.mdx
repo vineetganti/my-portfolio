@@ -1,7 +1,10 @@
 ---
-title: "LLM Architectures - 05 - vLLM Framework and Inference Engine Design"
+title: "vLLM Framework and Inference Engine Design"
 description: "A walkthrough of what I learnt about vLLM: why it handles high concurrency so well, how PagedAttention manages KV cache memory, how its scheduler mixes prompt and decode work, and how users and applications interact with the engine."
 date: "2026-10-27"
+section: "ai-llms"
+series: "llm-architectures"
+seriesOrder: 5
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
@@ -9,14 +12,14 @@ Post 04 ended on two facts: decoding is limited by memory traffic, and the KV ca
 
 <Callout type="note" title="The LLM Architectures series">
 
-1. [01 · Python Internals](/blog/mentiforce01)
-2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
-3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
-4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
+1. [01 · Python Internals](/blog/python-internals-for-llms)
+2. [02 · Neural Network Fundamentals](/blog/neural-network-fundamentals)
+3. [03 · Transformer Architecture Principles](/blog/transformer-architecture-principles)
+4. [04 · Transformer Inference Optimization Strategies](/blog/transformer-inference-optimization)
 5. **05 · vLLM Framework and Inference Engine Design** (this post)
-6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/batching-llm-requests)
 
-Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/python-internals-for-llms#about-this-series)).
 
 </Callout>
 
@@ -42,7 +45,7 @@ Post 04 showed why we want large batches. A decode step reads every weight once,
 
 A traditional engine runs **static batches**. It pads every prompt to the longest one, runs the whole batch until its longest output is done, and only then takes new requests:
 
-![Four requests in a static batch, drawn as rows of 13 slots. Prompts of 3, 6, 2 and 5 tokens are left-padded to 6, and outputs of 4, 2, 7 and 3 tokens all wait for the longest one, so only 32 of the 52 slots do useful work, about 62%. New requests wait until the whole batch is done](/llm-vllm-engine/static-batch-waste.svg)
+![Four requests in a static batch, drawn as rows of 13 slots. Prompts of 3, 6, 2 and 5 tokens are left-padded to 6, and outputs of 4, 2, 7 and 3 tokens all wait for the longest one, so only 32 of the 52 slots do useful work, about 62%. New requests wait until the whole batch is done](/images/ai-llms/llm-architectures/vllm-inference-engine-design/static-batch-waste.svg)
 
 | Challenge | What a static batch does | What it costs |
 | --- | --- | --- |
@@ -100,7 +103,7 @@ its key and its value  =  K_cache[p][r]  and  V_cache[p][r]       (one pool per 
 blocks for T tokens    =  ⌈T / B⌉                wasted slots per sequence: fewer than B
 ```
 
-![A ten-token sequence split into logical blocks of four tokens. Its block table maps logical blocks 0, 1 and 2 to physical blocks 7, 1 and 4, which sit among blocks owned by other sequences. To find token 9, divide by the block size: logical block 2, slot 1, which the table resolves to slot 1 of physical block 4](/llm-vllm-engine/paged-lookup.svg)
+![A ten-token sequence split into logical blocks of four tokens. Its block table maps logical blocks 0, 1 and 2 to physical blocks 7, 1 and 4, which sit among blocks owned by other sequences. To find token 9, divide by the block size: logical block 2, slot 1, which the table resolves to slot 1 of physical block 4](/images/ai-llms/llm-architectures/vllm-inference-engine-design/paged-lookup.svg)
 
 Post 04 drew the bigger picture, with several sequences whose blocks interleave in the same pool. The attention kernel is the only part of the model that has to change: instead of reading one contiguous tensor, it follows the block table.
 
@@ -140,7 +143,7 @@ What paging buys:
 
 The memory headroom from paging is half of the answer. The other half is **continuous batching**, also called iteration-level scheduling, an idea from the Orca system: the scheduler re-forms the batch **at every decode step**, not once per batch.
 
-![Seven requests on four batch slots. With static batching the first batch runs until its longest request ends at step 7, requests E, F and G wait 6, 4 and 3 steps for the second batch, and 19 of 48 slot-steps are wasted. With continuous batching each finished slot is refilled at the next step, the waits are 1, 0 and 1 steps, and all work is done at step 10 instead of 12](/llm-vllm-engine/continuous-batching.svg)
+![Seven requests on four batch slots. With static batching the first batch runs until its longest request ends at step 7, requests E, F and G wait 6, 4 and 3 steps for the second batch, and 19 of 48 slot-steps are wasted. With continuous batching each finished slot is refilled at the next step, the waits are 1, 0 and 1 steps, and all work is done at step 10 instead of 12](/images/ai-llms/llm-architectures/vllm-inference-engine-design/continuous-batching.svg)
 
 - A request that finishes leaves the batch at the end of that step, and its blocks go back to the pool straight away.
 - A waiting request joins at the next step, as soon as there are free blocks and room in the batch.
@@ -153,7 +156,7 @@ Each step of the scheduler has a **token budget** (`max_num_batched_tokens`) and
 3. **Admit new requests.** Waiting requests are admitted in arrival order (or by priority) while the budget, the free blocks and the sequence cap allow. A long prompt is split into chunks to fit the remaining budget, which is called **chunked prefill**.
 4. **Run one forward pass.** Prompt chunks and decode tokens run together as one batch. Each sequence that has finished its prompt gets a new token, finished requests leave, and the new text is streamed back.
 
-![A token budget of 512 for one step is filled in order: one decode token each for running requests A, B and C, the last 150 prompt tokens of D, and a 359-token chunk of new request E's 600-token prompt, while request F waits. After the forward pass A, B, C and D each have a new token, and E continues its prompt in the next step](/llm-vllm-engine/scheduler-step.svg)
+![A token budget of 512 for one step is filled in order: one decode token each for running requests A, B and C, the last 150 prompt tokens of D, and a 359-token chunk of new request E's 600-token prompt, while request F waits. After the forward pass A, B, C and D each have a new token, and E continues its prompt in the next step](/images/ai-llms/llm-architectures/vllm-inference-engine-design/scheduler-step.svg)
 
 The quantities the scheduler is balancing:
 
@@ -205,7 +208,7 @@ pool        = 72 − 12.6 (weights) − about 1.5 (activations) ≈ 58 GiB
 num_blocks  ≈ 58 GiB ÷ 8 MiB ≈ 7,400 blocks ≈ 118,000 tokens
 ```
 
-![A bar for an 80 GiB A100: 12.6 GiB of Llama-2-7B weights, about 1.5 GiB for activations, about 58 GiB of KV cache blocks, and 8 GiB of headroom outside the 90% budget. The pool holds about 7,400 blocks of 16 tokens, about 118,000 tokens: 29 requests at 4,096 tokens, or about 230 at 512](/llm-vllm-engine/memory-budget.svg)
+![A bar for an 80 GiB A100: 12.6 GiB of Llama-2-7B weights, about 1.5 GiB for activations, about 58 GiB of KV cache blocks, and 8 GiB of headroom outside the 90% budget. The pool holds about 7,400 blocks of 16 tokens, about 118,000 tokens: 29 requests at 4,096 tokens, or about 230 at 512](/images/ai-llms/llm-architectures/vllm-inference-engine-design/memory-budget.svg)
 
 Those 118,000 tokens can be shared in any mix: 29 requests at the full 4,096-token context, about 230 requests of 512 tokens, or anything in between. vLLM prints this at startup, as the KV cache size in tokens and the maximum concurrency at the full model length.
 
@@ -239,7 +242,7 @@ prefill steps       ≈ ⌈ prompt_len ÷ chunk ⌉            chunk ≤ max_num
 32,000-token prompt, 2,048-token budget:   about 16 steps, each also carrying everyone else's decodes
 ```
 
-![Two timelines of streaming requests A and B while a 4,000-token prompt C arrives at 45 milliseconds, with illustrative timings. Without chunking, one 375-millisecond step processes the whole prompt and A and B get no tokens in that time. With 1,000-token chunks, four steps of about 105 milliseconds each also carry A's and B's tokens, so their longest gap drops from 375 to 105 milliseconds, while C's first token comes 45 milliseconds later](/llm-vllm-engine/chunked-prefill.svg)
+![Two timelines of streaming requests A and B while a 4,000-token prompt C arrives at 45 milliseconds, with illustrative timings. Without chunking, one 375-millisecond step processes the whole prompt and A and B get no tokens in that time. With 1,000-token chunks, four steps of about 105 milliseconds each also carry A's and B's tokens, so their longest gap drops from 375 to 105 milliseconds, while C's first token comes 45 milliseconds later](/images/ai-llms/llm-architectures/vllm-inference-engine-design/chunked-prefill.svg)
 
 **Sliding windows.** PagedAttention isn't a sliding window, and vLLM doesn't slide a window over a model that wasn't trained with one, because that would change the model's answers. Two different things do exist:
 
@@ -251,7 +254,7 @@ full attention:      blocks per sequence = ⌈ T / B ⌉                 grows w
 sliding window W:    blocks per sequence ≤ ⌈ W / B ⌉ + 1             Mistral 7B, W = 4,096:  at most 257
 ```
 
-![Left: a causal attention mask where each token sees every earlier token, next to a sliding-window mask where each token sees only the last three. Right: for a long sequence, full attention keeps all twelve KV blocks, while a window of four blocks needs at most five, so older blocks can be released and memory stops growing](/llm-vllm-engine/sliding-window.svg)
+![Left: a causal attention mask where each token sees every earlier token, next to a sliding-window mask where each token sees only the last three. Right: for a long sequence, full attention keeps all twelve KV blocks, while a window of four blocks needs at most five, so older blocks can be released and memory stops growing](/images/ai-llms/llm-architectures/vllm-inference-engine-design/sliding-window.svg)
 
 ### What operations can cause memory fragmentation, and how does vLLM avoid it?
 
@@ -281,7 +284,7 @@ three requests of 300, 1,100 and 600 tokens, max_len = 2,048:
   paged:       2,016 slots allocated for 2,000 tokens  →  99% used
 ```
 
-![Top: contiguous allocation reserves 2,048 slots for each of three requests that end at 300, 1,100 and 600 tokens, so most of each reservation is never used, and the gaps between reservations are too small for a new one: 2,000 of 6,144 slots used, 33%. Bottom: paging allocates blocks of 16 as tokens arrive, 2,016 slots for the same 2,000 tokens, 99%, and every free block can serve any request](/llm-vllm-engine/kv-waste.svg)
+![Top: contiguous allocation reserves 2,048 slots for each of three requests that end at 300, 1,100 and 600 tokens, so most of each reservation is never used, and the gaps between reservations are too small for a new one: 2,000 of 6,144 slots used, 33%. Bottom: paging allocates blocks of 16 as tokens arrive, 2,016 slots for the same 2,000 tokens, 99%, and every free block can serve any request](/images/ai-llms/llm-architectures/vllm-inference-engine-design/kv-waste.svg)
 
 ### If there are idle and active users simultaneously, how is GPU memory allocated?
 
@@ -295,7 +298,7 @@ vLLM doesn't know about users, only about **requests**. A chat conversation is a
 | **Finished or aborted** | None, though its blocks may stay cached | A later request with the same prefix can reuse them |
 | **An idle user, between turns** | Nothing is guaranteed | If the last turn's blocks are still cached, the next turn skips that prefill |
 
-![Left: a request moves from waiting, holding no blocks, to running, holding one block per 16 tokens, to finished, and may be preempted back to waiting with its blocks freed. Right: the block pool holds blocks in use by running requests, cached blocks left by finished requests such as an idle user's last turn, and empty blocks. A returning user's next request can reuse their cached blocks, and when space runs out the least recently used cached blocks are reused first](/llm-vllm-engine/idle-active.svg)
+![Left: a request moves from waiting, holding no blocks, to running, holding one block per 16 tokens, to finished, and may be preempted back to waiting with its blocks freed. Right: the block pool holds blocks in use by running requests, cached blocks left by finished requests such as an idle user's last turn, and empty blocks. A returning user's next request can reuse their cached blocks, and when space runs out the least recently used cached blocks are reused first](/images/ai-llms/llm-architectures/vllm-inference-engine-design/idle-active.svg)
 
 So memory follows activity, not users:
 
@@ -348,7 +351,7 @@ print(reply.choices[0].message.content)
 
 The path of one request through the server:
 
-![A request goes from the client to the API server process, which assigns a request id, applies the chat template and tokenizes the prompt, then to the engine core process, where the scheduler queues it, the KV cache manager allocates blocks and the model runs one step at a time. Each new token goes back to the API server, which detokenizes it and streams the text to the client](/llm-vllm-engine/request-path.svg)
+![A request goes from the client to the API server process, which assigns a request id, applies the chat template and tokenizes the prompt, then to the engine core process, where the scheduler queues it, the KV cache manager allocates blocks and the model runs one step at a time. Each new token goes back to the API server, which detokenizes it and streams the text to the client](/images/ai-llms/llm-architectures/vllm-inference-engine-design/request-path.svg)
 
 1. **API server.** The front-end process parses the HTTP request, assigns a **request id**, applies the model's **chat template** to the messages, and **tokenizes** the result.
 2. **Engine core.** The tokenized request goes to a separate process as prompt token ids plus sampling parameters.
@@ -396,7 +399,7 @@ Post 06 builds a small version of this same request object for the scheduler pro
 
 **Cancelling.** If the client disconnects or cancels the stream, the server **aborts** the request. The engine removes it from the waiting or running queue and frees its blocks, which return to the pool (still cached for prefix reuse). Aborts take effect **at a step boundary**: a forward pass that is already running on the GPU finishes, so at most one step of work is wasted.
 
-![A sequence diagram: the client sends a streaming request, the API server forwards the token ids to the engine core, and after every engine step a new piece of text is streamed back. When the client disconnects, the server aborts the request. The step already on the GPU finishes, and at the next step boundary the engine drops the request and returns its blocks to the pool](/llm-vllm-engine/streaming-abort.svg)
+![A sequence diagram: the client sends a streaming request, the API server forwards the token ids to the engine core, and after every engine step a new piece of text is streamed back. When the client disconnects, the server aborts the request. The step already on the GPU finishes, and at the next step boundary the engine drops the request and returns its blocks to the pool](/images/ai-llms/llm-architectures/vllm-inference-engine-design/streaming-abort.svg)
 
 ```python
 import asyncio
@@ -441,7 +444,7 @@ vLLM already does much of the per-request preprocessing and postprocessing itsel
 | **During generation** | Scheduling, batching, the KV cache, sampling, structured outputs (JSON schemas, regular expressions), a different LoRA adapter per request | Routing requests across several vLLM replicas |
 | **After generation** | Detokenization, stop strings, log-probabilities, tool-call and reasoning parsers, streaming | Output moderation, formatting for the interface, logging, analytics, billing |
 
-![Users reach a gateway for authentication and rate limits, then an application layer for retrieval, prompt assembly and moderation, then a router that spreads requests over several vLLM replicas and keeps a conversation on the replica that has its cache. Each replica's API server handles templates, tokenization, detokenization and streaming, and its engine core handles scheduling, the KV cache and the GPU. Every replica exposes metrics for monitoring](/llm-vllm-engine/serving-stack.svg)
+![Users reach a gateway for authentication and rate limits, then an application layer for retrieval, prompt assembly and moderation, then a router that spreads requests over several vLLM replicas and keeps a conversation on the replica that has its cache. Each replica's API server handles templates, tokenization, detokenization and streaming, and its engine core handles scheduling, the KV cache and the GPU. Every replica exposes metrics for monitoring](/images/ai-llms/llm-architectures/vllm-inference-engine-design/serving-stack.svg)
 
 What makes a single engine good at serving many users at once:
 
@@ -474,7 +477,7 @@ async def handle(user_id: str, question: str) -> str:
 
 There are three levels: engine flags, parameters per request, and code. Most needs are covered by the first two.
 
-![The engine's components with the settings that control them: tokenizer and chat template flags in the API server; max-num-seqs, max-num-batched-tokens, scheduling-policy and scheduler-cls in the scheduler; gpu-memory-utilization, block-size, kv-cache-dtype, prefix caching and max-model-len in the KV cache manager; and dtype, quantization, tensor parallelism and CPU offload in the model executor](/llm-vllm-engine/engine-knobs.svg)
+![The engine's components with the settings that control them: tokenizer and chat template flags in the API server; max-num-seqs, max-num-batched-tokens, scheduling-policy and scheduler-cls in the scheduler; gpu-memory-utilization, block-size, kv-cache-dtype, prefix caching and max-model-len in the KV cache manager; and dtype, quantization, tensor parallelism and CPU offload in the model executor](/images/ai-llms/llm-architectures/vllm-inference-engine-design/engine-knobs.svg)
 
 | What | Common settings | What they change |
 | --- | --- | --- |
@@ -508,7 +511,7 @@ A few rules of thumb:
 
 vLLM serves many users at once by treating the KV cache like virtual memory and the batch like a conveyor belt. **PagedAttention** stores each sequence's cache in 16-token blocks found through a block table, so almost no memory is wasted and blocks can be shared. **Continuous batching** re-forms the batch at every step, under a token budget that mixes prompt chunks with decode tokens, so no slot sits idle and new requests start within a step. Around that core, the engine sizes one KV pool at startup, caches prefixes, preempts when memory runs out, and exposes everything through an OpenAI-compatible, streaming, asynchronous API.
 
-![A map of this post in three columns. Why vLLM: static batches waste slots and memory, PagedAttention stores the KV cache in blocks found through a block table, and continuous batching re-forms the batch every step. Memory: one pool sized at startup, prefix caching by block hash, max_model_len and sliding windows, no fragmentation, and preemption by recomputation. Interaction: an API server and an engine core, a request lifecycle with aborts at step boundaries, a serving stack around the engine, and settings for the tokenizer, cache and scheduler](/llm-vllm-engine/summary-map.svg)
+![A map of this post in three columns. Why vLLM: static batches waste slots and memory, PagedAttention stores the KV cache in blocks found through a block table, and continuous batching re-forms the batch every step. Memory: one pool sized at startup, prefix caching by block hash, max_model_len and sliding windows, no fragmentation, and preemption by recomputation. Interaction: an API server and an engine core, a request lifecycle with aborts at step boundaries, a serving stack around the engine, and settings for the tokenizer, cache and scheduler](/images/ai-llms/llm-architectures/vllm-inference-engine-design/summary-map.svg)
 
 ### Concepts at a glance
 
@@ -596,4 +599,4 @@ At most the step that was already running. The server aborts the request, and at
 
 </details>
 
-Next in the series: [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06).
+Next in the series: [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/batching-llm-requests).

@@ -1,7 +1,10 @@
 ---
-title: "LLM Architectures - 03 - Transformer Architecture Principles"
+title: "Transformer Architecture Principles"
 description: "A walkthrough of what I learnt on Transformer architecture principles with emphasis on transformer models, attention - multi-head and cross attention, softmax functions and positional encoding methods with a broader scope on learning about LLM architectures."
 date: "2026-10-15"
+section: "ai-llms"
+series: "llm-architectures"
+seriesOrder: 3
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
@@ -9,14 +12,14 @@ The first two posts covered Python internals and neural network fundamentals. Th
 
 <Callout type="note" title="The LLM Architectures series">
 
-1. [01 · Python Internals](/blog/mentiforce01)
-2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
+1. [01 · Python Internals](/blog/python-internals-for-llms)
+2. [02 · Neural Network Fundamentals](/blog/neural-network-fundamentals)
 3. **03 · Transformer Architecture Principles** (this post)
-4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
-5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
-6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+4. [04 · Transformer Inference Optimization Strategies](/blog/transformer-inference-optimization)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/vllm-inference-engine-design)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/batching-llm-requests)
 
-Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/mentiforce01#about-this-series)).
+Part of my learning on LLM internals, following [Mentiforce](https://mentiforce.ai)'s roadmap. About 30% is my own notes and the rest is AI-generated ([more about the series](/blog/python-internals-for-llms#about-this-series)).
 
 </Callout>
 
@@ -27,7 +30,7 @@ The third post covers four topics:
 - The core essence of attention
 - Positional encoding methods
 
-![The pipeline from raw text through a tokenizer, token IDs and an embedding lookup into a stack of Transformer blocks, then a task head for text generation, classification or embeddings](/llm-transformer-basics/transformer-pipeline.svg)
+![The pipeline from raw text through a tokenizer, token IDs and an embedding lookup into a stack of Transformer blocks, then a task head for text generation, classification or embeddings](/images/ai-llms/llm-architectures/transformer-architecture-principles/transformer-pipeline.svg)
 
 ## Transformer model basics
 
@@ -44,7 +47,7 @@ To understand how raw text is broken down, we first need **Byte Pair Encoding (B
     3. Replace every occurrence of that pair with a new, combined symbol, and add the symbol to the vocabulary.
     4. Repeat until the target vocabulary size is reached.
 
-![Starting from single characters, BPE merges u and g into ug with 20 occurrences, then u and n into un with 16, then h and ug into hug with 15](/llm-transformer-basics/bpe-merges.svg)
+![Starting from single characters, BPE merges u and g into ug with 20 occurrences, then u and n into un with 16, then h and ug into hug with 15](/images/ai-llms/llm-architectures/transformer-architecture-principles/bpe-merges.svg)
 
 Raw text tokenization turns unstructured language into numbers a neural network can consume. It has two main stages: **segmenting** the raw text into tokens, then **mapping** those tokens to unique numerical IDs using a predefined vocabulary. There are several subword methods:
 
@@ -88,7 +91,7 @@ print(tok.decode(ids))                 # IDs -> text again (detokenization)
 
 `[pad]` is crucial for batching, but the model shouldn't attend to meaningless padding. So an **attention mask** is generated: 1 for real tokens and 0 for padding tokens. During self-attention, the scores at padding positions are effectively zeroed out, or set to a very large negative value before the softmax.
 
-![Two sequences padded to the same length, with an attention mask of 1 for real tokens and 0 for padding, where masked positions get a very large negative score before softmax](/llm-transformer-basics/padding-mask.svg)
+![Two sequences padded to the same length, with an attention mask of 1 for real tokens and 0 for padding, where masked positions get a very large negative score before softmax](/images/ai-llms/llm-architectures/transformer-architecture-principles/padding-mask.svg)
 
 ### Embedding layer
 
@@ -99,7 +102,7 @@ print(tok.decode(ids))                 # IDs -> text again (detokenization)
 - From the embedding matrix E, the vector e for token t is retrieved by selecting the t-th row of E.
 - The matrix is often initialised randomly and adjusted step by step to minimise the loss function. Pre-trained embeddings can initialise it, or the embeddings can be learned as an integral part of larger, context-aware language models that capture richer, dynamic, contextualised meanings for tokens.
 
-![Token ids 15, 2201 and 7 select rows 15, 2201 and 7 of the V by D embedding matrix, which are stacked into a 3 by D tensor](/llm-transformer-basics/embedding-lookup.svg)
+![Token ids 15, 2201 and 7 select rows 15, 2201 and 7 of the V by D embedding matrix, which are stacked into a 3 by D tensor](/images/ai-llms/llm-architectures/transformer-architecture-principles/embedding-lookup.svg)
 
 ```python
 import torch
@@ -128,7 +131,7 @@ vecs = emb(ids)                      # picks rows 15, 2201 and 7: shape (1, 3, 7
 5. The FFN's output is added to its input (the second residual connection), which keeps gradients flowing through the FFN sub-layer and helps learning.
 6. The result of the second residual connection, Y2, goes through another **layer normalization**. This gives the next block a well-conditioned input and keeps the benefits of normalisation throughout the deep network. The result is the output for the next block, or for the final layer.
 
-![Data flow through one Transformer block: multi-head attention, a residual addition and layer norm, a feed-forward network, a second residual addition and a second layer norm](/llm-transformer-basics/transformer-block.svg)
+![Data flow through one Transformer block: multi-head attention, a residual addition and layer norm, a feed-forward network, a second residual addition and a second layer norm](/images/ai-llms/llm-architectures/transformer-architecture-principles/transformer-block.svg)
 
 <Callout type="info" title="Normalise before or after?">
 
@@ -157,7 +160,7 @@ Llama-2-7B:  L = 32, d = 4,096   →   12 × 32 × 4,096² = 6.44 B
              + input embedding and output head, 2 × 32,000 × 4,096 = 0.26 B   →   6.70 B   (actual 6.74 B)
 ```
 
-![Llama-2-7B's 6.74 billion parameters: the feed-forward networks hold 4.33 billion (64%), attention projections 2.15 billion (32%), and the input embedding and output head 0.26 billion (4%). Each of the 32 layers has 67 million attention and 135 million feed-forward parameters](/llm-transformer-basics/param-breakdown.svg)
+![Llama-2-7B's 6.74 billion parameters: the feed-forward networks hold 4.33 billion (64%), attention projections 2.15 billion (32%), and the input embedding and output head 0.26 billion (4%). Each of the 32 layers has 67 million attention and 135 million feed-forward parameters](/images/ai-llms/llm-architectures/transformer-architecture-principles/param-breakdown.svg)
 
 #### How is masking applied differently in encoder-only, decoder-only, and encoder–decoder models?
 
@@ -170,7 +173,7 @@ Llama-2-7B:  L = 32, d = 4,096   →   12 × 32 × 4,096² = 6.44 B
 | **Decoder-only** | Generative, autoregressive tasks, where each token's prediction depends only on the preceding tokens | Both padding and causal masks |
 | **Encoder-decoder** | Sequence-to-sequence tasks, which involve both understanding an input sequence and generating an output sequence | A combination of the strategies of both encoders and decoders |
 
-![Encoder-only models let every token see every real token, decoder-only models add a causal mask so a token sees only itself and earlier tokens, and encoder-decoder models use a causal mask for self-attention and none for cross-attention](/llm-transformer-basics/attention-masks.svg)
+![Encoder-only models let every token see every real token, decoder-only models add a causal mask so a token sees only itself and earlier tokens, and encoder-decoder models use a causal mask for self-attention and none for cross-attention](/images/ai-llms/llm-architectures/transformer-architecture-principles/attention-masks.svg)
 
 ### Task-Specific Head
 
@@ -187,7 +190,7 @@ Llama-2-7B:  L = 32, d = 4,096   →   12 × 32 × 4,096² = 6.44 B
 - That aggregate hidden state is fed to a task-specific **classification head**: a simple feed-forward neural network followed by a softmax activation. It turns the high-dimensional hidden state into a lower-dimensional vector whose entries are the unnormalised scores for each target class.
 - The `[CLS]` approach is the most common (for example in BERT), but some architectures or fine-tuning strategies use a **pooled output** instead. A pooling operation (mean or max pooling) over all the token hidden states of the sequence gives a single aggregate vector, which then goes through a classification head in the same way.
 
-![A CLS token is prepended to the sentence. After the encoder, the hidden vector of CLS goes through a linear layer and softmax to give class probabilities](/llm-transformer-basics/cls-head.svg)
+![A CLS token is prepended to the sentence. After the encoder, the hidden vector of CLS goes through a linear layer and softmax to give class probabilities](/images/ai-llms/llm-architectures/transformer-architecture-principles/cls-head.svg)
 
 #### Embedding extraction: How is the final hidden state used directly without projection?
 
@@ -217,7 +220,7 @@ Llama-2-7B:  L = 32, d = 4,096   →   12 × 32 × 4,096² = 6.44 B
 | **Sampling** | Instead of the most probable token, a token is drawn at random from the probability distribution defined by the softmax output |
 | **Beam search** | Keeps a fixed number of the most probable partial sequences at each step. It extends each hypothesis by one token, keeps the top-k hypotheses, and repeats. By exploring several paths, it aims to find a sequence with a globally higher probability, not just locally optimal choices |
 
-![Logits for cat, dog, car and the become probabilities through softmax, then greedy decoding takes the top token, sampling draws one at random and beam search keeps the best partial sequences](/llm-transformer-basics/logits-to-token.svg)
+![Logits for cat, dog, car and the become probabilities through softmax, then greedy decoding takes the top token, sampling draws one at random and beam search keeps the best partial sequences](/images/ai-llms/llm-architectures/transformer-architecture-principles/logits-to-token.svg)
 
 ```python
 import torch
@@ -238,7 +241,7 @@ top-k:  keep only the k most likely tokens, renormalise, then sample
 top-p:  keep the smallest set of tokens whose probabilities add up to p (the "nucleus"), renormalise, then sample
 ```
 
-![The logits for cat, dog, car and the turned into probabilities at three temperatures: at 0.5 the top token gets 86%, at 1 it gets 64%, and at 2 the distribution flattens to 45%, 27%, 17% and 10%. With top-p of 0.9 at temperature 1, only cat, dog and car are kept and renormalised](/llm-transformer-basics/temperature.svg)
+![The logits for cat, dog, car and the turned into probabilities at three temperatures: at 0.5 the top token gets 86%, at 1 it gets 64%, and at 2 the distribution flattens to 45%, 27%, 17% and 10%. With top-p of 0.9 at temperature 1, only cat, dog and car are kept and renormalised](/images/ai-llms/llm-architectures/transformer-architecture-principles/temperature.svg)
 
 ```python
 def sample(logits, temperature=1.0, top_p=0.9):
@@ -268,7 +271,7 @@ def sample(logits, temperature=1.0, top_p=0.9):
     - **Subsequent predictions.** The newly predicted word ("Le") is fed back into the decoder's input (along with `[SOS]`). In the next step, masked self-attention can attend to both `[SOS]` and "Le" to understand the target context so far. At the same time, cross-attention is performed against the encoder's output again, to find the relevant source information for the next prediction (for example "chat").
     - **Termination.** The loop continues until the decoder predicts a special end-of-sequence token (such as `[EOS]`), which marks the end of the translation.
 
-![The encoder turns the English sentence into contextual embeddings, and at each step the decoder runs masked self-attention then cross-attention with queries from the decoder and keys and values from the encoder, and predicts the next French token which is fed back in](/llm-transformer-basics/cross-attention.svg)
+![The encoder turns the English sentence into contextual embeddings, and at each step the decoder runs masked self-attention then cross-attention with queries from the decoder and keys and values from the encoder, and predicts the next French token which is fed back in](/images/ai-llms/llm-architectures/transformer-architecture-principles/cross-attention.svg)
 
 #### How does the architecture adapt to non-text inputs (vision, audio) using modality-specific embedding layers?
 
@@ -281,7 +284,7 @@ def sample(logits, temperature=1.0, top_p=0.9):
 | **Vision (images)** | The most common approach treats an image as a sequence of **patches**, analogous to the words in a sentence |
 | **Audio (sound)** | Audio, typically a 1D time-series signal, is also converted into a sequence of embeddings suitable for Transformers |
 
-![A 224 by 224 image is cut into 196 patches of 16 by 16 pixels, each flattened to 768 numbers, projected to the model dimension and given a position embedding before entering the Transformer](/llm-transformer-basics/vision-patches.svg)
+![A 224 by 224 image is cut into 196 patches of 16 by 16 pixels, each flattened to 768 numbers, projected to the model dimension and given a position embedding before entering the Transformer](/images/ai-llms/llm-architectures/transformer-architecture-principles/vision-patches.svg)
 
 - The concept extends to **multimodal models**, where different modalities (text, image, audio) are each processed by their own modality-specific embedding layers, then concatenated, fused or integrated at different stages of a single Transformer, often with shared or specialised cross-attention.
 - **The core advantage:** by turning diverse modalities into one unified sequence-embedding format, Transformers can use their self-attention to capture complex, long-range dependencies within and across modalities, without redesigning the core attention and feed-forward layers for every new data type.
@@ -303,7 +306,7 @@ def sample(logits, temperature=1.0, top_p=0.9):
 - **Self-attention mechanism.** Instead of processing tokens one after another as RNNs do, self-attention computes the output for each token by weighing its relevance to **all other tokens** in the input sequence at the same time, whatever their distance.
 - **Positional encodings.** Self-attention is permutation-invariant: it processes all tokens in parallel, with no sequential bias. So Transformers add positional encodings to inject order information.
 
-![An RNN passes information one step at a time, a CNN connects each token only to a local window, and attention connects every token directly to every other token](/llm-transformer-basics/rnn-cnn-attention.svg)
+![An RNN passes information one step at a time, a CNN connects each token only to a local window, and attention connects every token directly to every other token](/images/ai-llms/llm-architectures/transformer-architecture-principles/rnn-cnn-attention.svg)
 
 ### What are the fundamental differences between Attention and convolution/recurrent mechanisms?
 
@@ -339,7 +342,7 @@ It comes from a combination of parallelisability, robust architectural component
 - At its core, self-attention projects the input embeddings into query, key and value matrices, then applies a scaled dot-product operation and a weighted summation, implemented with matrix multiplication or related linear algebra.
 - The main source of the memory blow-up is the explicit **materialisation and storage of the attention score matrix** produced by the query-key-transpose product. That product is itself a critical matrix multiplication, computing the raw attention score (compatibility) between every query vector and every key vector.
 
-![Square grids for lengths 4, 8 and 16 show that doubling the sequence length quadruples the number of attention scores, which in FP16 is 8 MiB per head at 2048 tokens and 128 MiB at 8192](/llm-transformer-basics/score-matrix-growth.svg)
+![Square grids for lengths 4, 8 and 16 show that doubling the sequence length quadruples the number of attention scores, which in FP16 is 8 MiB per head at 2048 tokens and 128 MiB at 8192](/images/ai-llms/llm-architectures/transformer-architecture-principles/score-matrix-growth.svg)
 
 ### How do Query / Key / Value determine the output?
 
@@ -362,7 +365,7 @@ Attention(Q, K, V) = softmax( Q·Kᵀ / √d_k  +  M ) · V
 Q, K, V: (N, d_k)      Q·Kᵀ: (N, N)      M: the mask, 0 or −∞      output: (N, d_k)
 ```
 
-![The input X is projected into queries, keys and values, Q times K transpose gives an N by N score matrix, which is scaled, passed through softmax into attention weights, and used to take a weighted sum of the values](/llm-transformer-basics/attention-steps.svg)
+![The input X is projected into queries, keys and values, Q times K transpose gives an N by N score matrix, which is scaled, passed through softmax into attention weights, and used to take a weighted sum of the values](/images/ai-llms/llm-architectures/transformer-architecture-principles/attention-steps.svg)
 
 ```python
 import math
@@ -414,7 +417,7 @@ head_i        = Attention( X·W_Q,i ,  X·W_K,i ,  X·W_V,i )          each W: (
 MultiHead(X)  = Concat(head_1, …, head_h) · W_O                     W_O: (d, d)
 ```
 
-![The input is projected into 8 heads of 64 dimensions, each head runs attention on its own, the outputs are concatenated back to 512 dimensions, and a final linear projection mixes them](/llm-transformer-basics/multi-head.svg)
+![The input is projected into 8 heads of 64 dimensions, each head runs attention on its own, the outputs are concatenated back to 512 dimensions, and a final linear projection mixes them](/images/ai-llms/llm-architectures/transformer-architecture-principles/multi-head.svg)
 
 ## Positional Encoding Methods
 
@@ -452,7 +455,7 @@ PE(pos, 2i+1)  = cos( pos ÷ 10000^(2i / d) )          low dimensions oscillate 
 | **Flexibility and adaptability** | Less flexible: the pattern is fixed and independent of the data distribution | Highly flexible: it can adapt to intricate, possibly non-linear positional relationships in the specific dataset |
 | **Parameters and training** | Adds no trainable parameters and no training cost beyond the initial computation | Adds trainable parameters (an embedding matrix) and computation during optimisation |
 
-![A grid of positions by embedding dimensions coloured by sine and cosine values: low dimensions oscillate fast and high dimensions slowly, so every position has a unique pattern](/llm-transformer-basics/sinusoidal.svg)
+![A grid of positions by embedding dimensions coloured by sine and cosine values: low dimensions oscillate fast and high dimensions slowly, so every position has a unique pattern](/images/ai-llms/llm-architectures/transformer-architecture-principles/sinusoidal.svg)
 
 ### What problem does Rotary Position Embedding (RoPE) solve?
 
@@ -477,7 +480,7 @@ x'_2i+1  = x_2i · sin(m·θ_i) + x_2i+1 · cos(m·θ_i)
 score(m, n) = RoPE(q, m) · RoPE(k, n)      depends only on q, k and the distance n − m
 ```
 
-![RoPE rotates the query and key by an angle proportional to their position, so a query at position 3 with a key at position 1, and a query at position 7 with a key at position 5, both have the same angle between them and the same dot product](/llm-transformer-basics/rope-rotation.svg)
+![RoPE rotates the query and key by an angle proportional to their position, so a query at position 3 with a key at position 1, and a query at position 7 with a key at position 5, both have the same angle between them and the same dot product](/images/ai-llms/llm-architectures/transformer-architecture-principles/rope-rotation.svg)
 
 Advantages and the problems it solves:
 
@@ -499,7 +502,7 @@ Advantages and the problems it solves:
 
 Text becomes subword tokens, integer IDs and then embedding vectors, with special tokens and masks for structure and padding. Each Transformer block is attention followed by a feed-forward network, each wrapped in a residual connection and a normalization, and masks decide what each token is allowed to see. Modern decoders keep that skeleton with pre-norm RMSNorm, SwiGLU, RoPE and grouped-query attention, and hold about `12 d²` parameters per block. A task head turns the final hidden states into logits and a sampled token, a class, or an embedding. Transformers beat RNNs and CNNs because attention connects every pair of tokens directly and in parallel, at an `O(N²)` cost. Attention is `softmax(Q·Kᵀ / √d_k) · V`, split into several heads, and since it has no sense of order, position is added: absolutely (sinusoidal or learned) or relatively (RoPE, ALiBi).
 
-![A map of post 03 in four columns. Input: BPE subword tokens, special tokens and masks, the embedding lookup, and positions. The block: attention and a feed-forward network, residuals and norms, causal masks, and about 12 L d squared parameters. Attention: softmax of Q K transpose over root d times V, an N by N score matrix, multiple heads, and RoPE. Output: logits over the vocabulary, greedy, top-p and beam search, temperature, and CLS or pooled vectors](/llm-transformer-basics/summary-map.svg)
+![A map of post 03 in four columns. Input: BPE subword tokens, special tokens and masks, the embedding lookup, and positions. The block: attention and a feed-forward network, residuals and norms, causal masks, and about 12 L d squared parameters. Attention: softmax of Q K transpose over root d times V, an N by N score matrix, multiple heads, and RoPE. Output: logits over the vocabulary, greedy, top-p and beam search, temperature, and CLS or pooled vectors](/images/ai-llms/llm-architectures/transformer-architecture-principles/summary-map.svg)
 
 ### Concepts at a glance
 
@@ -586,4 +589,4 @@ The query is rotated by an angle proportional to its position `m` and the key by
 
 </details>
 
-Next in the series: [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04).
+Next in the series: [04 · Transformer Inference Optimization Strategies](/blog/transformer-inference-optimization).

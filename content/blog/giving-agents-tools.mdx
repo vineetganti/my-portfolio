@@ -2,6 +2,9 @@
 title: "Giving an AI agent tools: from a plain function to a multi-tool assistant"
 description: "How a Python function becomes a tool an agent can call, built up with a tip calculator, a three-tool sales assistant and an inventory checker, plus the lessons each one teaches."
 date: "2026-10-26"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 2
 tags: ["Agentic AI", "LLMs", "AI Engineering"]
 ---
 
@@ -91,7 +94,7 @@ Add three things and the function becomes a tool the agent can discover and call
 | Type hints (`server_url: str`) | The input schema: which arguments to pass, and what type each one is |
 | A clear docstring with an `Args:` section | The description: when to use the tool, and what each argument means |
 
-![How the decorator, type hints and docstring of a function become the tool name, input schema and description the model sees, while the function body is never sent](/agent-tools/function-to-tool.svg)
+![How the decorator, type hints and docstring of a function become the tool name, input schema and description the model sees, while the function body is never sent](/images/ai-llms/agentic-ai/giving-agents-tools/function-to-tool.svg)
 
 <Callout type="analogy" title="The model reads the menu, never the kitchen">
 
@@ -190,7 +193,7 @@ response = agent(
 3. Strands runs the Python function, and the returned dict goes back to the model as a tool result.
 4. The model writes the final answer.
 
-![The model pulls 85, 20 and 4 out of the user's sentence, calls calculate_tip with them, receives a dictionary, and words the final answer](/agent-tools/tip-arguments.svg)
+![The model pulls 85, 20 and 4 out of the user's sentence, calls calculate_tip with them, receives a dictionary, and words the final answer](/images/ai-llms/agentic-ai/giving-agents-tools/tip-arguments.svg)
 
 <Callout type="tip" title="Why the docstring says 15, 18, 20">
 
@@ -212,7 +215,7 @@ Working from the inside out:
 - `["text"]` gets the string inside a text block.
 - `"\n\nFinal answer:\n"` is only formatting: two blank lines, a label and a newline. `print` puts a space between its two arguments.
 
-![Nested layers showing response, then message, then a list of content blocks, then the first block, then its text string](/agent-tools/response-structure.svg)
+![Nested layers showing response, then message, then a list of content blocks, then the first block, then its text string](/images/ai-llms/agentic-ai/giving-agents-tools/response-structure.svg)
 
 So the line prints the model's closing sentence, after all the tool work is done.
 
@@ -330,7 +333,7 @@ You never wrote "first get data, then analyse it, then email". You gave the agen
 2. `analyze_sales(revenue=1250000, deals=47, quarter=...)` returns the summary string with the average deal size.
 3. `send_email(to="team@company.com", subject=..., body=...)` sends it.
 
-![From one request the model decides the order: get_sales_data, then analyze_sales, then send_email, each result becoming input to the next call](/agent-tools/tool-chain.svg)
+![From one request the model decides the order: get_sales_data, then analyze_sales, then send_email, each result becoming input to the next call](/images/ai-llms/agentic-ai/giving-agents-tools/tool-chain.svg)
 
 This is the shift from a chat to an agent. In a chat, we would be the glue between steps. Here the loop does it.
 
@@ -422,7 +425,7 @@ One function, and four differently worded questions all end up calling it:
 | "Check inventory for PROD-789" | `check_inventory("PROD-789")` |
 | "Can I order PROD-123 right now?" | `check_inventory("PROD-123")` |
 
-![Four differently worded questions about stock all lead the model to call check_inventory with the right product ID](/agent-tools/intent-to-tool.svg)
+![Four differently worded questions about stock all lead the model to call check_inventory with the right product ID](/images/ai-llms/agentic-ai/giving-agents-tools/intent-to-tool.svg)
 
 We never wrote code to match phrases like "in stock", "available" or "can I order". With traditional code we would need keyword matching or a set of rules. Here the model reads the intent, decides the tool fits, and pulls out the product ID.
 
@@ -449,7 +452,7 @@ if product_id not in inventory:
 
 A tool is a plain function plus a name, type hints and a docstring, and the model reads those but never the body. The tip calculator showed the model turning a sentence into arguments, the sales assistant showed it choosing the order of several small tools and chaining their results, and the inventory checker showed intent mapping to a tool without keyword matching. The model decides whether a tool is used, a tool that acts in the world deserves the most care, and the agent is only as accurate as its tools.
 
-![A map of post 2 in four columns. Tool anatomy: decorator, type hints as the schema, docstring as the menu. Tip calculator: a sentence becomes arguments. Sales assistant: the model chains several tools. Inventory checker: intent maps to a tool, a typo is not out of stock, and use is not guaranteed](/agent-tools/summary-map.svg)
+![A map of post 2 in four columns. Tool anatomy: decorator, type hints as the schema, docstring as the menu. Tip calculator: a sentence becomes arguments. Sales assistant: the model chains several tools. Inventory checker: intent maps to a tool, a typo is not out of stock, and use is not guaranteed](/images/ai-llms/agentic-ai/giving-agents-tools/summary-map.svg)
 
 ### Concepts at a glance
 

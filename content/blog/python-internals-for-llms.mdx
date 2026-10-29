@@ -1,7 +1,10 @@
 ---
-title: "LLM Architectures - 01 - Python Internals"
+title: "Python Internals for LLM Engineers"
 description: "A walkthrough of what I learnt during Phase 1 of learning about LLM architectures."
 date: "2026-10-07"
+section: "ai-llms"
+series: "llm-architectures"
+seriesOrder: 1
 tags: ["AI", "LLMs", "AI Engineering", "LLM Architectures"]
 ---
 
@@ -24,11 +27,11 @@ The learning roadmap behind this series, and the project in post 06, come from [
 <Callout type="note" title="The LLM Architectures series">
 
 1. **01 · Python Internals** (this post)
-2. [02 · Neural Network Fundamentals](/blog/mentiforce02)
-3. [03 · Transformer Architecture Principles](/blog/mentiforce03)
-4. [04 · Transformer Inference Optimization Strategies](/blog/mentiforce04)
-5. [05 · vLLM Framework and Inference Engine Design](/blog/mentiforce05)
-6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/mentiforce06)
+2. [02 · Neural Network Fundamentals](/blog/neural-network-fundamentals)
+3. [03 · Transformer Architecture Principles](/blog/transformer-architecture-principles)
+4. [04 · Transformer Inference Optimization Strategies](/blog/transformer-inference-optimization)
+5. [05 · vLLM Framework and Inference Engine Design](/blog/vllm-inference-engine-design)
+6. [06 · Batching LLM Requests: Foundations for a Queue Scheduler](/blog/batching-llm-requests)
 
 </Callout>
 
@@ -48,7 +51,7 @@ The first post covers four topics:
 - The OS searches for an executable file named `python3` along the directories in the `PATH` environment variable.
 - After that, since Python is an interpreted language, the interpreter takes over. It reads the script, compiles it to bytecode and executes it, in a series of well-defined steps.
 
-![The shell splits the PATH variable into folders and checks each in order for an executable named python3. The first match wins and the OS starts it as a new process](/llm-python-internals/path-lookup.svg)
+![The shell splits the PATH variable into folders and checks each in order for an executable named python3. The first match wins and the OS starts it as a new process](/images/ai-llms/llm-architectures/python-internals-for-llms/path-lookup.svg)
 
 #### What does Python do when parsing app.py? What are the stages (compile, eval)?
 
@@ -66,7 +69,7 @@ There are four stages between your source file and a running program:
     - It provides a layer of abstraction that makes Python's "write once, run anywhere" possible.
 4. **Execution.** The PVM takes the bytecode instructions from the code objects and executes them.
 
-![Source text goes through the lexer into tokens, the parser into an abstract syntax tree, the compiler into bytecode cached as .pyc, and the Python virtual machine executes it](/llm-python-internals/python-execution.svg)
+![Source text goes through the lexer into tokens, the parser into an abstract syntax tree, the compiler into bytecode cached as .pyc, and the Python virtual machine executes it](/images/ai-llms/llm-architectures/python-internals-for-llms/python-execution.svg)
 
 You can see the first three stages yourself. This sketch uses only the standard library:
 
@@ -111,7 +114,7 @@ print(eval("2 + 3 * 4"))  # parsed, compiled and executed at runtime: prints 14
 - When the PVM "executes" bytecode, it doesn't typically translate each instruction into machine instructions on the fly (that would be just-in-time compilation). Instead, the PVM's pre-compiled native code performs the operation that each bytecode instruction describes.
 - Since Python 3.11 the interpreter is also **specializing**. After an instruction has run a few times, it is swapped for a faster version for the types it actually sees: a `BINARY_OP` that keeps adding two integers becomes an integer-only add. `dis.dis(code, adaptive=True)` shows the specialized instructions. Python 3.13 added an experimental JIT compiler as well, off by default.
 
-![For total = price * qty with price 12 and qty 5, two loads push 12 and 5 onto a value stack, a multiply replaces them with 60, and a store moves 60 into the name total](/llm-python-internals/bytecode-stack.svg)
+![For total = price * qty with price 12 and qty 5, two loads push 12 and 5 onto a value stack, a multiply replaces them with 60, and a store moves 60 into the name total](/images/ai-llms/llm-architectures/python-internals-for-llms/bytecode-stack.svg)
 
 ### What is Python's relationship with C?
 
@@ -138,7 +141,7 @@ Understanding CPython's C foundation also explains the **Global Interpreter Lock
 - PyTorch's CPU backend uses Intel MKL or OpenBLAS. On the GPU, NVIDIA's CUDA toolkit libraries such as cuBLAS and cuDNN come into the picture.
 - CPython's ability to integrate with highly efficient C and C++ libraries is one of its most powerful advantages for high-performance computing.
 
-![Your code calls the torch or numpy Python API, which dispatches into a C++ or C core, which calls BLAS libraries on the CPU or CUDA libraries on the GPU](/llm-python-internals/who-runs-code.svg)
+![Your code calls the torch or numpy Python API, which dispatches into a C++ or C core, which calls BLAS libraries on the CPU or CUDA libraries on the GPU](/images/ai-llms/llm-architectures/python-internals-for-llms/who-runs-code.svg)
 
 <Callout type="analogy" title="Python is the conductor, not the orchestra">
 
@@ -153,7 +156,7 @@ Python decides what to play and when. The compiled libraries underneath do the a
 - For CPU-intensive C extensions, the GIL can be released explicitly (`Py_BEGIN_ALLOW_THREADS`) during long-running C computations, and reacquired (`Py_END_ALLOW_THREADS`) before touching Python objects again. That allows real parallelism for C code that doesn't need the Python API, even inside a multi-threaded Python program.
 - C functions designed for Python are compiled into `.so` (Linux, macOS) or `.pyd` (Windows) files. When you `import` the module, `PyInit_mymodule` is invoked, and it registers the C-implemented functions and data structures with the interpreter.
 
-![Python code reaches C through an extension module using the C API, through ctypes loading a shared library at runtime, or through a binding generator such as Cython or pybind11](/llm-python-internals/c-routes.svg)
+![Python code reaches C through an extension module using the C API, through ctypes loading a shared library at runtime, or through a binding generator such as Cython or pybind11](/images/ai-llms/llm-architectures/python-internals-for-llms/c-routes.svg)
 
 Here is the simplest version of the idea, calling a C library function straight from Python with `ctypes`:
 
@@ -191,7 +194,7 @@ Recent versions of Python include an optional "free-threaded" build, which runs 
 - In an I/O-bound operation, the Python thread can release the GIL while it waits for the I/O to finish. This makes multithreading effective for improving concurrency in I/O-bound scenarios.
 - Strategies that get around the GIL's limits include **multiprocessing** (which uses multiple CPU cores in parallel), **C/C++ extensions**, and **asynchronous programming**.
 
-![On the left, two threads take turns because they share one GIL. On the right, two processes each have their own GIL and run in parallel on separate cores](/llm-python-internals/gil-threads-processes.svg)
+![On the left, two threads take turns because they share one GIL. On the right, two processes each have their own GIL and run in parallel on separate cores](/images/ai-llms/llm-architectures/python-internals-for-llms/gil-threads-processes.svg)
 
 #### Why is GPU code almost unaffected by the GIL?
 
@@ -203,7 +206,7 @@ Recent versions of Python include an optional "free-threaded" build, which runs 
     4. **GIL re-acquisition.** The extension takes the lock again, to keep access to Python objects and interpreter state thread-safe.
 - The GIL mainly acts as a mutex for the interpreter's internal state and for Python bytecode execution. Almost all the work in GPU-accelerated computing is native code running on the GPU, outside the interpreter's control, so it doesn't contend for the GIL. The Python thread just starts the operation and then releases the lock, becoming a waiting observer instead of an active bytecode executor while the GPU works.
 
-![A timeline of the Python thread, the GIL and the GPU: the extension releases the GIL when it launches a kernel, the GPU computes while other threads may run, and the GIL is re-acquired afterwards](/llm-python-internals/gil-gpu.svg)
+![A timeline of the Python thread, the GIL and the GPU: the extension releases the GIL when it launches a kernel, the GPU computes while other threads may run, and the GIL is re-acquired afterwards](/images/ai-llms/llm-architectures/python-internals-for-llms/gil-gpu.svg)
 
 ## Python and the OS: process, memory, syscalls
 
@@ -230,7 +233,7 @@ The heap matters most for Python:
 - Nearly all Python objects (numbers, strings, lists, dictionaries, class instances, functions and modules) are allocated on the heap.
 - The memory management system works mainly on this heap space, managing the lifecycle of those objects.
 
-![A Python process has a PID, a virtual address space with code, libraries, a heap and a stack, and a file descriptor table, all kept by the kernel](/llm-python-internals/process-anatomy.svg)
+![A Python process has a PID, a virtual address space with code, libraries, a heap and a stack, and a file descriptor table, all kept by the kernel](/images/ai-llms/llm-architectures/python-internals-for-llms/process-anatomy.svg)
 
 #### When does Python trigger a system call (syscall)?
 
@@ -261,7 +264,7 @@ In order, for `file_obj = open('my_file.txt', 'w')`:
 2. **CPython's C-level file I/O** takes over. Inside the C implementation, functions like `file_open_impl()` (from `Modules/_io/fileio.c` or similar) are invoked.
 3. **The `libc` wrapper and the `syscall`.** The C standard library (`libc`, for example glibc on Linux) acts as a wrapper. Its `open()` function doesn't implement file opening itself. It prepares the arguments and executes the actual system call.
 
-![A Python open call goes through CPython and libc, crosses into the kernel as a system call, and the kernel checks permissions and returns either a file descriptor or an error code that Python raises as PermissionError](/llm-python-internals/syscall-path.svg)
+![A Python open call goes through CPython and libc, crosses into the kernel as a system call, and the kernel checks permissions and returns either a file descriptor or an error code that Python raises as PermissionError](/images/ai-llms/llm-architectures/python-internals-for-llms/syscall-path.svg)
 
 #### If there's a file permission error, is it blocked by the OS or by Python?
 
@@ -284,7 +287,7 @@ The flow of control, step by step:
 3. **Memoryview creation.** A `memoryview` is created from the object and obtains the `Py_buffer` details, including that virtual address.
 4. **Data access.** When the memoryview is used to read or write data (for example `mv[0]`), it computes a virtual address. The MMU (memory management unit) then translates that virtual address into a physical address on the fly, giving direct access to the data in physical RAM.
 
-![A bytearray owns a block of memory, a memoryview points at the same block without copying, and the MMU translates virtual addresses to physical RAM](/llm-python-internals/memoryview-buffer.svg)
+![A bytearray owns a block of memory, a memoryview points at the same block without copying, and the MMU translates virtual addresses to physical RAM](/images/ai-llms/llm-architectures/python-internals-for-llms/memoryview-buffer.svg)
 
 ```python
 buf = bytearray(100)   # the object owns a block of memory
@@ -329,7 +332,7 @@ if __name__ == "__main__":  # required when processes are started with "spawn" (
 - Scheduling uses **preemptive** algorithms together with **time slicing**, which gives each process a time slice (a quantum), and **context switching**, which saves the state of the running process and loads the state of the next one.
 - For Python, multiprocessing is the standard way to use CPU cores while getting around the GIL. Multiple Python processes each have their own GIL and can run Python bytecode in parallel on different cores. They can be CPU-bound or I/O-bound: I/O-bound processes often yield the CPU, while CPU-bound processes use their full time slice.
 
-![Two CPU cores run three Python processes, each getting a time slice before the scheduler switches to another](/llm-python-internals/cpu-scheduler.svg)
+![Two CPU cores run three Python processes, each getting a time slice before the scheduler switches to another](/images/ai-llms/llm-architectures/python-internals-for-llms/cpu-scheduler.svg)
 
 #### Do Python subprocesses share GPUs?
 
@@ -338,7 +341,7 @@ if __name__ == "__main__":  # required when processes are started with "spawn" (
 - Python itself can't manage GPU hardware directly. It is an interface to low-level libraries, which make the actual API calls to the GPU driver to control the hardware.
 - Advanced mechanisms such as explicit resource partitioning and inter-process GPU memory sharing also exist, for coordinated GPU usage.
 
-![Several Python processes each have their own CUDA context and VRAM slice on one GPU, and the driver time-slices the streaming multiprocessors between them](/llm-python-internals/gpu-sharing.svg)
+![Several Python processes each have their own CUDA context and VRAM slice on one GPU, and the driver time-slices the streaming multiprocessors between them](/images/ai-llms/llm-architectures/python-internals-for-llms/gpu-sharing.svg)
 
 ## Python and the CPU: where does computation happen?
 
@@ -359,7 +362,7 @@ if __name__ == "__main__":  # required when processes are started with "spawn" (
 - **AVX** (Advanced Vector Extensions) is a set of SIMD instruction extensions developed by Intel (and supported by AMD). It widens the vector registers and adds new instructions for floating-point and integer operations.
     - These extensions are critical for performance in highly parallelisable workloads, which are everywhere in deep learning and high-performance computing.
 
-![Scalar code needs 16 add instructions for 16 floats, while one AVX-512 instruction adds all 16 lanes at once](/llm-python-internals/simd.svg)
+![Scalar code needs 16 add instructions for 16 floats, while one AVX-512 instruction adds all 16 lanes at once](/images/ai-llms/llm-architectures/python-internals-for-llms/simd.svg)
 
 #### How does PyTorch's CPU backend (MKL, OpenBLAS) get used by Python?
 
@@ -377,7 +380,7 @@ The path of a single call looks like this:
 5. **Optimised CPU execution**
 6. **Result packaging** back into a Python object
 
-![One torch.matmul call passes through the Python API, a data bridge, the dispatcher, an ATen kernel, a backend library such as MKL or cuBLAS, and back into a Python tensor](/llm-python-internals/dispatch-path.svg)
+![One torch.matmul call passes through the Python API, a data bridge, the dispatcher, an ATen kernel, a backend library such as MKL or cuBLAS, and back into a Python tensor](/images/ai-llms/llm-architectures/python-internals-for-llms/dispatch-path.svg)
 
 ### Are Python threads truly parallel?
 
@@ -417,7 +420,7 @@ The path of a single call looks like this:
 - This is how LLM servers handle many users at once. vLLM's API server is an asyncio application (post 05), and the scheduler project in post 06 is built the same way.
 - **The catch:** a coroutine that computes for a long time without awaiting blocks the whole loop. Blocking work belongs on a thread (`asyncio.to_thread`) or in another process.
 
-![One thread runs an event loop that switches between three coroutines. Each coroutine runs for 8 milliseconds, awaits a network reply for about 90 milliseconds, then runs 8 more. While one waits, the loop runs another, so all three finish at 128 milliseconds instead of 324 if they ran one after another](/llm-python-internals/asyncio-event-loop.svg)
+![One thread runs an event loop that switches between three coroutines. Each coroutine runs for 8 milliseconds, awaits a network reply for about 90 milliseconds, then runs 8 more. While one waits, the loop runs another, so all three finish at 128 milliseconds instead of 324 if they ran one after another](/images/ai-llms/llm-architectures/python-internals-for-llms/asyncio-event-loop.svg)
 
 ```python
 import asyncio
@@ -448,7 +451,7 @@ asyncio.run(main())
 - What *is* asynchronous by default is **launching GPU work**. A kernel launch is queued on the GPU and returns immediately, so the Python script carries on with the next lines of code on the CPU.
 - Synchronization happens with `torch.cuda.synchronize()`, and whenever data is copied back from the GPU to the CPU.
 
-![A tensor copied to the GPU goes from pageable host RAM through a pinned buffer and PCIe into HBM. A blocking copy stalls the Python thread, while a non-blocking copy overlaps with CPU work](/llm-python-internals/h2d-copy.svg)
+![A tensor copied to the GPU goes from pageable host RAM through a pinned buffer and PCIe into HBM. A blocking copy stalls the Python thread, while a non-blocking copy overlaps with CPU work](/images/ai-llms/llm-architectures/python-internals-for-llms/h2d-copy.svg)
 
 ```python
 import torch
@@ -486,7 +489,7 @@ Using several GPUs well is critical for scaling deep learning workloads, and the
 | **Pipeline parallelism** | An evolution of model parallelism that reduces GPU idle time by pipelining micro-batches through the sequential model stages |
 | **Sharding** (for example ZeRO, FSDP) | For extremely large models, even model parallelism may not be enough. Sharding spreads the model state (parameters, gradients, optimizer states) across GPUs to cut the memory footprint per device dramatically |
 
-![Data parallelism replicates the model and averages gradients, tensor parallelism splits a layer's weights, pipeline parallelism streams micro-batches through layer groups, and sharding gives each GPU a slice of the training state](/llm-python-internals/parallelism.svg)
+![Data parallelism replicates the model and averages gradients, tensor parallelism splits a layer's weights, pipeline parallelism streams micro-batches through layer groups, and sharding gives each GPU a slice of the training state](/images/ai-llms/llm-architectures/python-internals-for-llms/parallelism.svg)
 
 #### Do you need to manually free CUDA memory? What does PyTorch handle for you?
 
@@ -495,7 +498,7 @@ Using several GPUs well is critical for scaling deep learning workloads, and the
     - **How allocation works.** When you request memory (for example by creating a tensor on the GPU), the allocator first checks its cache for an already allocated but currently unused block that is big enough. If it finds one, it reuses it. If not, it asks the CUDA driver for a new block.
     - **How deallocation works.** When a tensor goes out of scope or is deleted, its GPU memory is *not* immediately returned to the CUDA driver. It is marked free and goes back to PyTorch's internal cache, ready for future allocations without the overhead of a CUDA driver call.
 
-![A new tensor reuses a free cached block if one is big enough and otherwise calls cudaMalloc. A deleted tensor returns its block to the cache, and only empty_cache returns memory to the driver](/llm-python-internals/caching-allocator.svg)
+![A new tensor reuses a free cached block if one is big enough and otherwise calls cudaMalloc. A deleted tensor returns its block to the cache, and only empty_cache returns memory to the driver](/images/ai-llms/llm-architectures/python-internals-for-llms/caching-allocator.svg)
 
 PyTorch handles several critical aspects of CUDA memory for you:
 
@@ -533,7 +536,7 @@ At a low level, the caching allocator still talks to the CUDA Driver API:
 - By default, PyTorch runs in **eager mode**: the operations of the forward pass are performed one after another.
 - TensorFlow 2.x also defaults to eager execution, but strongly encourages `tf.function`, which compiles Python code into a static TensorFlow graph. The graph is traced once, and later calls run the compiled graph directly on the GPU, which brings significant gains from global optimisations, memory pre-allocation and less Python overhead.
 
-![In eager mode Python dispatches each operation and the GPU idles between small kernels. A compiled graph runs a few large fused kernels with one call](/llm-python-internals/eager-vs-graph.svg)
+![In eager mode Python dispatches each operation and the GPU idles between small kernels. A compiled graph runs a few large fused kernels with one call](/images/ai-llms/llm-architectures/python-internals-for-llms/eager-vs-graph.svg)
 
 #### How is a GPU kernel registered and launched?
 
@@ -546,7 +549,7 @@ At a low level, the caching allocator still talks to the CUDA Driver API:
 
 The queue is a **CUDA stream**. Work on one stream runs in order, while work on different streams can overlap, for example a copy on one stream while a kernel runs on another. PyTorch uses one default stream per device unless you create more.
 
-![A kernel is written, compiled, loaded by the driver, launched with a grid and block configuration, queued in a stream, and run by thread blocks on the streaming multiprocessors](/llm-python-internals/kernel-launch.svg)
+![A kernel is written, compiled, loaded by the driver, launched with a grid and block configuration, queued in a stream, and run by thread blocks on the streaming multiprocessors](/images/ai-llms/llm-architectures/python-internals-for-llms/kernel-launch.svg)
 
 #### How can you check which kernel an operation uses?
 
@@ -588,7 +591,7 @@ print(prof.key_averages().table(row_limit=10))
 - Calling it can also **force an error to appear immediately** at the point of synchronization, which makes the origin of the problem easier to find.
 - Call it to **access on the CPU data that was just modified on the GPU**: synchronizing guarantees that the GPU has finished writing the data to memory before the CPU tries to read it. This is especially true when using `.cpu()` on a tensor that has just been computed on the GPU.
 
-![The CPU launches three kernels and carries on, then blocks at a synchronization point until the GPU has finished its queue and the result can be read](/llm-python-internals/cpu-gpu-async.svg)
+![The CPU launches three kernels and carries on, then blocks at a synchronization point until the GPU has finished its queue and the result can be read](/images/ai-llms/llm-architectures/python-internals-for-llms/cpu-gpu-async.svg)
 
 ```python
 import time
@@ -604,7 +607,7 @@ print(time.perf_counter() - start)
 
 A Python program runs as source, tokens, an AST, bytecode and finally the PVM, all inside CPython, which is itself a C program. With `torch` and `numpy`, Python only orchestrates: the math runs in compiled C, C++, Fortran and CUDA libraries. That is also why the GIL, which lets one thread run bytecode at a time, slows down pure-Python threads but not GPU work. The operating system sees a process with a PID, a heap and file descriptors, and every file or network access is a syscall that the kernel checks. On the CPU, libraries use SIMD instructions and several threads per operation. On the GPU, copies block by default, kernel launches are asynchronous, PyTorch caches freed memory, and `torch.cuda.synchronize()` is how you wait for the results.
 
-![A map of post 01 in four columns. What Python is: source compiled to bytecode, CPython written in C, torch and numpy calling C, and the GIL. The OS: a process with a PID and heap, syscalls through libc, permission checks in the kernel, and processes to get around the GIL. The CPU: BLAS and MKL, SIMD, threads inside an operation and the ATen dispatch path. The GPU: blocking copies, asynchronous kernels, the caching allocator and synchronization](/llm-python-internals/summary-map.svg)
+![A map of post 01 in four columns. What Python is: source compiled to bytecode, CPython written in C, torch and numpy calling C, and the GIL. The OS: a process with a PID and heap, syscalls through libc, permission checks in the kernel, and processes to get around the GIL. The CPU: BLAS and MKL, SIMD, threads inside an operation and the ATen dispatch path. The GPU: blocking copies, asynchronous kernels, the caching allocator and synchronization](/images/ai-llms/llm-architectures/python-internals-for-llms/summary-map.svg)
 
 ### Concepts at a glance
 
@@ -685,4 +688,4 @@ PyTorch's caching allocator keeps the block for reuse, so it still counts as res
 
 </details>
 
-Next in the series: [02 · Neural Network Fundamentals](/blog/mentiforce02).
+Next in the series: [02 · Neural Network Fundamentals](/blog/neural-network-fundamentals).

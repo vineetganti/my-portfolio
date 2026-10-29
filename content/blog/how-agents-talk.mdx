@@ -2,6 +2,9 @@
 title: "How agents talk: MCP for tools, A2A for other agents"
 description: "A first-timer's guide to the two protocols agents talk through: MCP to reach tools, data and prompts, and A2A to reach other agents. It builds up from a protocol-only demo to Strands agents and a three-agent travel planner, and reads a Groq rate-limit error line by line on the way."
 date: "2026-10-30"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 5
 tags: ["Agentic AI", "LLMs", "AI Engineering", "Strands", "MCP"]
 ---
 
@@ -39,7 +42,7 @@ As in the last post, the model runs on Groq through Strands. Each idea gets its 
 
 Say three apps (a chat app, an IDE, your agent) each want three tools (weather, AWS docs, a database). With no shared protocol, every pair needs its own connector: 3 × 3 = 9 pieces of glue code, and a fourth tool adds three more. With a protocol, each app learns it once and each tool offers it once: 3 + 3 = 6, and a new tool works in every app straight away.
 
-![Left: three apps each wired to three tools, nine connectors. Right: each app and each tool connects once to MCP in the middle, six connectors](/agent-protocols/n-by-m.svg)
+![Left: three apps each wired to three tools, nine connectors. Right: each app and each tool connects once to MCP in the middle, six connectors](/images/ai-llms/agentic-ai/how-agents-talk/n-by-m.svg)
 
 ```text
 without a protocol:  connectors = N × M      3 apps, 3 tools   →   9
@@ -49,7 +52,7 @@ with MCP:            connectors = N + M      3 apps, 3 tools   →   6
 
 ### Two protocols, two directions
 
-![Your agent in the middle. Sideways, over A2A, it talks to other agents whose model and tools stay hidden. Downwards, over MCP, it reaches servers that offer tools, resources and prompts](/agent-protocols/mcp-and-a2a.svg)
+![Your agent in the middle. Sideways, over A2A, it talks to other agents whose model and tools stay hidden. Downwards, over MCP, it reaches servers that offer tools, resources and prompts](/images/ai-llms/agentic-ai/how-agents-talk/mcp-and-a2a.svg)
 
 | | **MCP** | **A2A** |
 | --- | --- | --- |
@@ -75,7 +78,7 @@ The first lab has no model at all. A client starts a server and calls everything
 
 ### Host, client and server
 
-![A host holds the model and agent loop and runs one MCP client per server. One client talks to a local server over stdio, the other to a remote server over Streamable HTTP](/agent-protocols/mcp-architecture.svg)
+![A host holds the model and agent loop and runs one MCP client per server. One client talks to a local server over stdio, the other to a remote server over Streamable HTTP](/images/ai-llms/agentic-ai/how-agents-talk/mcp-architecture.svg)
 
 | Role | What it is | In this lab |
 | --- | --- | --- |
@@ -120,7 +123,7 @@ A stdio server must never `print()` to stdout. Anything written there is read as
 
 ### The lifecycle: a handshake first
 
-![A sequence between client and server. Handshake: initialize with version and capabilities, a reply with the server's capabilities, an initialized notification. Operation: list calls, then calls, reads and prompt requests. Shutdown: the pipes close and the server exits](/agent-protocols/mcp-lifecycle.svg)
+![A sequence between client and server. Handshake: initialize with version and capabilities, a reply with the server's capabilities, an initialized notification. Operation: list calls, then calls, reads and prompt requests. Shutdown: the pipes close and the server exits](/images/ai-llms/agentic-ai/how-agents-talk/mcp-lifecycle.svg)
 
 1. **Initialize.** The client sends its protocol version and its **capabilities** (here: "I can answer roots requests"). The server replies with its own capabilities: tools, resources, prompts.
 2. **Initialized.** The client confirms with a notification, and normal work begins.
@@ -129,7 +132,7 @@ A stdio server must never `print()` to stdout. Anything written there is read as
 
 ### Six primitives, three on each side
 
-![The server offers tools (chosen by the model), resources (chosen by the app) and prompts (chosen by the user). The client offers roots, sampling and elicitation](/agent-protocols/mcp-primitives.svg)
+![The server offers tools (chosen by the model), resources (chosen by the app) and prompts (chosen by the user). The client offers roots, sampling and elicitation](/images/ai-llms/agentic-ai/how-agents-talk/mcp-primitives.svg)
 
 | Primitive | Offered by | Who decides when it is used | In this lab |
 | --- | --- | --- | --- |
@@ -266,7 +269,7 @@ Three things to notice:
 
 ### The roots round trip
 
-![The client calls list_client_roots. While that call is open, the server sends roots/list back to the client, the client's callback answers with its folder, and the tool returns that folder](/agent-protocols/roots-round-trip.svg)
+![The client calls list_client_roots. While that call is open, the server sends roots/list back to the client, the client's callback answers with its folder, and the tool returns that folder](/images/ai-llms/agentic-ai/how-agents-talk/roots-round-trip.svg)
 
 The client called a tool, and while that call was still open, the server sent a request of its own back to the client: `roots/list`. The client's `list_roots` callback answered, and only then did the tool return. JSON-RPC doesn't care which side starts a request, and the client-side features (roots, sampling, elicitation) all depend on that.
 
@@ -280,7 +283,7 @@ The client called a tool, and while that call was still open, the server sent a 
 
 Now the host is a real agent. Strands has its own MCP client, so the pattern is short. The `model` is the same Groq `OpenAIModel` as in [the setup of post 4](/blog/agents-working-together#the-setup-every-example-shares).
 
-![Inside a with mcp_client block, the Strands agent calls tools through MCPClient, which runs on a background thread and sends JSON-RPC to the MCP server, a child process](/agent-protocols/strands-mcp.svg)
+![Inside a with mcp_client block, the Strands agent calls tools through MCPClient, which runs on a background thread and sends JSON-RPC to the MCP server, a child process](/images/ai-llms/agentic-ai/how-agents-talk/strands-mcp.svg)
 
 ```python
 from mcp import StdioServerParameters, stdio_client
@@ -397,7 +400,7 @@ used + requested ≤ limit             → the request goes through
 195,940 + 4,545 = 200,485 > 200,000  → rejected with 429, over by 485 tokens
 ```
 
-![Top: the daily budget of 200,000 with 195,940 used. Zoomed in, the 4,545-token request would end at 200,485, past the limit by 485. Bottom: four model calls that grow as each one resends every tool result so far](/agent-protocols/rate-limit.svg)
+![Top: the daily budget of 200,000 with 195,940 used. Zoomed in, the 4,545-token request would end at 200,485, past the limit by 485. Bottom: four model calls that grow as each one resends every tool result so far](/images/ai-llms/agentic-ai/how-agents-talk/rate-limit.svg)
 
 The request itself was small. Earlier runs that day had spent the budget, and this one needed 485 tokens more than were left.
 
@@ -502,7 +505,7 @@ In [post 4](/blog/agents-working-together) the teacher called the math tutor as 
 
 ### Four building blocks: card, message, task, artifact
 
-![Top: agent card, message, task, artifact, in the order discover, ask, track, collect. Bottom: task states. Submitted goes to working, then completed, or failed or canceled. Submitted can be rejected. Working can pause at input-required until the caller answers](/agent-protocols/a2a-objects.svg)
+![Top: agent card, message, task, artifact, in the order discover, ask, track, collect. Bottom: task states. Submitted goes to working, then completed, or failed or canceled. Submitted can be rejected. Working can pause at input-required until the caller answers](/images/ai-llms/agentic-ai/how-agents-talk/a2a-objects.svg)
 
 | Block | What it is | Think of it as |
 | --- | --- | --- |
@@ -549,7 +552,7 @@ Underneath, A2A can run over several **bindings**: JSON-RPC (used here), gRPC, o
 
 ### The travel planner
 
-![A travel orchestrator, an A2A client in plain Python with no LLM, talks A2A over HTTP to a weather agent on port 9001 and a flights agent on port 9002. Each wraps a Strands agent behind an A2AServer, and lists its skills in the card while its tools stay private](/agent-protocols/a2a-travel.svg)
+![A travel orchestrator, an A2A client in plain Python with no LLM, talks A2A over HTTP to a weather agent on port 9001 and a flights agent on port 9002. Each wraps a Strands agent behind an A2AServer, and lists its skills in the card while its tools stay private](/images/ai-llms/agentic-ai/how-agents-talk/a2a-travel.svg)
 
 Two Strands agents each run as an **A2A server** on their own port. A third script, the **orchestrator**, is the A2A client: it finds both agents, sends each one a question and prints a trip summary. The orchestrator has **no LLM**. It is plain Python, and all the intelligence sits inside the two agents.
 
@@ -659,7 +662,7 @@ async def main(city, origin, destination):
 
 #### What happens on the wire
 
-![The orchestrator fetches the weather agent's card, then posts message/stream with the question. While the agent runs its model and get_weather, events stream back: working, an artifact update with the answer, completed](/agent-protocols/a2a-wire.svg)
+![The orchestrator fetches the weather agent's card, then posts message/stream with the question. While the agent runs its model and get_weather, events stream back: working, an artifact update with the answer, completed](/images/ai-llms/agentic-ai/how-agents-talk/a2a-wire.svg)
 
 1. `GET /.well-known/agent-card.json`: who are you, and what can you do?
 2. `POST /` with `message/stream`: the question, as a message.
@@ -778,7 +781,7 @@ The orchestrator never learns that MCP exists, and the MCP server never learns t
 
 Agents need protocols for the same reason computers need USB and email. Without a shared one, every pair needs custom glue (N × M); with one, each side learns it once (N + M). **MCP** connects a host to tools, data and prompts. A host runs one client per server, and the messages are JSON-RPC 2.0 over stdio or Streamable HTTP. Every session starts with a handshake that exchanges capabilities. Servers offer tools (act), resources (read) and prompts (reuse). Clients offer roots, sampling and elicitation, which work because a server can send requests back. In Strands, `MCPClient` takes a recipe for the connection, the server lives inside the `with` block, and MCP tools look like any other tool. Third-party servers bring tools you didn't write, and their long results cost tokens. A 429 on tokens per day means a spent daily budget, which retries can't fix. **A2A** connects opaque agents: a client reads the agent card, sends a message, and gets back a task whose artifacts hold the answer, delivered synchronously or by polling, streaming or push.
 
-![A map of the post in four columns. Why protocols: N times M becomes N plus M, JSON-RPC, MCP down and A2A across. MCP: host, client and server, stdio or HTTP, a handshake first, three primitives on each side. Strands with MCP: MCPClient takes a lambda, the with block is the lifetime, and a 429 on the daily budget. A2A: opaque agents, an agent card with skills, message to task, artifacts as output](/agent-protocols/summary-map.svg)
+![A map of the post in four columns. Why protocols: N times M becomes N plus M, JSON-RPC, MCP down and A2A across. MCP: host, client and server, stdio or HTTP, a handshake first, three primitives on each side. Strands with MCP: MCPClient takes a lambda, the with block is the lifetime, and a 429 on the daily budget. A2A: opaque agents, an agent card with skills, message to task, artifacts as output](/images/ai-llms/agentic-ai/how-agents-talk/summary-map.svg)
 
 ### Concepts at a glance
 

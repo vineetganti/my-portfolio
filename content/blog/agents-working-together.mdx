@@ -2,6 +2,9 @@
 title: "Agents that work together: supervisor, agent as tool, graph and swarm"
 description: "A first-timer's guide to multi-agent patterns with Strands and Groq: a supervisor with workers, an agent used as a tool, a graph with explicit routing, and a swarm that hands off work, with the lessons each one teaches."
 date: "2026-10-29"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 4
 tags: ["Agentic AI", "LLMs", "AI Engineering", "Strands"]
 ---
 
@@ -36,7 +39,7 @@ All four examples use a model hosted on Groq and the Strands SDK, as before. Eve
 
 The price: more model calls, more cost and more places for something to go wrong. Use several agents when the jobs are really different, not just to look sophisticated.
 
-![Four small diagrams: a supervisor delegating to workers, a teacher using specialists as tools, a graph with fixed edges, and a swarm of agents joined to each other, each labelled with who decides what happens next](/multi-agent/patterns-overview.svg)
+![Four small diagrams: a supervisor delegating to workers, a teacher using specialists as tools, a graph with fixed edges, and a swarm of agents joined to each other, each labelled with who decides what happens next](/images/ai-llms/agentic-ai/agents-working-together/patterns-overview.svg)
 
 | Pattern | Who decides the next step | Best for | Notebook |
 | --- | --- | --- | --- |
@@ -79,7 +82,7 @@ Two details that are easy to miss:
 
 A market-research assistant. A **supervisor** splits the question and delegates to three **workers**, then writes one recommendation.
 
-![A question goes to the supervisor, which delegates to a news agent using web search, a financial agent using Yahoo Finance tools and a sentiment agent using web search, and combines their answers into one answer with a disclaimer](/multi-agent/supervisor-workers.svg)
+![A question goes to the supervisor, which delegates to a news agent using web search, a financial agent using Yahoo Finance tools and a sentiment agent using web search, and combines their answers into one answer with a disclaimer](/images/ai-llms/agentic-ai/agents-working-together/supervisor-workers.svg)
 
 | Worker | Job | Tools |
 | --- | --- | --- |
@@ -173,7 +176,7 @@ Put `GROQ_API_KEY`, `TAVILY_API_KEY` and the optional `ALPHA_VANTAGE_API_KEY` in
 
 The simplest multi-agent idea. A **teacher** receives a student's question and hands it to the right **specialist**: a math tutor, a writing coach or a science helper.
 
-![A student asks the teacher, who calls one of three specialists as a tool and gets the answer back, then presents it to the student](/multi-agent/agent-as-tool.svg)
+![A student asks the teacher, who calls one of three specialists as a tool and gets the answer back, then presents it to the student](/images/ai-llms/agentic-ai/agents-working-together/agent-as-tool.svg)
 
 ```python
 math_tutor = Agent(
@@ -228,7 +231,7 @@ Both are one agent calling other agents as tools. The market-research supervisor
 
 An order-processing system, where every order must follow an **auditable path**. A **graph** is made of **nodes** (agents) and **edges** (the arrows between them). Some edges have a **condition**: a plain Python function that returns `True` or `False`, deciding whether the edge is followed.
 
-![Risk analysis routes to manual review if high value, to fraud check if suspicious, or straight to inventory if low risk. Review and fraud check lead to inventory, which routes to shipping if in stock or to refund if out of stock. Three example orders take three different paths](/multi-agent/order-graph.svg)
+![Risk analysis routes to manual review if high value, to fraud check if suspicious, or straight to inventory if low risk. Review and fraud check lead to inventory, which routes to shipping if in stock or to refund if out of stock. Three example orders take three different paths](/images/ai-llms/agentic-ai/agents-working-together/order-graph.svg)
 
 ### Make the model's decision easy to read
 
@@ -342,7 +345,7 @@ Two things to notice. The suspicious order never reached manual review, because 
 
 A game-level design team with four agents: a **level designer**, a **game designer** (playtests), a **narrative designer** and a **difficulty balancer**. There is **no central coordinator**. Each agent does its part and then decides who should go next.
 
-![The handoff chain of the run: level designer, difficulty balancer, game designer, difficulty balancer, game designer, with the last turn ending without a handoff. Every agent gets a handoff tool, and safety limits are set](/multi-agent/swarm-handoffs.svg)
+![The handoff chain of the run: level designer, difficulty balancer, game designer, difficulty balancer, game designer, with the last turn ending without a handoff. Every agent gets a handoff tool, and safety limits are set](/images/ai-llms/agentic-ai/agents-working-together/swarm-handoffs.svg)
 
 Each agent's prompt says what to do, what **not** to do, and who to hand off to:
 
@@ -429,7 +432,7 @@ This run took 154 seconds and five full model turns, each one seeing the growing
 
 ## Which pattern should I use?
 
-![Is the procedure known in advance? Yes: a graph. No: should one agent stay in charge? Yes: a supervisor or agent as tool. No: a swarm](/multi-agent/choose-pattern.svg)
+![Is the procedure known in advance? Yes: a graph. No: should one agent stay in charge? Yes: a supervisor or agent as tool. No: a swarm](/images/ai-llms/agentic-ai/agents-working-together/choose-pattern.svg)
 
 | | Supervisor / agent as tool | Graph | Swarm |
 | --- | --- | --- | --- |
@@ -467,7 +470,7 @@ A swarm agent sees the most, and its context grows with every turn. That is the 
 
 Several small agents beat one big one when the jobs differ, but someone has to decide who does what. A **supervisor** or an **agent used as a tool** keeps one agent in charge: the others are tools with a name, a description and their own prompt, and their answers go back to the boss. A **graph** moves the decision into your code: agents are nodes, edges are arrows, and conditions are Python functions that read a fixed label from the previous answer, which makes every path auditable. A **swarm** gives the decision to the agents: each gets a handoff tool and a shared context, the path emerges from the work, and limits keep it from looping.
 
-![A map of the post in four columns, one per pattern. Supervisor: one coordinator, named workers, combined answers, capped tokens and searches. Agent as tool: name and description, teacher in charge, never asks back. Graph: nodes and edges, conditions in Python, a final label line, acyclic and auditable. Swarm: handoff to agent, shared context, an emerging path, limits stop loops](/multi-agent/summary-map.svg)
+![A map of the post in four columns, one per pattern. Supervisor: one coordinator, named workers, combined answers, capped tokens and searches. Agent as tool: name and description, teacher in charge, never asks back. Graph: nodes and edges, conditions in Python, a final label line, acyclic and auditable. Swarm: handoff to agent, shared context, an emerging path, limits stop loops](/images/ai-llms/agentic-ai/agents-working-together/summary-map.svg)
 
 ### Concepts at a glance
 

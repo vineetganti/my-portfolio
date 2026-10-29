@@ -10,8 +10,9 @@ and `rehype-highlight`, styled by `src/app/globals.css`.
 
 - One file per post: `content/blog/<slug>.mdx`. Only `.mdx` files are read.
 - **The filename is the URL.** `agents-part-2.mdx` → `/blog/agents-part-2`.
-  Use lowercase and hyphens, with no spaces. `mit-distributed systems - lecture1.mdx`
-  becomes `/blog/mit-distributed%20systems%20-%20lecture1`.
+  Use lowercase and hyphens, with no spaces: a file with spaces in its name gets
+  a URL full of `%20`. If you rename a published post, add the old slug to
+  `RENAMED_POSTS` in `next.config.ts` so old links redirect.
 - Posts are sorted newest first by `date`.
 - Reading time ("6 min read") is calculated for you.
 
@@ -22,6 +23,9 @@ and `rehype-highlight`, styled by `src/app/globals.css`.
 title: "Building my first AI agent"
 description: "One or two sentences. Shown under the title, on the post card, and as the meta description."
 date: "2026-10-25"
+section: "ai-llms"                 # a slug from src/lib/sections.ts
+series: "agentic-ai"               # optional: a reading list this post belongs to
+seriesOrder: 1                     # optional: position in the series
 tags: ["Agentic AI", "LLMs"]
 toc: false        # optional. Leave it out to show the table of contents
 ---
@@ -32,6 +36,9 @@ toc: false        # optional. Leave it out to show the table of contents
 | `title`       | yes      | Rendered as the page's only `h1`. Falls back to the slug.             |
 | `description` | no       | Large lead paragraph under the title. Keep it to 1–2 sentences.        |
 | `date`        | yes      | `YYYY-MM-DD`, quoted. Displayed as "October 25, 2026".                |
+| `section`     | yes      | Which shelf the post lives on. A slug from `src/lib/sections.ts`; a missing or unknown value falls back to `essays`. |
+| `series`      | no       | A series slug (see the sections file). Adds "Part N of M" and previous/next links. |
+| `seriesOrder` | with `series` | Position in the series, starting at 1. Posts are ordered by it, not by date. |
 | `tags`        | no       | A YAML array of strings, rendered as pills under the description.     |
 | `toc`         | no       | `false` hides the table of contents. Defaults to on.                  |
 
@@ -253,11 +260,14 @@ The one custom component. Use it to pull a point out of the flow.
 
 ## 8. Images
 
-1. Put the file in `public/` (e.g. `public/agent-loop.png`).
+1. Put the file in `public/images/<section>/<series>/<post-slug>/`, mirroring the
+   post's section and series (e.g.
+   `public/images/ai-llms/agentic-ai/hello-agent/agent-loop.png`). A post with no
+   series goes straight under its section: `public/images/essays/ideal-chat-app/`.
 2. Reference it from the site root:
 
 ```md
-![Agent loop: model → tool → result → model](/agent-loop.png)
+![Agent loop: model → tool → result → model](/images/ai-llms/agentic-ai/hello-agent/agent-loop.png)
 ```
 
 - Every image gets a **white backing, 12px padding, a rounded border**, and spans
@@ -266,18 +276,18 @@ The one custom component. Use it to pull a point out of the flow.
   background look best. Dark screenshots will sit inside a white frame.
 - **Write real alt text** that says what the image shows, not the filename
   (`![full_system_architecture](…)` is read aloud as "full system architecture").
-- Name files in kebab-case. Consider a folder per post:
-  `public/blog/hello-agent/loop.png` → `/blog/hello-agent/loop.png`.
+- Name files in kebab-case, with one folder per post named after its slug. Keep
+  images out of `public/blog/`, which would sit beside the `/blog/...` routes.
 - **Caption:** use a figure (captions are styled in the muted text colour):
 
   ```mdx
   <figure>
-    <img src="/agent-loop.png" alt="The agent loop" />
+    <img src="/images/ai-llms/agentic-ai/hello-agent/agent-loop.png" alt="The agent loop" />
     <figcaption>The loop runs until the model decides the task is done.</figcaption>
   </figure>
   ```
 
-- **Smaller image:** `<img src="/logo.png" alt="Groq logo" width={240} />`.
+- **Smaller image:** `<img src="/images/ai-llms/agentic-ai/hello-agent/groq-logo.png" alt="Groq logo" width={240} />`.
   In JSX, numeric attributes use braces.
 - Prefer PNG/SVG for diagrams and WebP/JPEG for photos, and compress large files.
   Images are served as-is, with no automatic resizing.
@@ -433,11 +443,11 @@ What you learned and where to go next.
 ## 15. Pre-publish checklist
 
 - [ ] Filename is kebab-case with no spaces
-- [ ] `title`, `description`, `date` (quoted `YYYY-MM-DD`) and `tags` are set
+- [ ] `title`, `description`, `date` (quoted `YYYY-MM-DD`), `section` and `tags` are set (plus `series` and `seriesOrder` for a series post)
 - [ ] Sections start at `##`, with no `#` in the body
 - [ ] Every code fence has a language; output is in `text` fences
 - [ ] Links have no space between `]` and `(`
-- [ ] Images live in `public/` and have descriptive alt text
+- [ ] Images live in `public/images/<section>/<series>/<post-slug>/` and have descriptive alt text
 - [ ] No stray `<`, `{` or `}` outside backticks
 - [ ] Previewed with `npm run dev` at `http://localhost:3000/blog/<slug>` in both
       light and dark mode (theme toggle in the header)

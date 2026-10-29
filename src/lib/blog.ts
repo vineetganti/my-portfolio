@@ -8,6 +8,7 @@ import remarkParse from "remark-parse";
 import { toString } from "mdast-util-to-string";
 import { visit } from "unist-util-visit";
 import type { Heading as MdastHeading } from "mdast";
+import { DEFAULT_SECTION, getSection } from "@/lib/sections";
 
 export interface BlogPost {
   slug: string;
@@ -15,6 +16,12 @@ export interface BlogPost {
   description: string;
   date: string;
   tags: string[];
+  /** Slug of a section from `lib/sections.ts`; unknown values fall back to the default. */
+  section: string;
+  /** Slug of the series this post belongs to, if any. */
+  series?: string;
+  /** Position in the series, used for ordering. */
+  seriesOrder?: number;
   readingTime: string;
   /** Set `toc: false` in frontmatter to hide the table of contents */
   toc: boolean;
@@ -55,29 +62,37 @@ export function getHeadings(content: string): TocHeading[] {
     .map((h) => ({ id: h.id, text: h.text, level: h.depth === top ? 0 : 1 }));
 }
 
+function parsePost(slug: string, fileContent: string): BlogPost {
+  const { data, content } = matter(fileContent);
+  const stats = readingTime(content);
+  const order = Number(data.seriesOrder);
+
+  return {
+    slug,
+    title: data.title || slug,
+    description: data.description || "",
+    date: data.date || new Date().toISOString(),
+    tags: data.tags || [],
+    section: getSection(data.section) ? data.section : DEFAULT_SECTION,
+    series: data.series || undefined,
+    seriesOrder: Number.isFinite(order) ? order : undefined,
+    readingTime: stats.text,
+    toc: data.toc !== false,
+    content,
+  };
+}
+
 export function getAllPosts(): BlogPost[] {
   if (!fs.existsSync(BLOG_DIR)) return [];
 
   const files = fs.readdirSync(BLOG_DIR).filter((f) => f.endsWith(".mdx"));
 
-  const posts = files.map((filename) => {
-    const slug = filename.replace(/\.mdx$/, "");
-    const filePath = path.join(BLOG_DIR, filename);
-    const fileContent = fs.readFileSync(filePath, "utf-8");
-    const { data, content } = matter(fileContent);
-    const stats = readingTime(content);
-
-    return {
-      slug,
-      title: data.title || slug,
-      description: data.description || "",
-      date: data.date || new Date().toISOString(),
-      tags: data.tags || [],
-      readingTime: stats.text,
-      toc: data.toc !== false,
-      content,
-    };
-  });
+  const posts = files.map((filename) =>
+    parsePost(
+      filename.replace(/\.mdx$/, ""),
+      fs.readFileSync(path.join(BLOG_DIR, filename), "utf-8")
+    )
+  );
 
   return posts.sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
@@ -87,19 +102,38 @@ export function getAllPosts(): BlogPost[] {
 export function getPostBySlug(slug: string): BlogPost | undefined {
   const filePath = path.join(BLOG_DIR, `${slug}.mdx`);
   if (!fs.existsSync(filePath)) return undefined;
+  return parsePost(slug, fs.readFileSync(filePath, "utf-8"));
+}
 
-  const fileContent = fs.readFileSync(filePath, "utf-8");
-  const { data, content } = matter(fileContent);
-  const stats = readingTime(content);
+/** Posts in one section, newest first. */
+export function getPostsBySection(section: string): BlogPost[] {
+  return getAllPosts().filter((p) => p.section === section);
+}
 
-  return {
-    slug,
-    title: data.title || slug,
-    description: data.description || "",
-    date: data.date || new Date().toISOString(),
-    tags: data.tags || [],
-    readingTime: stats.text,
-    toc: data.toc !== false,
-    content,
-  };
+/** Posts in one series, in reading order. */
+export function getPostsBySeries(series: string): BlogPost[] {
+  return getAllPosts()
+    .filter((p) => p.series === series)
+    .sort((a, b) => (a.seriesOrder ?? 0) - (b.seriesOrder ?? 0));
+}
+
+/** Slugs of every series that has at least one post. */
+export function getSeriesSlugs(): string[] {
+  return [...new Set(getAllPosts().flatMap((p) => (p.series ? [p.series] : [])))];
+}
+
+export interface SeriesPosition {
+  /** 1-based position of the post within its series. */
+  position: number;
+  total: number;
+  prev?: BlogPost;
+  next?: BlogPost;
+}
+
+export function getSeriesPosition(post: BlogPost): SeriesPosition | null {
+  if (!post.series) return null;
+  const posts = getPostsBySeries(post.series);
+  const i = posts.findIndex((p) => p.slug === post.slug);
+  if (i === -1) return null;
+  return { position: i + 1, total: posts.length, prev: posts[i - 1], next: posts[i + 1] };
 }

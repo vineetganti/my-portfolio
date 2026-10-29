@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { format } from "date-fns";
 import type { BlogPost } from "@/lib/blog";
+import { getSection, getSeriesInfo } from "@/lib/sections";
 
 export default function PostCard({ post }: { post: BlogPost }) {
+  const section = getSection(post.section);
+
   return (
     <article className="group">
       <Link
@@ -13,7 +16,20 @@ export default function PostCard({ post }: { post: BlogPost }) {
           <time dateTime={post.date}>{format(new Date(post.date), "MMM d, yyyy")}</time>
           <span className="mx-2 text-ink-light">·</span>
           {post.readingTime}
+          {section && (
+            <>
+              <span className="mx-2 text-ink-light">·</span>
+              {section.title}
+            </>
+          )}
         </p>
+
+        {post.series && (
+          <p className="text-sm font-bold text-ink-2 mb-1">
+            {getSeriesInfo(post.series).title}
+            {post.seriesOrder !== undefined && ` · Part ${post.seriesOrder}`}
+          </p>
+        )}
 
         <h2 className="font-heading font-extrabold text-2xl tracking-tight leading-tight text-ink group-hover:text-accent transition-colors mb-2">
           {post.title}
