@@ -14,6 +14,8 @@ This post is the build log for that work, in two parts. **Part 1** explains each
 
 The first version of the audio player **didn't play on phones** (Safari and Chrome), and it **skipped diagrams**. A follow-up fix, described in [Making it work on phones](#making-it-work-on-phones) and [Diagrams are read, too](#diagrams-are-read-too), repaired playback and made the player read each diagram from its alt text. Everything below describes the player as it is after the fix. The [update log](#update-log) at the end lists what changed and when.
 
+A later update added **recorded AI podcast versions** of posts, made with NotebookLM and played by a second player: see [AI podcast versions](#ai-podcast-versions-notebooklm-and-the-m4a-player).
+
 </Callout>
 
 | What | Why | Where it lives |
@@ -22,6 +24,7 @@ The first version of the audio player **didn't play on phones** (Safari and Chro
 | Renamed posts, redirects, image folders | Clear names and URLs now that posts sit under a section | `next.config.ts`, `public/images/` |
 | Audio player | Posts average a long read, so let people listen | `src/components/AudioPlayer.tsx`, `src/lib/speech.ts` |
 | Audio fix: phones and diagrams | Playback failed on mobile browsers, and diagrams were skipped | The same two files, plus `src/lib/blog.ts` for the time estimate |
+| AI podcast versions | A conversational, downloadable audio option made with NotebookLM | `public/audio/`, `src/components/RecordedAudio.tsx`, `findAudio` in `src/lib/blog.ts` |
 
 <Callout type="note" title="How this was built">
 
@@ -382,9 +385,86 @@ What this does *not* prove is how it sounds. That depends on the voices installe
 
 ### Limits
 
-- No download, and some phones stop speech when the screen locks.
+- No download, and some phones stop speech when the screen locks. (Posts with a recorded version, below, don't have this problem.)
 - Anything that exists only in code or a table is skipped, and a diagram is only as good as its alt text, so the important point has to be in the prose or the description.
 - Pronunciation of names and acronyms is whatever the voice decides.
+
+## AI podcast versions: NotebookLM and the m4a player
+
+The text-to-speech player is free and works on every post, but a browser voice reads like a screen reader. For the posts I most want people to finish, I wanted something closer to a podcast. So a post can now carry a **recorded audio version**, made with Google's **NotebookLM**, and the page shows a separate **Listen to AI podcast version** button for it.
+
+### How the audio is made with NotebookLM
+
+NotebookLM takes documents you give it as sources and can turn them into an **Audio Overview**: a spoken conversation between two AI hosts that explains and discusses the material. The workflow for a post is:
+
+1. Add the post as a source (the text of the article, or its published page).
+2. Generate an Audio Overview, and steer it with the optional focus prompt, for example "explain this to someone learning it for the first time and stick to the post's examples".
+3. Listen to the whole thing. If it drifts, misses a section or gets a detail wrong, generate it again with a sharper prompt. That is how the *refined* versions come about: the first take is rarely the one I publish.
+4. Download the audio as an **m4a** file and name it after the post's slug.
+
+<Callout type="warn" title="Check the audio like you would check a draft">
+
+The hosts **paraphrase** the post, and a paraphrase can be wrong. They can also add examples that aren't in the article or skip the caveats. I listen before publishing, and the page labels the audio as an AI podcast version so nobody mistakes it for my voice. The article stays the source of truth.
+
+</Callout>
+
+The result is a different kind of audio from the browser voice, so the two aren't redundant:
+
+| | Browser voice (Listen to this post) | AI podcast version |
+| --- | --- | --- |
+| Made by | The reader's device, live | NotebookLM, once, before publishing |
+| Content | The post read word for word | A conversation about the post |
+| Code and tables | Skipped with a spoken note | Described in conversation, if the hosts choose to |
+| Cost per post | None | A few minutes of my time to generate and check |
+| Works offline | No | Yes, after a download |
+
+### Adding the file to a post: the walkthrough
+
+The goal was that adding audio to a post is a single step, with no frontmatter to edit and no component to wire up.
+
+**Step 1: put the file in `public/audio/`, named after the post.** For the post at `content/blog/hello-agent.mdx`, the recording is `public/audio/hello-agent.m4a`. Files in `public/` are served as-is at the same path, so this one is available at `/audio/hello-agent.m4a`.
+
+**Step 2: the build finds it.** `parsePost` asks a small helper whether the file exists:
+
+```ts
+const PUBLIC_DIR = path.join(process.cwd(), "public");
+
+function findAudio(slug: string, declared: unknown): string | undefined {
+  const url =
+    typeof declared === "string" && declared.startsWith("/")
+      ? declared
+      : `/audio/${slug}.m4a`;
+  return fs.existsSync(path.join(PUBLIC_DIR, url)) ? url : undefined;
+}
+```
+
+The rule is convention first: no file means no audio, and the post is unchanged. If a recording has a different name, the post's frontmatter can say `audio: /audio/other-name.m4a`. The result is stored on the post as `audioSrc`.
+
+**Step 3: the page chooses a player.** In the post page, one conditional decides which button appears:
+
+```tsx
+{post.audioSrc ? (
+  <RecordedAudio src={post.audioSrc} title={post.title} />
+) : (
+  <AudioPlayer minutes={post.listenMinutes} />
+)}
+```
+
+A post with a recording gets the podcast button; every other post keeps the text-to-speech one. They aren't shown together because the browser voice highlights paragraphs as it reads, and two voices at once would be a mess.
+
+**Step 4: the `RecordedAudio` component.** It looks like the text-to-speech player on purpose: the same card-style button in the post header, and a player bar that opens fixed to the bottom of the screen with play and pause, back 15 seconds, forward 30, a seek bar with the time, a speed button and a download link. Three details are worth knowing:
+
+- **The `<audio>` element is always on the page, hidden.** Phones only allow audio that starts from a tap, so the button's click handler calls `play()` directly, which needs an element that already exists.
+- **`preload="none"`.** The file isn't downloaded until someone presses the button, so a post with a 20 MB recording costs nothing to people who never listen.
+- **Failures are shown.** If `play()` is refused or the file can't load, the bar says so, in the same way the text-to-speech player does after the phone fix. The bar also sits above the iPhone home indicator.
+
+**Step 5: ship it.** Commit the m4a with the post and push. Vercel serves it with the byte-range support that iPhone Safari needs to play and seek audio.
+
+### Limits
+
+- Audio files live in the git repository. A handful is fine; dozens of long recordings would be better in object storage such as Vercel Blob, with the full URL in `audio:` (the helper would need a small change to accept a full URL).
+- NotebookLM output varies between runs, so a recording can drift from the article after the article is edited. Regenerate it when the post changes materially.
+- The recording is not part of the "About N min" estimate, which belongs to the browser voice.
 
 ## Part 2: A tour of the website's code
 
@@ -538,6 +618,8 @@ The blog now has **three layers**: a **section** (the shelf), a **series** (the 
 | **Generation counter** | Each `speak` call invalidates older callbacks | Pause and skip stay reliable |
 | **Alt-text reading** | Diagrams are spoken from their image description | Pictures aren't lost, and alt text matters twice |
 | **Watchdog** | A timer that notices speech that never started or never ended | Phones drop events, so it moves on or explains |
+| **Audio overview** | A two-host spoken conversation NotebookLM generates from a source | The AI podcast version of a post, checked before publishing |
+| **Convention over configuration** | `public/audio/<slug>.m4a` is found without any frontmatter | Adding audio to a post is one file |
 | **`useSyncExternalStore`** | Reads browser facts (support, voices) | Server and client render the same |
 | **Theme tokens** | CSS variables mapped to Tailwind colour names | One class works in light and dark |
 | **`MdxContent`** | Compiles MDX on the server with custom components | Callouts, copy buttons and heading links |
@@ -594,6 +676,20 @@ Phone browsers are stricter: speech must start from a tap, cancelling and speaki
 </details>
 
 <details>
+<summary>How does a post get an AI podcast version?</summary>
+
+Generate an Audio Overview of the post in NotebookLM, check it, download the m4a and save it as `public/audio/<post-slug>.m4a`. The build finds it by name, and the post page shows the podcast button instead of the browser-voice one.
+
+</details>
+
+<details>
+<summary>Why does the podcast player keep a hidden audio element on the page?</summary>
+
+Phones only allow audio that starts from a tap. The button's click handler calls `play()` on an element that already exists, so playback counts as user-initiated.
+
+</details>
+
+<details>
 <summary>How does the player read a diagram?</summary>
 
 It reads the image's alt text after the words "Image:". Alt text counts only if it is a real description (at least 12 characters with a space), so a file name is skipped with a note.
@@ -623,6 +719,7 @@ Tailwind colour names point at CSS variables, and the dark theme only redefines 
 | 2026-10-29 | Feature | **Listen to this post** audio player: browser text-to-speech, reads prose, skips code, tables and diagrams with a spoken note, highlights the paragraph, speed and voice controls |
 | 2026-10-29 | **Fix** | **Audio did not play on mobile Safari and Chrome.** Four causes fixed: cancel and speak in the same instant, an utterance discarded before it finished, a stuck paused engine, and failures hidden from the reader. Added a watchdog and visible messages, and lifted the bar above the iPhone home indicator |
 | 2026-10-29 | **Feature** | **Diagram reading.** The player now reads each image's alt text, with a setting to turn it off, and the listening-time estimate counts it |
+| 2026-10-30 | **Feature** | **AI podcast versions.** A post can carry an m4a made with NotebookLM: drop `public/audio/<slug>.m4a` in and the post shows a **Listen to AI podcast version** button and a bottom player bar, in place of the browser-voice button |
 
 The phone fix was tested in an emulated phone with a stubbed speech engine, not on a physical device. If it still fails on yours, the player now shows a message saying why.
 
@@ -631,11 +728,14 @@ The phone fix was tested in an emulated phone with a stubbed speech engine, not 
 - Tags are still free-form and a little inconsistent. A small fixed list would make them a better filter.
 - The older essays haven't had the recall treatment the series posts got.
 - No sitemap, RSS feed or search yet.
-- If listening becomes popular, generate an MP3 per post and let the player prefer it, which would also allow downloads.
+- Record podcast versions for the long series posts first, since those are the ones people most want to listen to.
+- If recordings pile up, move them out of the git repository into object storage.
 
 ## Resources
 
 - [The repository](https://github.com/vineetganti/my-portfolio) and the [writing guide](https://github.com/vineetganti/my-portfolio/blob/main/docs/mdx-formatting-guide.md)
 - [Web Speech API: SpeechSynthesis](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis) on MDN
+- [NotebookLM](https://notebooklm.google.com) and its Audio Overview feature
+- [The HTML audio element](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/audio) on MDN
 - [Next.js: redirects](https://nextjs.org/docs/app/api-reference/config/next-config-js/redirects) and [generateStaticParams](https://nextjs.org/docs/app/api-reference/functions/generate-static-params)
 - [next-mdx-remote](https://github.com/hashicorp/next-mdx-remote)
