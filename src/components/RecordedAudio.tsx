@@ -17,6 +17,8 @@ function clock(seconds: number): string {
  * The <audio> element stays mounted so play() runs inside the tap, which phones require.
  */
 export default function RecordedAudio({ src, title }: { src: string; title: string }) {
+  // Browsers ignore the download attribute on other origins; Vercel Blob forces a download with ?download=1.
+  const downloadHref = /^https?:\/\//.test(src) ? `${src}?download=1` : src;
   const audioRef = useRef<HTMLAudioElement>(null);
   const [open, setOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -133,7 +135,7 @@ export default function RecordedAudio({ src, title }: { src: string; title: stri
             >
               {rate}×
             </button>
-            <a href={src} download className={btn} aria-label="Download the recording">
+            <a href={downloadHref} download className={btn} aria-label="Download the recording">
               <Download size={16} />
             </a>
           </div>

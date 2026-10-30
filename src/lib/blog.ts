@@ -27,8 +27,8 @@ export interface BlogPost {
   /** Minutes to listen to the prose read aloud (code, tables and diagrams are skipped). */
   listenMinutes: number;
   /**
-   * Public URL of a recorded narration, if the post has one. Found by convention at
-   * `public/audio/<slug>.m4a`, or set `audio: /audio/other-name.m4a` in frontmatter.
+   * URL of a recorded narration, if the post has one. Listed in `content/audio.json`
+   * (served from `AUDIO_BASE_URL`), or set `audio: <url>` in frontmatter.
    */
   audioSrc?: string;
   /** Set `toc: false` in frontmatter to hide the table of contents */
@@ -82,15 +82,28 @@ function estimateListenMinutes(markdown: string): number {
   return Math.max(1, Math.round(words / WORDS_PER_MINUTE));
 }
 
-const PUBLIC_DIR = path.join(process.cwd(), "public");
+const AUDIO_MANIFEST = path.join(process.cwd(), "content/audio.json");
 
-/** A recording named in frontmatter, else `public/audio/<slug>.m4a` when that file exists. */
+/**
+ * Where the recordings are served from: object storage in production (set
+ * `AUDIO_BASE_URL`), or the local `public/audio/` folder in development.
+ */
+const AUDIO_BASE_URL = (process.env.AUDIO_BASE_URL || "/audio").replace(/\/+$/, "");
+
+/** Slug to file name for every post that has a recording, from `content/audio.json`. */
+function readAudioManifest(): Record<string, string> {
+  try {
+    return JSON.parse(fs.readFileSync(AUDIO_MANIFEST, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** A recording named in frontmatter (`/path` or `https://` URL), else the one listed for this slug in the manifest. */
 function findAudio(slug: string, declared: unknown): string | undefined {
-  const url =
-    typeof declared === "string" && declared.startsWith("/")
-      ? declared
-      : `/audio/${slug}.m4a`;
-  return fs.existsSync(path.join(PUBLIC_DIR, url)) ? url : undefined;
+  if (typeof declared === "string" && /^(\/|https:\/\/)/.test(declared)) return declared;
+  const file = readAudioManifest()[slug];
+  return file ? `${AUDIO_BASE_URL}/${file}` : undefined;
 }
 
 function parsePost(slug: string, fileContent: string): BlogPost {

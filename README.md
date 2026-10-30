@@ -93,6 +93,10 @@ Every post has a **Listen to this post** button under its title. It uses the bro
 - Voice quality depends on the browser and device: Edge and Chrome offer "Natural" or "Online" voices that sound far better than the defaults. Browsers without speech support simply don't show the button.
 - A post can't be downloaded as audio with this approach. If that's wanted later, generate an MP3 per post and let the player prefer it when present.
 
+### Recorded audio
+
+Some posts have an AI podcast version (an m4a made with NotebookLM). The files are large, so they are not in git: they live in Vercel Blob, and `content/audio.json` lists which posts have one. `AUDIO_BASE_URL` (set in Vercel and `.env.local`) is the storage address; without it the site falls back to `public/audio/`. Upload with `node --env-file=.env.local scripts/upload-audio.mjs`. See the writing guide for the steps.
+
 ## Build log
 
 Everything done so far, newest first. Dates are from the git history.

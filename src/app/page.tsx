@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { getAllPosts } from "@/lib/blog";
 import { getAllProjects } from "@/lib/projects";
+import { getAllNotes } from "@/lib/notes";
+import NoteList from "@/components/NoteList";
 import PostCard from "@/components/PostCard";
 import ProjectCard from "@/components/ProjectCard";
 
 export default function HomePage() {
   const posts = getAllPosts().slice(0, 3);
+  const notes = getAllNotes();
   const featuredProjects = getAllProjects().filter((p) => p.featured);
 
   return (
@@ -35,6 +38,31 @@ export default function HomePage() {
           </Link>
         </div>
       </section>
+
+      {/* Notes: an isolated, scrollable, text-only feed */}
+      {notes.length > 0 && (
+        <section className="py-14 border-t border-border">
+          <div className="flex items-baseline justify-between gap-4 mb-8">
+            <h2 className="font-heading font-extrabold text-3xl sm:text-4xl tracking-tight text-ink">
+              Notes
+            </h2>
+            <Link
+              href="/notes"
+              className="text-sm font-semibold text-ink-muted hover:text-accent transition-colors"
+            >
+              All notes &rarr;
+            </Link>
+          </div>
+          <div
+            tabIndex={0}
+            role="region"
+            aria-label="Notes feed, scrollable"
+            className="max-h-[26rem] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-card p-5 sm:p-6"
+          >
+            <NoteList notes={notes} />
+          </div>
+        </section>
+      )}
 
       {/* Featured Projects */}
       {featuredProjects.length > 0 && (

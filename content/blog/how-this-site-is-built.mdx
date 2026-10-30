@@ -14,7 +14,7 @@ This post is the build log for that work, in two parts. **Part 1** explains each
 
 The first version of the audio player **didn't play on phones** (Safari and Chrome), and it **skipped diagrams**. A follow-up fix, described in [Making it work on phones](#making-it-work-on-phones) and [Diagrams are read, too](#diagrams-are-read-too), repaired playback and made the player read each diagram from its alt text. Everything below describes the player as it is after the fix. The [update log](#update-log) at the end lists what changed and when.
 
-A later update added **recorded AI podcast versions** of posts, made with NotebookLM and played by a second player: see [AI podcast versions](#ai-podcast-versions-notebooklm-and-the-m4a-player).
+A later update added **recorded AI podcast versions** of posts, made with NotebookLM and played by a second player: see [AI podcast versions](#ai-podcast-versions-notebooklm-and-the-m4a-player). After that came a text-only [Notes feed](#notes-a-text-only-feed).
 
 </Callout>
 
@@ -24,7 +24,8 @@ A later update added **recorded AI podcast versions** of posts, made with Notebo
 | Renamed posts, redirects, image folders | Clear names and URLs now that posts sit under a section | `next.config.ts`, `public/images/` |
 | Audio player | Posts average a long read, so let people listen | `src/components/AudioPlayer.tsx`, `src/lib/speech.ts` |
 | Audio fix: phones and diagrams | Playback failed on mobile browsers, and diagrams were skipped | The same two files, plus `src/lib/blog.ts` for the time estimate |
-| AI podcast versions | A conversational, downloadable audio option made with NotebookLM | `public/audio/`, `src/components/RecordedAudio.tsx`, `findAudio` in `src/lib/blog.ts` |
+| AI podcast versions | A conversational, downloadable audio option made with NotebookLM | `content/audio.json`, `scripts/upload-audio.mjs`, `src/components/RecordedAudio.tsx`, `findAudio` in `src/lib/blog.ts` |
+| Notes | A place for short, text-only thoughts that don't need a post | `content/notes/`, `src/lib/notes.ts`, `src/app/notes/`, `NoteList` |
 
 <Callout type="note" title="How this was built">
 
@@ -420,27 +421,33 @@ The result is a different kind of audio from the browser voice, so the two aren'
 
 ### Adding the file to a post: the walkthrough
 
-The goal was that adding audio to a post is a single step, with no frontmatter to edit and no component to wire up.
+The goal was that adding audio to a post is a couple of commands, with no frontmatter to edit and no component to wire up. The recordings are **not** stored in git: they are large, so they live in object storage (see [Moving the audio out of git](#moving-the-audio-out-of-git)) and the site only keeps a list of which posts have one.
 
-**Step 1: put the file in `public/audio/`, named after the post.** For the post at `content/blog/hello-agent.mdx`, the recording is `public/audio/hello-agent.m4a`. Files in `public/` are served as-is at the same path, so this one is available at `/audio/hello-agent.m4a`.
+**Step 1: name the file after the post.** For the post at `content/blog/hello-agent.mdx`, the recording is `hello-agent.m4a`. It is kept locally in `public/audio/`, which git ignores.
 
-**Step 2: the build finds it.** `parsePost` asks a small helper whether the file exists:
+**Step 2: upload it.** `node --env-file=.env.local scripts/upload-audio.mjs` sends every file in that folder to the storage bucket and adds the post's slug to `content/audio.json`, a small committed list:
 
-```ts
-const PUBLIC_DIR = path.join(process.cwd(), "public");
-
-function findAudio(slug: string, declared: unknown): string | undefined {
-  const url =
-    typeof declared === "string" && declared.startsWith("/")
-      ? declared
-      : `/audio/${slug}.m4a`;
-  return fs.existsSync(path.join(PUBLIC_DIR, url)) ? url : undefined;
+```json
+{
+  "hello-agent": "hello-agent.m4a"
 }
 ```
 
-The rule is convention first: no file means no audio, and the post is unchanged. If a recording has a different name, the post's frontmatter can say `audio: /audio/other-name.m4a`. The result is stored on the post as `audioSrc`.
+**Step 3: the build finds it.** `parsePost` looks the slug up in that list and builds the address from a base URL:
 
-**Step 3: the page chooses a player.** In the post page, one conditional decides which button appears:
+```ts
+const AUDIO_BASE_URL = (process.env.AUDIO_BASE_URL || "/audio").replace(/\/+$/, "");
+
+function findAudio(slug: string, declared: unknown): string | undefined {
+  if (typeof declared === "string" && /^(\/|https:\/\/)/.test(declared)) return declared;
+  const file = readAudioManifest()[slug];
+  return file ? `${AUDIO_BASE_URL}/${file}` : undefined;
+}
+```
+
+No entry in the list means no audio, and the post is unchanged. In production `AUDIO_BASE_URL` points at the storage bucket. When it isn't set, it falls back to `/audio`, so recordings in the local folder still play in development. A post can also name its own file with `audio:` in the frontmatter, as a path or a full `https://` address. The result is stored on the post as `audioSrc`.
+
+**Step 4: the page chooses a player.** In the post page, one conditional decides which button appears:
 
 ```tsx
 {post.audioSrc ? (
@@ -452,19 +459,95 @@ The rule is convention first: no file means no audio, and the post is unchanged.
 
 A post with a recording gets the podcast button; every other post keeps the text-to-speech one. They aren't shown together because the browser voice highlights paragraphs as it reads, and two voices at once would be a mess.
 
-**Step 4: the `RecordedAudio` component.** It looks like the text-to-speech player on purpose: the same card-style button in the post header, and a player bar that opens fixed to the bottom of the screen with play and pause, back 15 seconds, forward 30, a seek bar with the time, a speed button and a download link. Three details are worth knowing:
+**Step 5: the `RecordedAudio` component.** It looks like the text-to-speech player on purpose: the same card-style button in the post header, and a player bar that opens fixed to the bottom of the screen with play and pause, back 15 seconds, forward 30, a seek bar with the time, a speed button and a download link. Three details are worth knowing:
 
 - **The `<audio>` element is always on the page, hidden.** Phones only allow audio that starts from a tap, so the button's click handler calls `play()` directly, which needs an element that already exists.
 - **`preload="none"`.** The file isn't downloaded until someone presses the button, so a post with a 20 MB recording costs nothing to people who never listen.
-- **Failures are shown.** If `play()` is refused or the file can't load, the bar says so, in the same way the text-to-speech player does after the phone fix. The bar also sits above the iPhone home indicator.
+- **Failures are shown.** If `play()` is refused or the file can't load, the bar says so, in the same way the text-to-speech player does after the phone fix. The bar also sits above the iPhone home indicator. The download link adds `?download=1` for files on another address, because browsers ignore the `download` attribute across origins and would play the file instead.
 
-**Step 5: ship it.** Commit the m4a with the post and push. Vercel serves it with the byte-range support that iPhone Safari needs to play and seek audio.
+**Step 6: ship it.** Commit `content/audio.json` with the post and push. The audio itself is already in storage.
+
+### Moving the audio out of git
+
+The first version of this feature committed each m4a straight into `public/audio/`. That worked, but the files turned out to be large: the NotebookLM exports are 257 kbps stereo, about 40 MB each for a 20-minute episode, 433 MB across eleven files. Git keeps every committed copy forever and GitHub warns at 50 MB a file, so audio would have made the repository heavy while everything else on this blog is text and small SVGs.
+
+So the recordings moved to **Vercel Blob**, with the site holding only the list and a base URL. I compared it with Cloudflare R2 first:
+
+| | Vercel Blob (Hobby) | Cloudflare R2 (free tier) |
+| --- | --- | --- |
+| Storage | 1 GB | 10 GB |
+| Downloads | 10 GB a month | Free, unlimited |
+| Over the limit | No charge, but Blob is blocked for 30 days | No hard cap |
+| Setup here | Same dashboard, no DNS change | Needs a custom domain on Cloudflare, and this domain's DNS is elsewhere |
+
+Blob won on setup, and the code doesn't depend on it: moving to R2 later is copying the files and changing `AUDIO_BASE_URL`. On Vercel's paid plan the audio would cost cents; the $20 a month platform fee is the real price, so a paid plan only makes sense if the site needs it for other reasons.
+
+### Shrinking the files first
+
+Hobby's 1 GB would have gone quickly at 433 MB, so before the upload I re-encoded every recording with ffmpeg:
+
+```text
+ffmpeg -i in.m4a -vn -ac 1 -c:a aac -b:a 64k -movflags +faststart out.m4a
+```
+
+- `-ac 1` makes it mono. The NotebookLM hosts are two voices, not music, so stereo adds almost nothing.
+- `-b:a 64k` is 64 kbps AAC, down from 257 kbps. Speech sits mostly below 8 kHz, so what is lost is the very top of the spectrum and a little "air" on s and t sounds.
+- `-movflags +faststart` puts the file's index at the front, so phones can start playing and seek without downloading the whole file first.
+
+The eleven files went from **433 MB to 113 MB**, about 10 MB for a 22-minute episode, with identical durations. That is 11% of Hobby's storage, and a full play of an episode costs about 10 MB of the 10 GB monthly transfer, roughly a thousand plays instead of 250.
 
 ### Limits
 
-- Audio files live in the git repository. A handful is fine; dozens of long recordings would be better in object storage such as Vercel Blob, with the full URL in `audio:` (the helper would need a small change to accept a full URL).
+- Vercel's Hobby plan allows 1 GB of storage and 10 GB of downloads a month. Past that, the audio stops working until the month rolls over, although the site itself keeps working. Smaller files are the main defence, along with `preload="none"`.
+- Old copies of the five recordings that were committed before the move remain in git history.
 - NotebookLM output varies between runs, so a recording can drift from the article after the article is edited. Regenerate it when the post changes materially.
 - The recording is not part of the "About N min" estimate, which belongs to the browser voice.
+
+## Notes: a text-only feed
+
+Not everything is worth a blog post. A thought about a navigation app, a small annoyance, a one-line opinion: these don't need a title, a table of contents or a recall section. So there is now a second kind of content next to posts, called **notes**, and it works like a tweet wall or an RSS feed: short, plain text, newest first.
+
+### How a note is written
+
+A note is a small Markdown file in `content/notes/`. The front matter holds only a date, and everything below it is the text:
+
+```md
+---
+date: "2026-10-30T12:00"
+---
+The UX on navigation is better for Apple Maps on iPhone.
+
+A blank line starts a new paragraph.
+```
+
+There are no titles, tags, images or links to render. Writing a note means creating one file. The first note is a short take on Apple Maps versus Google Maps on CarPlay.
+
+### Reading and ordering
+
+`src/lib/notes.ts` reads the folder, skips any file with no text or an unreadable date, and sorts by date, newest first. The date can include a time, which breaks ties between notes written on the same day:
+
+```ts
+.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+```
+
+Only the date is shown on screen. A time zone on a statically built page would be a guess, so the time is used for ordering and nothing else.
+
+### Two places to read them
+
+- **`/notes`** is the full feed. Each date is a link to that note's anchor, so a single note can be linked to.
+- **The home page** has a Notes section with the same list inside an isolated box about 26 rem tall that scrolls on its own. `overscroll-contain` stops the page from scrolling when the end of the box is reached, and the box can be focused with the keyboard, so it works without a mouse.
+
+Both use one component, `NoteList`, so the two views can't drift apart.
+
+### An RSS feed
+
+`/notes/feed.xml` is a route handler that returns the notes as an RSS 2.0 feed. Each item's title is the first line of the note, up to 80 characters, and its link is the anchor on `/notes`. The text is escaped for XML, and the feed address is the site's own URL, written once at the top of the file.
+
+### Limits
+
+- The feed is for notes only. Blog posts don't have an RSS feed yet.
+- Notes are plain text, so they can't hold a link, a list or code.
+- I haven't opened the feed in a feed reader, only checked the generated XML.
 
 ## Part 2: A tour of the website's code
 
@@ -493,23 +576,29 @@ The repo's `AGENTS.md` warns that this version of Next.js has breaking changes, 
 content/
   blog/            one .mdx file per post (the filename is the URL)
   projects/        one .md file per project card
+  notes/           one .md file per note (a date and plain text)
+  audio.json       which posts have a recording (slug to file name)
 docs/              the MDX formatting guide
 public/images/     diagrams and screenshots, by section / series / post
+public/audio/      local copies of the recordings (git-ignored; the real files live in Vercel Blob)
+scripts/           upload-audio.mjs, which sends recordings to storage
 src/
   app/
     layout.tsx     fonts, the theme script, header, footer
     page.tsx       the home page
     globals.css    theme tokens and all the post styling
     blog/          /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series]
+    notes/         /notes and /notes/feed.xml (the RSS feed)
     projects/      /projects
     about/         /about
   components/      Header, Footer, ThemeToggle, PostCard, ProjectCard, SectionNav,
                    SeriesStrip, SeriesNav, TableOfContents, MdxContent, Callout,
-                   CopyButton, AudioPlayer
+                   CopyButton, AudioPlayer, RecordedAudio, NoteList
   lib/
     blog.ts        reads posts, builds the table of contents, series queries
     sections.ts    the sections and series
     speech.ts      the audio player's text logic
+    notes.ts       reads and sorts the notes
     projects.ts    reads project files
 next.config.ts     redirects and framework options
 ```
@@ -576,7 +665,9 @@ The theme itself is a set of CSS variables in `globals.css`: the "vanilla and ol
 
 | Route | Type | Notes |
 | --- | --- | --- |
-| `/` | Static | Hero, featured projects, the three latest posts |
+| `/` | Static | Hero, a scrollable notes feed, featured projects, the three latest posts |
+| `/notes` | Static | Every note, newest first |
+| `/notes/feed.xml` | Static route handler | The notes as an RSS 2.0 feed |
 | `/blog` | Static | Section chips, series cards, all posts |
 | `/blog/[slug]` | Static, one per post | Header, table of contents, content, audio player, series navigation |
 | `/blog/topic/[section]` | Static, one per section | A section's series and posts |
@@ -619,7 +710,8 @@ The blog now has **three layers**: a **section** (the shelf), a **series** (the 
 | **Alt-text reading** | Diagrams are spoken from their image description | Pictures aren't lost, and alt text matters twice |
 | **Watchdog** | A timer that notices speech that never started or never ended | Phones drop events, so it moves on or explains |
 | **Audio overview** | A two-host spoken conversation NotebookLM generates from a source | The AI podcast version of a post, checked before publishing |
-| **Convention over configuration** | `public/audio/<slug>.m4a` is found without any frontmatter | Adding audio to a post is one file |
+| **Object storage** | Large files live in a bucket, and the site keeps a list plus a base URL (`AUDIO_BASE_URL`) | Git stays small, and changing provider is a copy plus one setting |
+| **Notes** | Dated plain-text files in `content/notes/`, shown newest first on `/notes`, the home page and an RSS feed | Short thoughts without the weight of a post |
 | **`useSyncExternalStore`** | Reads browser facts (support, voices) | Server and client render the same |
 | **Theme tokens** | CSS variables mapped to Tailwind colour names | One class works in light and dark |
 | **`MdxContent`** | Compiles MDX on the server with custom components | Callouts, copy buttons and heading links |
@@ -676,9 +768,16 @@ Phone browsers are stricter: speech must start from a tap, cancelling and speaki
 </details>
 
 <details>
+<summary>How is a note different from a blog post?</summary>
+
+A note is a dated plain-text file in `content/notes/`: no title, tags, images or page of its own. Notes appear newest first on `/notes`, in a scrollable box on the home page and in an RSS feed, while posts have their own pages, sections and series.
+
+</details>
+
+<details>
 <summary>How does a post get an AI podcast version?</summary>
 
-Generate an Audio Overview of the post in NotebookLM, check it, download the m4a and save it as `public/audio/<post-slug>.m4a`. The build finds it by name, and the post page shows the podcast button instead of the browser-voice one.
+Generate an Audio Overview of the post in NotebookLM, check it, download the m4a and save it as `<post-slug>.m4a` in `public/audio/`. Run the upload script, which sends it to storage and lists it in `content/audio.json`. The build finds it by slug, and the post page shows the podcast button instead of the browser-voice one.
 
 </details>
 
@@ -712,22 +811,34 @@ Tailwind colour names point at CSS variables, and the dark theme only redefines 
 
 ## Update log
 
-| Date | Type | Change |
-| --- | --- | --- |
-| 2026-10-29 | Feature | Sections, series and tags, with `/blog/topic` and `/blog/series` pages, "Part N of M" and previous/next links |
-| 2026-10-29 | Change | LLM Architectures posts renamed to readable slugs, with permanent redirects. Images moved to `public/images/<section>/<series>/<post>/` |
-| 2026-10-29 | Feature | **Listen to this post** audio player: browser text-to-speech, reads prose, skips code, tables and diagrams with a spoken note, highlights the paragraph, speed and voice controls |
-| 2026-10-29 | **Fix** | **Audio did not play on mobile Safari and Chrome.** Four causes fixed: cancel and speak in the same instant, an utterance discarded before it finished, a stuck paused engine, and failures hidden from the reader. Added a watchdog and visible messages, and lifted the bar above the iPhone home indicator |
-| 2026-10-29 | **Feature** | **Diagram reading.** The player now reads each image's alt text, with a setting to turn it off, and the listening-time estimate counts it |
-| 2026-10-30 | **Feature** | **AI podcast versions.** A post can carry an m4a made with NotebookLM: drop `public/audio/<slug>.m4a` in and the post shows a **Listen to AI podcast version** button and a bottom player bar, in place of the browser-voice button |
+Every change to the site is logged here under the day it was made, oldest day first. New updates go in a new dated heading at the bottom of this list.
+
+### 2026-10-29
+
+| Type | Change |
+| --- | --- |
+| Feature | Sections, series and tags, with `/blog/topic` and `/blog/series` pages, "Part N of M" and previous/next links |
+| Change | LLM Architectures posts renamed to readable slugs, with permanent redirects. Images moved to `public/images/<section>/<series>/<post>/` |
+| Feature | **Listen to this post** audio player: browser text-to-speech, reads prose, skips code, tables and diagrams with a spoken note, highlights the paragraph, speed and voice controls |
+| **Fix** | **Audio did not play on mobile Safari and Chrome.** Four causes fixed: cancel and speak in the same instant, an utterance discarded before it finished, a stuck paused engine, and failures hidden from the reader. Added a watchdog and visible messages, and lifted the bar above the iPhone home indicator |
+| **Feature** | **Diagram reading.** The player now reads each image's alt text, with a setting to turn it off, and the listening-time estimate counts it |
 
 The phone fix was tested in an emulated phone with a stubbed speech engine, not on a physical device. If it still fails on yours, the player now shows a message saying why.
+
+### 2026-10-30
+
+| Type | Change |
+| --- | --- |
+| **Feature** | **AI podcast versions.** A post can carry an m4a made with NotebookLM: upload `<slug>.m4a` to storage and list it in `content/audio.json`, and the post shows a **Listen to AI podcast version** button and a bottom player bar, in place of the browser-voice button |
+| **Feature** | **Notes.** Short, dated, plain-text entries in `content/notes/`, shown newest first on a new `/notes` page, in a separate scrollable box on the home page, and as an RSS feed at `/notes/feed.xml`. Added a Notes link to the header |
+| Change | The first note (Apple Maps versus Google Maps) was first written as a blog post in a short-lived Notes blog section. It was moved into the notes feed and that section was removed |
+| Change | **Audio moved out of git.** The recordings were re-encoded from 433 MB to 113 MB (mono AAC, 64 kbps) and now live in Vercel Blob. The site keeps `content/audio.json` and an `AUDIO_BASE_URL` setting, and `scripts/upload-audio.mjs` uploads new files |
 
 ## What's next
 
 - Tags are still free-form and a little inconsistent. A small fixed list would make them a better filter.
 - The older essays haven't had the recall treatment the series posts got.
-- No sitemap, RSS feed or search yet.
+- No sitemap, search or RSS feed for blog posts yet (the notes already have one).
 - Record podcast versions for the long series posts first, since those are the ones people most want to listen to.
 - If recordings pile up, move them out of the git repository into object storage.
 

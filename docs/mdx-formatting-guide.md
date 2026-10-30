@@ -296,7 +296,13 @@ The one custom component. Use it to pull a point out of the flow.
 
 ### Recorded audio (m4a)
 
-To attach a recording to a post, put the file at `public/audio/<post-slug>.m4a`, for example `public/audio/hello-agent.m4a`. No frontmatter is needed: the post page finds it at build time and shows a "Listen to the recording" player (with a download link) in place of the text-to-speech player. To use a different file name, set `audio: /audio/my-file.m4a` in the frontmatter. Keep files small (AAC at 64 to 96 kbps mono is plenty for speech), because they live in the git repo.
+Recordings are kept out of git and served from Vercel Blob. To attach one to a post:
+
+1. Save the file as `<post-slug>.m4a` in `public/audio/` (git-ignored), for example `public/audio/hello-agent.m4a`. Shrink it first: mono AAC at 64 kbps with fast-start is plenty for speech (`ffmpeg -i in.m4a -ac 1 -c:a aac -b:a 64k -movflags +faststart out.m4a`).
+2. Run `node --env-file=.env.local scripts/upload-audio.mjs`. It uploads the files and adds the slug to `content/audio.json`. It needs `BLOB_READ_WRITE_TOKEN` in `.env.local`.
+3. Make sure `AUDIO_BASE_URL` is set in Vercel (the script prints the value). Then commit `content/audio.json` and push.
+
+A post listed in `content/audio.json` shows a "Listen to AI podcast version" button in place of the text-to-speech player. To point one post at a different file, set `audio: https://...` (or a `/path`) in its frontmatter. With `AUDIO_BASE_URL` unset, files are read from `public/audio/`, which is how local development works.
 
 ## 9. Blockquotes
 

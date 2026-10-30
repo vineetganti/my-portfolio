@@ -1,0 +1,13 @@
+{
+  "agents-working-together": "agents-working-together.m4a",
+  "batching-llm-requests": "batching-llm-requests.m4a",
+  "giving-agents-tools": "giving-agents-tools.m4a",
+  "hello-agent": "hello-agent.m4a",
+  "how-agents-talk": "how-agents-talk.m4a",
+  "how-ai-agents-remember": "how-ai-agents-remember.m4a",
+  "neural-network-fundamentals": "neural-network-fundamentals.m4a",
+  "python-internals-for-llms": "python-internals-for-llms.m4a",
+  "transformer-architecture-principles": "transformer-architecture-principles.m4a",
+  "transformer-inference-optimization": "transformer-inference-optimization.m4a",
+  "vllm-inference-engine-design": "vllm-inference-engine-design.m4a"
+}
