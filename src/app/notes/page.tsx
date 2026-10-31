@@ -3,8 +3,8 @@ import { getAllNotes } from "@/lib/notes";
 import NoteList from "@/components/NoteList";
 
 export const metadata = {
-  title: "Notes",
-  description: "Short text notes, newest first.",
+  title: "Nuggets",
+  description: "Short text nuggets, newest first.",
 };
 
 export default function NotesPage() {
@@ -12,9 +12,9 @@ export default function NotesPage() {
 
   return (
     <div className="max-w-content mx-auto">
-      <h1 className="font-heading font-extrabold text-4xl sm:text-5xl tracking-[-0.03em] text-ink">Notes</h1>
+      <h1 className="font-heading font-extrabold text-4xl sm:text-5xl tracking-[-0.03em] text-ink">Nuggets</h1>
       <p className="mt-4 text-lg text-ink-2 leading-relaxed">
-        Short thoughts, in the order I had them. Longer pieces are on the{" "}
+        Short nuggets, in the order I had them. Longer pieces are on the{" "}
         <Link href="/blog" className="underline underline-offset-4 hover:text-accent transition-colors">
           blog
         </Link>
@@ -25,7 +25,7 @@ export default function NotesPage() {
         .
       </p>
       <div className="mt-10">
-        {notes.length > 0 ? <NoteList notes={notes} /> : <p className="text-ink-muted">No notes yet.</p>}
+        {notes.length > 0 ? <NoteList notes={notes} /> : <p className="text-ink-muted">No nuggets yet.</p>}
       </div>
     </div>
   );

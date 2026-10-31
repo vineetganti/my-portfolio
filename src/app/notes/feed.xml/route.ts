@@ -24,9 +24,9 @@ export function GET() {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
-    <title>Vineet Ganti: Notes</title>
+    <title>Vineet Ganti: Nuggets</title>
     <link>${SITE}/notes</link>
-    <description>Short text notes, newest first.</description>
+    <description>Short text nuggets, newest first.</description>
 ${items}
   </channel>
 </rss>

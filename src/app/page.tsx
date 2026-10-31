@@ -39,24 +39,24 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Notes: an isolated, scrollable, text-only feed */}
+      {/* Nuggets: an isolated, scrollable, text-only feed */}
       {notes.length > 0 && (
         <section className="py-14 border-t border-border">
           <div className="flex items-baseline justify-between gap-4 mb-8">
             <h2 className="font-heading font-extrabold text-3xl sm:text-4xl tracking-tight text-ink">
-              Notes
+              Nuggets
             </h2>
             <Link
               href="/notes"
               className="text-sm font-semibold text-ink-muted hover:text-accent transition-colors"
             >
-              All notes &rarr;
+              All nuggets &rarr;
             </Link>
           </div>
           <div
             tabIndex={0}
             role="region"
-            aria-label="Notes feed, scrollable"
+            aria-label="Nuggets feed, scrollable"
             className="max-h-[26rem] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-card p-5 sm:p-6"
           >
             <NoteList notes={notes} />

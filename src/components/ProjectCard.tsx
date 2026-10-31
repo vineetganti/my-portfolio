@@ -1,4 +1,4 @@
-import { Code2, ExternalLink } from "lucide-react";
+import { BookOpen, Code2 } from "lucide-react";
 import type { Project } from "@/lib/projects";
 
 export default function ProjectCard({ project }: { project: Project }) {
@@ -41,8 +41,8 @@ export default function ProjectCard({ project }: { project: Project }) {
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-semibold text-ink-2 hover:border-ink-2 hover:text-ink transition-colors"
           >
-            <ExternalLink size={14} />
-            Live
+            <BookOpen size={14} />
+            Blog
           </a>
         )}
       </div>
