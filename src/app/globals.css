@@ -3,34 +3,35 @@
 @plugin "@tailwindcss/typography";
 
 /* ---------- Tokens ---------- */
-/* Vanilla and olive. Dark mode sets #F3E5AB text on deep olive; light mode is
-   its inverse, deep olive text on a #F3E5AB ground. --strong is the darker/brighter
+/* Cream and amber night. Light mode is dark brown ink on cream paper with a
+   burnt-amber accent (~12:1); dark mode is near-black warm charcoal with soft
+   cream text and amber links (~12:1) so long reads stay glare-free. --strong is the darker/brighter
    text used on tinted surfaces where the base text colour would fail contrast. */
 :root {
-  --paper: #f3e5ab;
-  --card: #fbf6df;
-  --card-2: #f7edc4;
-  --ink: #2c361c;
-  --ink-2: #2c361c;
-  --strong: #1f2714;
-  --muted: #4f5d36;
-  --muted-2: #8a8f62;
-  --rule: #ddcf8e;
-  --rule-2: #ddcf8e;
-  --accent: #2c361c;
-  --accent-ink: #1f2714;
-  --accent-t: #e6d68f;
-  --tool: #2c361c;
-  --tool-t: #e9efcf;
+  --paper: #fbf7ee;
+  --card: #fffdf8;
+  --card-2: #fbf5e6;
+  --ink: #3a3226;
+  --ink-2: #3a3226;
+  --strong: #241e15;
+  --muted: #6b5f4d;
+  --muted-2: #8d8068;
+  --rule: #e8dfca;
+  --rule-2: #eee6d3;
+  --accent: #9a5400;
+  --accent-ink: #7f4500;
+  --accent-t: #f6e6c8;
+  --tool: #4f6b3a;
+  --tool-t: #e6ecd5;
   --brain: #8a5a00;
-  --brain-t: #f6ebc4;
+  --brain-t: #f6e9c8;
   --risk: #a3283f;
-  --risk-t: #f8e1d6;
-  --user: #4f5d36;
-  --code-bg: #2c361c;
-  --code-ink: #dfe3c8;
-  --code-mute: #a3ae7c;
-  --focus: #1f2714;
+  --risk-t: #f7e0da;
+  --user: #6b5f4d;
+  --code-bg: #3a3226;
+  --code-ink: #eadfc8;
+  --code-mute: #a0937c;
+  --focus: #241e15;
   --header-h: 64px;
   --toc-bar-h: 0px;
   color-scheme: light;
@@ -38,59 +39,59 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #2c361c;
-    --card: #36422a;
-    --card-2: #313c22;
-    --ink: #f3e5ab;
-    --ink-2: #f3e5ab;
-    --strong: #faf3d6;
-    --muted: #cfc496;
-    --muted-2: #8f8a64;
-    --rule: #4f5d36;
-    --rule-2: #445030;
-    --accent: #f3e5ab;
-    --accent-ink: #faf3d6;
-    --accent-t: #4d5530;
-    --tool: #f3e5ab;
-    --tool-t: #3a4a26;
+    --paper: #1a1814;
+    --card: #23201b;
+    --card-2: #1f1c17;
+    --ink: #e0d6c0;
+    --ink-2: #e0d6c0;
+    --strong: #f4ecd8;
+    --muted: #a89c84;
+    --muted-2: #7f745f;
+    --rule: #38332a;
+    --rule-2: #423c31;
+    --accent: #f0b43a;
+    --accent-ink: #f5c564;
+    --accent-t: #3a2f14;
+    --tool: #9dbb7f;
+    --tool-t: #2a3322;
     --brain: #f0b43a;
-    --brain-t: #3a3414;
-    --risk: #ff8a8a;
-    --risk-t: #4a2a22;
-    --user: #9aa46e;
-    --code-bg: #1f2714;
-    --code-ink: #dfe3c8;
-    --code-mute: #a3ae7c;
-    --focus: #faf3d6;
+    --brain-t: #3a2f14;
+    --risk: #f29a8e;
+    --risk-t: #3f2622;
+    --user: #a89c84;
+    --code-bg: #12110e;
+    --code-ink: #e0d6c0;
+    --code-mute: #8d8370;
+    --focus: #f4ecd8;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --paper: #2c361c;
-  --card: #36422a;
-  --card-2: #313c22;
-  --ink: #f3e5ab;
-  --ink-2: #f3e5ab;
-  --strong: #faf3d6;
-  --muted: #cfc496;
-  --muted-2: #8f8a64;
-  --rule: #4f5d36;
-  --rule-2: #445030;
-  --accent: #f3e5ab;
-  --accent-ink: #faf3d6;
-  --accent-t: #4d5530;
-  --tool: #f3e5ab;
-  --tool-t: #3a4a26;
+  --paper: #1a1814;
+  --card: #23201b;
+  --card-2: #1f1c17;
+  --ink: #e0d6c0;
+  --ink-2: #e0d6c0;
+  --strong: #f4ecd8;
+  --muted: #a89c84;
+  --muted-2: #7f745f;
+  --rule: #38332a;
+  --rule-2: #423c31;
+  --accent: #f0b43a;
+  --accent-ink: #f5c564;
+  --accent-t: #3a2f14;
+  --tool: #9dbb7f;
+  --tool-t: #2a3322;
   --brain: #f0b43a;
-  --brain-t: #3a3414;
-  --risk: #ff8a8a;
-  --risk-t: #4a2a22;
-  --user: #9aa46e;
-  --code-bg: #1f2714;
-  --code-ink: #dfe3c8;
-  --code-mute: #a3ae7c;
-  --focus: #faf3d6;
+  --brain-t: #3a2f14;
+  --risk: #f29a8e;
+  --risk-t: #3f2622;
+  --user: #a89c84;
+  --code-bg: #12110e;
+  --code-ink: #e0d6c0;
+  --code-mute: #8d8370;
+  --focus: #f4ecd8;
   color-scheme: dark;
 }
 
@@ -238,13 +239,30 @@ body {
   font-style: normal;
 }
 
-/* Diagrams are transparent PNGs drawn for white; a white backing keeps their
-   dark text and grey lines readable on the olive themes. */
+/* Diagrams are transparent SVGs drawn in the cream palette on a light card;
+   screenshots (PNG) keep a white backing. In dark mode the SVG diagrams are
+   inverted and hue-rotated back so they follow the charcoal theme. */
 .prose img {
   border-radius: 12px;
   border: 1px solid var(--rule);
   background-color: #ffffff;
   padding: 12px;
+}
+
+.prose img[src*=".svg"] {
+  background-color: var(--card);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .prose img[src*=".svg"] {
+    background-color: #f4eee0;
+    filter: invert(0.9) hue-rotate(180deg);
+  }
+}
+
+:root[data-theme="dark"] .prose img[src*=".svg"] {
+  background-color: #f4eee0;
+  filter: invert(0.9) hue-rotate(180deg);
 }
 
 .prose hr {
@@ -315,7 +333,7 @@ body {
   color: var(--code-ink);
 }
 
-/* highlight.js tokens, tuned for the olive code surface */
+/* highlight.js tokens, tuned for the dark amber code surface */
 .hljs-comment,
 .hljs-quote {
   color: var(--code-mute);
@@ -324,18 +342,18 @@ body {
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-meta .hljs-keyword {
-  color: #f3e5ab;
+  color: #f0b43a;
   font-weight: 600;
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-meta .hljs-string {
-  color: #9fd3c7;
+  color: #a9cfa0;
 }
 .hljs-number,
 .hljs-literal,
 .hljs-symbol {
-  color: #d4de95;
+  color: #e6c36a;
 }
 .hljs-title,
 .hljs-title.function_,
@@ -346,14 +364,14 @@ body {
 .hljs-built_in,
 .hljs-type,
 .hljs-title.class_ {
-  color: #9fd3c7;
+  color: #8fc3bb;
 }
 .hljs-attr,
 .hljs-attribute,
 .hljs-variable,
 .hljs-template-variable,
 .hljs-params {
-  color: #dfe3c8;
+  color: #eadfc8;
 }
 .hljs-meta,
 .hljs-subst {
