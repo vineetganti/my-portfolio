@@ -24,7 +24,8 @@ const SKIPPED: Record<string, string> = {
 };
 
 const SKIP_CONTAINERS = "pre,table,details";
-const READ_SELECTOR = "h2,h3,h4,p,li,pre,table,img,details";
+/** `.diagram` is an inlined SVG diagram; it is read like an image. */
+const READ_SELECTOR = "h2,h3,h4,p,li,pre,table,img,.diagram,details";
 /** Browsers cut off very long utterances, so keep each one short. */
 const MAX_CHUNK = 180;
 /** Rough speaking speed at 1x, used for time estimates. */
@@ -35,8 +36,8 @@ function ownText(el: Element): string {
   const copy = el.cloneNode(true) as Element;
   const drop =
     el.tagName === "LI"
-      ? "p,ul,ol,pre,table,details,blockquote,svg,button,img,.heading-anchor"
-      : "svg,button,img,.heading-anchor";
+      ? "p,ul,ol,pre,table,details,blockquote,svg,button,img,.diagram,.heading-anchor"
+      : "svg,button,img,.diagram,.heading-anchor";
   copy.querySelectorAll(drop).forEach((n) => n.remove());
   return copy.textContent ?? "";
 }
@@ -79,7 +80,7 @@ export interface CollectOptions {
 
 /** Alt text counts as a description only if it is a real sentence, not a file name like `flow_chart`. */
 function imageDescription(el: Element): string {
-  const alt = (el.getAttribute("alt") ?? "").trim();
+  const alt = (el.getAttribute("alt") ?? el.getAttribute("aria-label") ?? "").trim();
   return alt.length >= 12 && /\s/.test(alt) ? alt : "";
 }
 
@@ -90,7 +91,7 @@ export function collectChunks(root: Element, options: CollectOptions = {}): Spee
   let lastSkip = "";
 
   for (const el of root.querySelectorAll(READ_SELECTOR)) {
-    const tag = el.tagName;
+    const tag = el.matches(".diagram") ? "IMG" : el.tagName;
     const note = SKIPPED[tag];
 
     if (note) {

@@ -270,10 +270,31 @@ The one custom component. Use it to pull a point out of the flow.
 ![Agent loop: model → tool → result → model](/images/ai-llms/agentic-ai/hello-agent/agent-loop.png)
 ```
 
-- Every image gets a **white backing, 12px padding, a rounded border**, and spans
-  up to the full text width. This keeps transparent diagrams drawn on white readable
-  on both the light and dark olive themes. Diagrams with a white or transparent
-  background look best. Dark screenshots will sit inside a white frame.
+- **SVG diagrams are inlined** into the page (markdown `![alt](/images/....svg)` only,
+  not a JSX `<img>`), so they follow the light and dark theme. This works only if
+  the SVG is drawn with the diagram palette below. Each hex code is swapped for a
+  `--dg-*` token in `globals.css`, and any other colour stays fixed in both themes.
+
+  | Role | Hex | Use |
+  |---|---|---|
+  | background | `#fffdf8` | full-size background rect, plain boxes, cell separators |
+  | raised | `#faf3e3` | neutral boxes that sit above the background |
+  | ink | `#2f281e` | main text |
+  | muted | `#5e5241` | secondary text, default outlines, arrows |
+  | faint | `#7a6d57` | captions, dashed lines |
+  | grid | `#dccfb1` | hairlines and grids |
+  | neutral / neutral-2 | `#f3eadb` / `#e7dcc5` | grey-beige panels |
+  | amber | `#9a5400` | emphasis text and outlines |
+  | amber tint / cream tint | `#fde3ad` / `#fdf0d4` | amber boxes (outline in amber) |
+  | amber highlight | `#f6c45a` | the one thing to look at |
+  | green / green tint | `#4b7d33` / `#dfedcc` | tools, success (tint boxes get a green outline) |
+  | red / red tint | `#b0273f` / `#fbd8d1` | risk, failure (tint boxes get a red outline) |
+
+  For a heatmap, give each cell `class="dg-pos"` or `class="dg-neg"` and
+  `style="--v:40%"`; the colour is mixed from the background toward green or red.
+- Raster images (PNG, JPEG, WebP) get a **white backing, 12px padding and a rounded
+  border**, and span up to the full text width. Dark screenshots will sit inside a
+  white frame.
 - **Write real alt text** that says what the image shows, not the filename. The audio player reads it aloud as the diagram's description (alt text under 12 characters or without a space is treated as a file name and skipped)
   (`![full_system_architecture](…)` is read aloud as "full system architecture").
 - Name files in kebab-case, with one folder per post named after its slug. Keep

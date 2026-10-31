@@ -32,6 +32,25 @@
   --code-ink: #eadfc8;
   --code-mute: #a0937c;
   --focus: #241e15;
+  /* Diagram palette. The light values are the exact hex codes drawn in the SVG
+     files; the .diagram rules below swap each one for its token, so inline
+     diagrams follow the theme. */
+  --dg-bg: #fffdf8;
+  --dg-raised: #faf3e3;
+  --dg-ink: #2f281e;
+  --dg-muted: #5e5241;
+  --dg-faint: #7a6d57;
+  --dg-grid: #dccfb1;
+  --dg-neutral: #f3eadb;
+  --dg-neutral-2: #e7dcc5;
+  --dg-amber: #9a5400;
+  --dg-amber-t: #fde3ad;
+  --dg-cream-t: #fdf0d4;
+  --dg-amber-hi: #f6c45a;
+  --dg-green: #4b7d33;
+  --dg-green-t: #dfedcc;
+  --dg-red: #b0273f;
+  --dg-red-t: #fbd8d1;
   --header-h: 64px;
   --toc-bar-h: 0px;
   color-scheme: light;
@@ -63,6 +82,22 @@
     --code-ink: #e0d6c0;
     --code-mute: #8d8370;
     --focus: #f4ecd8;
+    --dg-bg: #23201b;
+    --dg-raised: #2b2721;
+    --dg-ink: #eee4cf;
+    --dg-muted: #b3a68c;
+    --dg-faint: #958a73;
+    --dg-grid: #3f392f;
+    --dg-neutral: #2c2823;
+    --dg-neutral-2: #3a3429;
+    --dg-amber: #f0b43a;
+    --dg-amber-t: #3e3116;
+    --dg-cream-t: #302817;
+    --dg-amber-hi: #7a5a1c;
+    --dg-green: #9ccf7a;
+    --dg-green-t: #263321;
+    --dg-red: #f2958a;
+    --dg-red-t: #43251f;
     color-scheme: dark;
   }
 }
@@ -92,6 +127,22 @@
   --code-ink: #e0d6c0;
   --code-mute: #8d8370;
   --focus: #f4ecd8;
+  --dg-bg: #23201b;
+  --dg-raised: #2b2721;
+  --dg-ink: #eee4cf;
+  --dg-muted: #b3a68c;
+  --dg-faint: #958a73;
+  --dg-grid: #3f392f;
+  --dg-neutral: #2c2823;
+  --dg-neutral-2: #3a3429;
+  --dg-amber: #f0b43a;
+  --dg-amber-t: #3e3116;
+  --dg-cream-t: #302817;
+  --dg-amber-hi: #7a5a1c;
+  --dg-green: #9ccf7a;
+  --dg-green-t: #263321;
+  --dg-red: #f2958a;
+  --dg-red-t: #43251f;
   color-scheme: dark;
 }
 
@@ -239,9 +290,7 @@ body {
   font-style: normal;
 }
 
-/* Diagrams are transparent SVGs drawn in the cream palette on a light card;
-   screenshots (PNG) keep a white backing. In dark mode the SVG diagrams are
-   inverted and hue-rotated back so they follow the charcoal theme. */
+/* Screenshots and other raster images keep a white backing. */
 .prose img {
   border-radius: 12px;
   border: 1px solid var(--rule);
@@ -249,21 +298,62 @@ body {
   padding: 12px;
 }
 
-.prose img[src*=".svg"] {
-  background-color: var(--card);
+/* ---------- Diagrams (SVGs inlined by MdxContent) ---------- */
+.prose .diagram {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-block: 1.75em;
+  border-radius: 12px;
+  border: 1px solid var(--rule);
+  background-color: var(--dg-bg);
+  padding: 12px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .prose img[src*=".svg"] {
-    background-color: #f4eee0;
-    filter: invert(0.9) hue-rotate(180deg);
-  }
+.prose .diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
 
-:root[data-theme="dark"] .prose img[src*=".svg"] {
-  background-color: #f4eee0;
-  filter: invert(0.9) hue-rotate(180deg);
-}
+/* Each palette hex drawn in the SVG files is swapped for its theme token. */
+.diagram [fill="#fffdf8" i] { fill: var(--dg-bg); }
+.diagram [stroke="#fffdf8" i] { stroke: var(--dg-bg); }
+.diagram [fill="#faf3e3" i] { fill: var(--dg-raised); }
+.diagram [stroke="#faf3e3" i] { stroke: var(--dg-raised); }
+.diagram [fill="#2f281e" i] { fill: var(--dg-ink); }
+.diagram [stroke="#2f281e" i] { stroke: var(--dg-ink); }
+.diagram [fill="#5e5241" i] { fill: var(--dg-muted); }
+.diagram [stroke="#5e5241" i] { stroke: var(--dg-muted); }
+.diagram [fill="#7a6d57" i] { fill: var(--dg-faint); }
+.diagram [stroke="#7a6d57" i] { stroke: var(--dg-faint); }
+.diagram [fill="#dccfb1" i] { fill: var(--dg-grid); }
+.diagram [stroke="#dccfb1" i] { stroke: var(--dg-grid); }
+.diagram [fill="#f3eadb" i] { fill: var(--dg-neutral); }
+.diagram [stroke="#f3eadb" i] { stroke: var(--dg-neutral); }
+.diagram [fill="#e7dcc5" i] { fill: var(--dg-neutral-2); }
+.diagram [stroke="#e7dcc5" i] { stroke: var(--dg-neutral-2); }
+.diagram [fill="#9a5400" i] { fill: var(--dg-amber); }
+.diagram [stroke="#9a5400" i] { stroke: var(--dg-amber); }
+.diagram [fill="#fde3ad" i] { fill: var(--dg-amber-t); }
+.diagram [stroke="#fde3ad" i] { stroke: var(--dg-amber-t); }
+.diagram [fill="#fdf0d4" i] { fill: var(--dg-cream-t); }
+.diagram [stroke="#fdf0d4" i] { stroke: var(--dg-cream-t); }
+.diagram [fill="#f6c45a" i] { fill: var(--dg-amber-hi); }
+.diagram [stroke="#f6c45a" i] { stroke: var(--dg-amber-hi); }
+.diagram [fill="#4b7d33" i] { fill: var(--dg-green); }
+.diagram [stroke="#4b7d33" i] { stroke: var(--dg-green); }
+.diagram [fill="#dfedcc" i] { fill: var(--dg-green-t); }
+.diagram [stroke="#dfedcc" i] { stroke: var(--dg-green-t); }
+.diagram [fill="#b0273f" i] { fill: var(--dg-red); }
+.diagram [stroke="#b0273f" i] { stroke: var(--dg-red); }
+.diagram [fill="#fbd8d1" i] { fill: var(--dg-red-t); }
+.diagram [stroke="#fbd8d1" i] { stroke: var(--dg-red-t); }
+
+/* Heatmap cells carry their value as --v and mix from the diagram
+   background toward green (positive) or red (negative). */
+.diagram .dg-pos { fill: color-mix(in srgb, var(--dg-green) var(--v), var(--dg-bg)); }
+.diagram .dg-neg { fill: color-mix(in srgb, var(--dg-red) var(--v), var(--dg-bg)); }
 
 .prose hr {
   border-color: var(--rule);
