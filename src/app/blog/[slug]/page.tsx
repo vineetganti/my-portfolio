@@ -5,6 +5,7 @@ import { getAllPosts, getHeadings, getPostBySlug, getSeriesPosition } from "@/li
 import { getSection, getSeriesInfo } from "@/lib/sections";
 import AudioPlayer from "@/components/AudioPlayer";
 import MdxContent from "@/components/MdxContent";
+import RecordedAudio from "@/components/RecordedAudio";
 import SeriesNav from "@/components/SeriesNav";
 import TableOfContents from "@/components/TableOfContents";
 import { ArrowLeft } from "lucide-react";
@@ -105,7 +106,11 @@ export default async function BlogPostPage({
               ))}
             </div>
           )}
-          <AudioPlayer minutes={post.listenMinutes} />
+          {post.audioSrc ? (
+            <RecordedAudio src={post.audioSrc} title={post.title} />
+          ) : (
+            <AudioPlayer minutes={post.listenMinutes} />
+          )}
         </header>
 
         <div id="post-content">

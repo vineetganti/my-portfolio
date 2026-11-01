@@ -3,34 +3,54 @@
 @plugin "@tailwindcss/typography";
 
 /* ---------- Tokens ---------- */
-/* Vanilla and olive. Dark mode sets #F3E5AB text on deep olive; light mode is
-   its inverse, deep olive text on a #F3E5AB ground. --strong is the darker/brighter
+/* Cream and amber night. Light mode is dark brown ink on cream paper with a
+   burnt-amber accent (~12:1); dark mode is near-black warm charcoal with soft
+   cream text and amber links (~12:1) so long reads stay glare-free. --strong is the darker/brighter
    text used on tinted surfaces where the base text colour would fail contrast. */
 :root {
-  --paper: #f3e5ab;
-  --card: #fbf6df;
-  --card-2: #f7edc4;
-  --ink: #2c361c;
-  --ink-2: #2c361c;
-  --strong: #1f2714;
-  --muted: #4f5d36;
-  --muted-2: #8a8f62;
-  --rule: #ddcf8e;
-  --rule-2: #ddcf8e;
-  --accent: #2c361c;
-  --accent-ink: #1f2714;
-  --accent-t: #e6d68f;
-  --tool: #2c361c;
-  --tool-t: #e9efcf;
+  --paper: #fbf7ee;
+  --card: #fffdf8;
+  --card-2: #fbf5e6;
+  --ink: #3a3226;
+  --ink-2: #3a3226;
+  --strong: #241e15;
+  --muted: #6b5f4d;
+  --muted-2: #8d8068;
+  --rule: #e8dfca;
+  --rule-2: #eee6d3;
+  --accent: #9a5400;
+  --accent-ink: #7f4500;
+  --accent-t: #f6e6c8;
+  --tool: #4f6b3a;
+  --tool-t: #e6ecd5;
   --brain: #8a5a00;
-  --brain-t: #f6ebc4;
+  --brain-t: #f6e9c8;
   --risk: #a3283f;
-  --risk-t: #f8e1d6;
-  --user: #4f5d36;
-  --code-bg: #2c361c;
-  --code-ink: #dfe3c8;
-  --code-mute: #a3ae7c;
-  --focus: #1f2714;
+  --risk-t: #f7e0da;
+  --user: #6b5f4d;
+  --code-bg: #3a3226;
+  --code-ink: #eadfc8;
+  --code-mute: #a0937c;
+  --focus: #241e15;
+  /* Diagram palette. The light values are the exact hex codes drawn in the SVG
+     files; the .diagram rules below swap each one for its token, so inline
+     diagrams follow the theme. */
+  --dg-bg: #fffdf8;
+  --dg-raised: #faf3e3;
+  --dg-ink: #2f281e;
+  --dg-muted: #5e5241;
+  --dg-faint: #7a6d57;
+  --dg-grid: #dccfb1;
+  --dg-neutral: #f3eadb;
+  --dg-neutral-2: #e7dcc5;
+  --dg-amber: #9a5400;
+  --dg-amber-t: #fde3ad;
+  --dg-cream-t: #fdf0d4;
+  --dg-amber-hi: #f6c45a;
+  --dg-green: #4b7d33;
+  --dg-green-t: #dfedcc;
+  --dg-red: #b0273f;
+  --dg-red-t: #fbd8d1;
   --header-h: 64px;
   --toc-bar-h: 0px;
   color-scheme: light;
@@ -38,59 +58,91 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #2c361c;
-    --card: #36422a;
-    --card-2: #313c22;
-    --ink: #f3e5ab;
-    --ink-2: #f3e5ab;
-    --strong: #faf3d6;
-    --muted: #cfc496;
-    --muted-2: #8f8a64;
-    --rule: #4f5d36;
-    --rule-2: #445030;
-    --accent: #f3e5ab;
-    --accent-ink: #faf3d6;
-    --accent-t: #4d5530;
-    --tool: #f3e5ab;
-    --tool-t: #3a4a26;
+    --paper: #1a1814;
+    --card: #23201b;
+    --card-2: #1f1c17;
+    --ink: #e0d6c0;
+    --ink-2: #e0d6c0;
+    --strong: #f4ecd8;
+    --muted: #a89c84;
+    --muted-2: #7f745f;
+    --rule: #38332a;
+    --rule-2: #423c31;
+    --accent: #f0b43a;
+    --accent-ink: #f5c564;
+    --accent-t: #3a2f14;
+    --tool: #9dbb7f;
+    --tool-t: #2a3322;
     --brain: #f0b43a;
-    --brain-t: #3a3414;
-    --risk: #ff8a8a;
-    --risk-t: #4a2a22;
-    --user: #9aa46e;
-    --code-bg: #1f2714;
-    --code-ink: #dfe3c8;
-    --code-mute: #a3ae7c;
-    --focus: #faf3d6;
+    --brain-t: #3a2f14;
+    --risk: #f29a8e;
+    --risk-t: #3f2622;
+    --user: #a89c84;
+    --code-bg: #12110e;
+    --code-ink: #e0d6c0;
+    --code-mute: #8d8370;
+    --focus: #f4ecd8;
+    --dg-bg: #23201b;
+    --dg-raised: #2b2721;
+    --dg-ink: #eee4cf;
+    --dg-muted: #b3a68c;
+    --dg-faint: #958a73;
+    --dg-grid: #3f392f;
+    --dg-neutral: #2c2823;
+    --dg-neutral-2: #3a3429;
+    --dg-amber: #f0b43a;
+    --dg-amber-t: #3e3116;
+    --dg-cream-t: #302817;
+    --dg-amber-hi: #7a5a1c;
+    --dg-green: #9ccf7a;
+    --dg-green-t: #263321;
+    --dg-red: #f2958a;
+    --dg-red-t: #43251f;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --paper: #2c361c;
-  --card: #36422a;
-  --card-2: #313c22;
-  --ink: #f3e5ab;
-  --ink-2: #f3e5ab;
-  --strong: #faf3d6;
-  --muted: #cfc496;
-  --muted-2: #8f8a64;
-  --rule: #4f5d36;
-  --rule-2: #445030;
-  --accent: #f3e5ab;
-  --accent-ink: #faf3d6;
-  --accent-t: #4d5530;
-  --tool: #f3e5ab;
-  --tool-t: #3a4a26;
+  --paper: #1a1814;
+  --card: #23201b;
+  --card-2: #1f1c17;
+  --ink: #e0d6c0;
+  --ink-2: #e0d6c0;
+  --strong: #f4ecd8;
+  --muted: #a89c84;
+  --muted-2: #7f745f;
+  --rule: #38332a;
+  --rule-2: #423c31;
+  --accent: #f0b43a;
+  --accent-ink: #f5c564;
+  --accent-t: #3a2f14;
+  --tool: #9dbb7f;
+  --tool-t: #2a3322;
   --brain: #f0b43a;
-  --brain-t: #3a3414;
-  --risk: #ff8a8a;
-  --risk-t: #4a2a22;
-  --user: #9aa46e;
-  --code-bg: #1f2714;
-  --code-ink: #dfe3c8;
-  --code-mute: #a3ae7c;
-  --focus: #faf3d6;
+  --brain-t: #3a2f14;
+  --risk: #f29a8e;
+  --risk-t: #3f2622;
+  --user: #a89c84;
+  --code-bg: #12110e;
+  --code-ink: #e0d6c0;
+  --code-mute: #8d8370;
+  --focus: #f4ecd8;
+  --dg-bg: #23201b;
+  --dg-raised: #2b2721;
+  --dg-ink: #eee4cf;
+  --dg-muted: #b3a68c;
+  --dg-faint: #958a73;
+  --dg-grid: #3f392f;
+  --dg-neutral: #2c2823;
+  --dg-neutral-2: #3a3429;
+  --dg-amber: #f0b43a;
+  --dg-amber-t: #3e3116;
+  --dg-cream-t: #302817;
+  --dg-amber-hi: #7a5a1c;
+  --dg-green: #9ccf7a;
+  --dg-green-t: #263321;
+  --dg-red: #f2958a;
+  --dg-red-t: #43251f;
   color-scheme: dark;
 }
 
@@ -238,14 +290,70 @@ body {
   font-style: normal;
 }
 
-/* Diagrams are transparent PNGs drawn for white; a white backing keeps their
-   dark text and grey lines readable on the olive themes. */
+/* Screenshots and other raster images keep a white backing. */
 .prose img {
   border-radius: 12px;
   border: 1px solid var(--rule);
   background-color: #ffffff;
   padding: 12px;
 }
+
+/* ---------- Diagrams (SVGs inlined by MdxContent) ---------- */
+.prose .diagram {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-block: 1.75em;
+  border-radius: 12px;
+  border: 1px solid var(--rule);
+  background-color: var(--dg-bg);
+  padding: 12px;
+}
+
+.prose .diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Each palette hex drawn in the SVG files is swapped for its theme token. */
+.diagram [fill="#fffdf8" i] { fill: var(--dg-bg); }
+.diagram [stroke="#fffdf8" i] { stroke: var(--dg-bg); }
+.diagram [fill="#faf3e3" i] { fill: var(--dg-raised); }
+.diagram [stroke="#faf3e3" i] { stroke: var(--dg-raised); }
+.diagram [fill="#2f281e" i] { fill: var(--dg-ink); }
+.diagram [stroke="#2f281e" i] { stroke: var(--dg-ink); }
+.diagram [fill="#5e5241" i] { fill: var(--dg-muted); }
+.diagram [stroke="#5e5241" i] { stroke: var(--dg-muted); }
+.diagram [fill="#7a6d57" i] { fill: var(--dg-faint); }
+.diagram [stroke="#7a6d57" i] { stroke: var(--dg-faint); }
+.diagram [fill="#dccfb1" i] { fill: var(--dg-grid); }
+.diagram [stroke="#dccfb1" i] { stroke: var(--dg-grid); }
+.diagram [fill="#f3eadb" i] { fill: var(--dg-neutral); }
+.diagram [stroke="#f3eadb" i] { stroke: var(--dg-neutral); }
+.diagram [fill="#e7dcc5" i] { fill: var(--dg-neutral-2); }
+.diagram [stroke="#e7dcc5" i] { stroke: var(--dg-neutral-2); }
+.diagram [fill="#9a5400" i] { fill: var(--dg-amber); }
+.diagram [stroke="#9a5400" i] { stroke: var(--dg-amber); }
+.diagram [fill="#fde3ad" i] { fill: var(--dg-amber-t); }
+.diagram [stroke="#fde3ad" i] { stroke: var(--dg-amber-t); }
+.diagram [fill="#fdf0d4" i] { fill: var(--dg-cream-t); }
+.diagram [stroke="#fdf0d4" i] { stroke: var(--dg-cream-t); }
+.diagram [fill="#f6c45a" i] { fill: var(--dg-amber-hi); }
+.diagram [stroke="#f6c45a" i] { stroke: var(--dg-amber-hi); }
+.diagram [fill="#4b7d33" i] { fill: var(--dg-green); }
+.diagram [stroke="#4b7d33" i] { stroke: var(--dg-green); }
+.diagram [fill="#dfedcc" i] { fill: var(--dg-green-t); }
+.diagram [stroke="#dfedcc" i] { stroke: var(--dg-green-t); }
+.diagram [fill="#b0273f" i] { fill: var(--dg-red); }
+.diagram [stroke="#b0273f" i] { stroke: var(--dg-red); }
+.diagram [fill="#fbd8d1" i] { fill: var(--dg-red-t); }
+.diagram [stroke="#fbd8d1" i] { stroke: var(--dg-red-t); }
+
+/* Heatmap cells carry their value as --v and mix from the diagram
+   background toward green (positive) or red (negative). */
+.diagram .dg-pos { fill: color-mix(in srgb, var(--dg-green) var(--v), var(--dg-bg)); }
+.diagram .dg-neg { fill: color-mix(in srgb, var(--dg-red) var(--v), var(--dg-bg)); }
 
 .prose hr {
   border-color: var(--rule);
@@ -315,7 +423,7 @@ body {
   color: var(--code-ink);
 }
 
-/* highlight.js tokens, tuned for the olive code surface */
+/* highlight.js tokens, tuned for the dark amber code surface */
 .hljs-comment,
 .hljs-quote {
   color: var(--code-mute);
@@ -324,18 +432,18 @@ body {
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-meta .hljs-keyword {
-  color: #f3e5ab;
+  color: #f0b43a;
   font-weight: 600;
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-meta .hljs-string {
-  color: #9fd3c7;
+  color: #a9cfa0;
 }
 .hljs-number,
 .hljs-literal,
 .hljs-symbol {
-  color: #d4de95;
+  color: #e6c36a;
 }
 .hljs-title,
 .hljs-title.function_,
@@ -346,14 +454,14 @@ body {
 .hljs-built_in,
 .hljs-type,
 .hljs-title.class_ {
-  color: #9fd3c7;
+  color: #8fc3bb;
 }
 .hljs-attr,
 .hljs-attribute,
 .hljs-variable,
 .hljs-template-variable,
 .hljs-params {
-  color: #dfe3c8;
+  color: #eadfc8;
 }
 .hljs-meta,
 .hljs-subst {

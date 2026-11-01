@@ -270,11 +270,32 @@ The one custom component. Use it to pull a point out of the flow.
 ![Agent loop: model → tool → result → model](/images/ai-llms/agentic-ai/hello-agent/agent-loop.png)
 ```
 
-- Every image gets a **white backing, 12px padding, a rounded border**, and spans
-  up to the full text width. This keeps transparent diagrams drawn on white readable
-  on both the light and dark olive themes. Diagrams with a white or transparent
-  background look best. Dark screenshots will sit inside a white frame.
-- **Write real alt text** that says what the image shows, not the filename
+- **SVG diagrams are inlined** into the page (markdown `![alt](/images/....svg)` only,
+  not a JSX `<img>`), so they follow the light and dark theme. This works only if
+  the SVG is drawn with the diagram palette below. Each hex code is swapped for a
+  `--dg-*` token in `globals.css`, and any other colour stays fixed in both themes.
+
+  | Role | Hex | Use |
+  |---|---|---|
+  | background | `#fffdf8` | full-size background rect, plain boxes, cell separators |
+  | raised | `#faf3e3` | neutral boxes that sit above the background |
+  | ink | `#2f281e` | main text |
+  | muted | `#5e5241` | secondary text, default outlines, arrows |
+  | faint | `#7a6d57` | captions, dashed lines |
+  | grid | `#dccfb1` | hairlines and grids |
+  | neutral / neutral-2 | `#f3eadb` / `#e7dcc5` | grey-beige panels |
+  | amber | `#9a5400` | emphasis text and outlines |
+  | amber tint / cream tint | `#fde3ad` / `#fdf0d4` | amber boxes (outline in amber) |
+  | amber highlight | `#f6c45a` | the one thing to look at |
+  | green / green tint | `#4b7d33` / `#dfedcc` | tools, success (tint boxes get a green outline) |
+  | red / red tint | `#b0273f` / `#fbd8d1` | risk, failure (tint boxes get a red outline) |
+
+  For a heatmap, give each cell `class="dg-pos"` or `class="dg-neg"` and
+  `style="--v:40%"`; the colour is mixed from the background toward green or red.
+- Raster images (PNG, JPEG, WebP) get a **white backing, 12px padding and a rounded
+  border**, and span up to the full text width. Dark screenshots will sit inside a
+  white frame.
+- **Write real alt text** that says what the image shows, not the filename. The audio player reads it aloud as the diagram's description (alt text under 12 characters or without a space is treated as a file name and skipped)
   (`![full_system_architecture](…)` is read aloud as "full system architecture").
 - Name files in kebab-case, with one folder per post named after its slug. Keep
   images out of `public/blog/`, which would sit beside the `/blog/...` routes.
@@ -293,6 +314,16 @@ The one custom component. Use it to pull a point out of the flow.
   Images are served as-is, with no automatic resizing.
 
 ---
+
+### Recorded audio (m4a)
+
+Recordings are kept out of git and served from Vercel Blob. To attach one to a post:
+
+1. Save the file as `<post-slug>.m4a` in `public/audio/` (git-ignored), for example `public/audio/hello-agent.m4a`. Shrink it first: mono AAC at 64 kbps with fast-start is plenty for speech (`ffmpeg -i in.m4a -ac 1 -c:a aac -b:a 64k -movflags +faststart out.m4a`).
+2. Run `node --env-file=.env.local scripts/upload-audio.mjs`. It uploads the files and adds the slug to `content/audio.json`. It needs `BLOB_READ_WRITE_TOKEN` in `.env.local`.
+3. Make sure `AUDIO_BASE_URL` is set in Vercel (the script prints the value). Then commit `content/audio.json` and push.
+
+A post listed in `content/audio.json` shows a "Listen to AI podcast version" button in place of the text-to-speech player. To point one post at a different file, set `audio: https://...` (or a `/path`) in its frontmatter. With `AUDIO_BASE_URL` unset, files are read from `public/audio/`, which is how local development works.
 
 ## 9. Blockquotes
 
@@ -448,7 +479,7 @@ What you learned and where to go next.
 - [ ] Every code fence has a language; output is in `text` fences
 - [ ] Links have no space between `]` and `(`
 - [ ] Images live in `public/images/<section>/<series>/<post-slug>/` and have descriptive alt text
-- [ ] Anything essential is also in the prose: the audio player skips code, tables, images and `<details>`
+- [ ] Anything essential is also in the prose or the alt text: the audio player reads image alt text, and skips code, tables and `<details>`
 - [ ] No stray `<`, `{` or `}` outside backticks
 - [ ] Previewed with `npm run dev` at `http://localhost:3000/blog/<slug>` in both
       light and dark mode (theme toggle in the header)

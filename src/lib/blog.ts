@@ -26,6 +26,11 @@ export interface BlogPost {
   readingTime: string;
   /** Minutes to listen to the prose read aloud (code, tables and diagrams are skipped). */
   listenMinutes: number;
+  /**
+   * URL of a recorded narration, if the post has one. Listed in `content/audio.json`
+   * (served from `AUDIO_BASE_URL`), or set `audio: <url>` in frontmatter.
+   */
+  audioSrc?: string;
   /** Set `toc: false` in frontmatter to hide the table of contents */
   toc: boolean;
   content: string;
@@ -65,16 +70,40 @@ export function getHeadings(content: string): TocHeading[] {
     .map((h) => ({ id: h.id, text: h.text, level: h.depth === top ? 0 : 1 }));
 }
 
-/** Approximate listening time: the prose only, as the audio player reads it. */
+/** Approximate listening time: the prose and image descriptions, as the audio player reads them. */
 function estimateListenMinutes(markdown: string): number {
   const prose = markdown
     .replace(/<details>[\s\S]*?<\/details>/g, " ")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s*\|.*$/gm, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, " $1 ") // diagrams are read from their alt text
     .replace(/<[^>]+>/g, " ");
   const words = prose.split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.round(words / WORDS_PER_MINUTE));
+}
+
+const AUDIO_MANIFEST = path.join(process.cwd(), "content/audio.json");
+
+/**
+ * Where the recordings are served from: object storage in production (set
+ * `AUDIO_BASE_URL`), or the local `public/audio/` folder in development.
+ */
+const AUDIO_BASE_URL = (process.env.AUDIO_BASE_URL || "/audio").replace(/\/+$/, "");
+
+/** Slug to file name for every post that has a recording, from `content/audio.json`. */
+function readAudioManifest(): Record<string, string> {
+  try {
+    return JSON.parse(fs.readFileSync(AUDIO_MANIFEST, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** A recording named in frontmatter (`/path` or `https://` URL), else the one listed for this slug in the manifest. */
+function findAudio(slug: string, declared: unknown): string | undefined {
+  if (typeof declared === "string" && /^(\/|https:\/\/)/.test(declared)) return declared;
+  const file = readAudioManifest()[slug];
+  return file ? `${AUDIO_BASE_URL}/${file}` : undefined;
 }
 
 function parsePost(slug: string, fileContent: string): BlogPost {
@@ -93,6 +122,7 @@ function parsePost(slug: string, fileContent: string): BlogPost {
     seriesOrder: Number.isFinite(order) ? order : undefined,
     readingTime: stats.text,
     listenMinutes: estimateListenMinutes(content),
+    audioSrc: findAudio(slug, data.audio),
     toc: data.toc !== false,
     content,
   };

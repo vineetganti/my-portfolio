@@ -1,9 +1,11 @@
 /**
  * Turns the rendered post body into short chunks the browser can speak.
  *
- * Prose is read; code, tables, diagrams and the collapsed recall questions are
- * skipped, with a short spoken note in their place ("Code example skipped.").
- * A run of the same kind of skipped block gets one note, not one per block.
+ * Prose is read. Diagrams are read from their alt text (the written description
+ * of the picture) when it is a real description. Code, tables and the collapsed
+ * recall questions are skipped, with a short spoken note in their place
+ * ("Code example skipped."). A run of the same kind of skipped block gets one
+ * note, not one per block.
  */
 export interface SpeechChunk {
   /** The element to highlight while this chunk is spoken. */
@@ -22,7 +24,8 @@ const SKIPPED: Record<string, string> = {
 };
 
 const SKIP_CONTAINERS = "pre,table,details";
-const READ_SELECTOR = "h2,h3,h4,p,li,pre,table,img,details";
+/** `.diagram` is an inlined SVG diagram; it is read like an image. */
+const READ_SELECTOR = "h2,h3,h4,p,li,pre,table,img,.diagram,details";
 /** Browsers cut off very long utterances, so keep each one short. */
 const MAX_CHUNK = 180;
 /** Rough speaking speed at 1x, used for time estimates. */
@@ -33,8 +36,8 @@ function ownText(el: Element): string {
   const copy = el.cloneNode(true) as Element;
   const drop =
     el.tagName === "LI"
-      ? "p,ul,ol,pre,table,details,blockquote,svg,button,img,.heading-anchor"
-      : "svg,button,img,.heading-anchor";
+      ? "p,ul,ol,pre,table,details,blockquote,svg,button,img,.diagram,.heading-anchor"
+      : "svg,button,img,.diagram,.heading-anchor";
   copy.querySelectorAll(drop).forEach((n) => n.remove());
   return copy.textContent ?? "";
 }
@@ -70,18 +73,43 @@ export function splitForSpeech(text: string): string[] {
 
 const countWords = (s: string) => s.split(/\s+/).filter(Boolean).length;
 
-export function collectChunks(root: Element): SpeechChunk[] {
+export interface CollectOptions {
+  /** Read an image's alt text aloud instead of skipping the image. Default true. */
+  describeImages?: boolean;
+}
+
+/** Alt text counts as a description only if it is a real sentence, not a file name like `flow_chart`. */
+function imageDescription(el: Element): string {
+  const alt = (el.getAttribute("alt") ?? el.getAttribute("aria-label") ?? "").trim();
+  return alt.length >= 12 && /\s/.test(alt) ? alt : "";
+}
+
+export function collectChunks(root: Element, options: CollectOptions = {}): SpeechChunk[] {
+  const describeImages = options.describeImages ?? true;
   const chunks: SpeechChunk[] = [];
   let item = -1;
   let lastSkip = "";
 
   for (const el of root.querySelectorAll(READ_SELECTOR)) {
-    const tag = el.tagName;
+    const tag = el.matches(".diagram") ? "IMG" : el.tagName;
     const note = SKIPPED[tag];
 
     if (note) {
       // A skipped block nested inside another skipped block adds nothing.
       if (el.parentElement?.closest(SKIP_CONTAINERS)) continue;
+
+      const description = tag === "IMG" && describeImages ? imageDescription(el) : "";
+      if (description) {
+        lastSkip = "";
+        item++;
+        let spoken = cleanForSpeech(`Image: ${description}`);
+        if (!/[.!?:]$/.test(spoken)) spoken += ".";
+        for (const part of splitForSpeech(spoken)) {
+          chunks.push({ el, text: part, item, words: countWords(part) });
+        }
+        continue;
+      }
+
       if (lastSkip === tag) continue;
       lastSkip = tag;
       chunks.push({ el, text: note, item: ++item, words: countWords(note) });

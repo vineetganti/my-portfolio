@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# recorded narrations live in object storage; see content/audio.json
+/public/audio/
