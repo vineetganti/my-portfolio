@@ -5,6 +5,9 @@ import { getAllNotes } from "@/lib/notes";
 import NoteList from "@/components/NoteList";
 import PostCard from "@/components/PostCard";
 import ProjectCard from "@/components/ProjectCard";
+import Flashcards from "@/components/home/Flashcards";
+import HeroChart from "@/components/home/HeroChart";
+import { getFlashcardDecks } from "@/lib/flashcards";
 
 export default function HomePage() {
   const posts = getAllPosts().slice(0, 3);
@@ -14,28 +17,36 @@ export default function HomePage() {
   return (
     <div>
       {/* Hero */}
-      <section className="pt-8 pb-14 sm:pt-14">
-        <p className="font-bold text-ink-muted mb-5">Hello, I&apos;m</p>
-        <h1 className="font-heading font-extrabold text-5xl sm:text-7xl lg:text-[5.5rem] tracking-[-0.035em] leading-[0.98] text-ink">
-          Vineet Ganti
-        </h1>
-        <p className="mt-6 max-w-content text-lg sm:text-xl text-ink-2 leading-relaxed">
-          I write about technology, ideas, and things I&apos;m learning. Welcome
-          to my corner of the internet.
-        </p>
-        <div className="mt-8 flex flex-wrap items-center gap-3">
-          <Link
-            href="/blog"
-            className="rounded-lg bg-accent px-5 py-2.5 font-semibold text-card hover:bg-accent-hover transition-colors"
-          >
-            Read the blog
-          </Link>
-          <Link
-            href="/about"
-            className="rounded-lg border border-border bg-card px-5 py-2.5 font-semibold text-ink-2 hover:border-ink-2 hover:text-ink transition-colors"
-          >
-            About me
-          </Link>
+      <section className="pt-8 pb-14 sm:pt-14 lg:grid lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-12 lg:items-start">
+        <div>
+          <p className="font-bold text-ink-muted mb-5">Hello, I&apos;m</p>
+          <h1 className="font-heading font-extrabold text-5xl sm:text-7xl lg:text-[5.5rem] tracking-[-0.035em] leading-[0.98] text-ink">
+            Vineet Ganti
+          </h1>
+          <p className="mt-6 max-w-content text-lg sm:text-xl text-ink-2 leading-relaxed">
+            I write about technology, ideas, and things I&apos;m learning. Welcome
+            to my corner of the internet.
+          </p>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Link
+              href="/blog"
+              className="rounded-lg bg-accent px-5 py-2.5 font-semibold text-card hover:bg-accent-hover transition-colors"
+            >
+              Read the blog
+            </Link>
+            <Link
+              href="/about"
+              className="rounded-lg border border-border bg-card px-5 py-2.5 font-semibold text-ink-2 hover:border-ink-2 hover:text-ink transition-colors"
+            >
+              About me
+            </Link>
+          </div>
+        </div>
+
+        {/* Right column on desktop; stacks under the intro on smaller screens. */}
+        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:mt-0 lg:grid-cols-1">
+          <Flashcards decks={getFlashcardDecks()} />
+          <HeroChart />
         </div>
       </section>
 

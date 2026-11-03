@@ -1,0 +1,652 @@
+[
+  {
+    "id": "ag-01",
+    "post": "hello-agent",
+    "q": "A tool takes an IANA timezone name such as Asia/Kolkata. You delete the examples from its docstring but keep the type hint str. What is the most likely result?",
+    "options": [
+      "The model may pass informal names like \"NYC\" or \"EST\" that the function cannot resolve",
+      "The decorator refuses to register the tool, because a docstring without examples is treated as incomplete",
+      "Strands fills the examples back in automatically from the type hint, so the model still sees the expected format",
+      "The model reads the function body to find out which timezone names the code accepts, so nothing changes"
+    ],
+    "answer": 0,
+    "why": "The model sees only the tool's name, type hints and docstring, never the body. The docstring examples show the exact format wanted, so without them the model has to guess."
+  },
+  {
+    "id": "ag-02",
+    "post": "hello-agent",
+    "q": "For \"What time is it in Bangalore and in New York?\", who turns the place names into Asia/Kolkata and America/New_York, and who actually runs current_time?",
+    "options": [
+      "The model translates the names; Strands runs the Python function",
+      "Strands translates the names with a lookup table; the model runs the function",
+      "The model translates the names and also executes the function body",
+      "The function translates the names; Strands only prints the log"
+    ],
+    "answer": 0,
+    "why": "The model can only produce text, so it asks for a tool call with the arguments it chose. Strands runs the real function and sends the result back to the model, which writes the final answer."
+  },
+  {
+    "id": "ag-03",
+    "post": "hello-agent",
+    "q": "A rule must hold absolutely: one user's data must never reach another user. Where should it be enforced?",
+    "options": [
+      "In code, for example with a tool that is bound to one user, because a system prompt is only guidance",
+      "In a stricter system prompt, with the rule repeated several times and written in capital letters for emphasis",
+      "By lowering the model's temperature to zero, so that it follows the rule the same way on every single run",
+      "By asking the model to confirm the rule at the end of every answer, and to apologise whenever it was broken"
+    ],
+    "answer": 0,
+    "why": "A system prompt asks the model to behave a certain way but cannot force it. Hard rules belong in code, where the model cannot talk its way around them."
+  },
+  {
+    "id": "ag-04",
+    "post": "hello-agent",
+    "q": "You move a Strands agent from one OpenAI-compatible provider (Groq) to another. What has to change?",
+    "options": [
+      "Only the base_url and api_key, as long as the new provider is OpenAI-compatible",
+      "The tool definitions, because every provider expects its own tool schema and its own message format",
+      "The agent loop itself, which is written differently for each provider's API and has to be replaced",
+      "Nothing at all: the provider is picked by the model name alone and Strands detects it automatically"
+    ],
+    "answer": 0,
+    "why": "Strands works with any OpenAI-compatible API, so switching provider is a configuration change, not a rewrite."
+  },
+  {
+    "id": "ag-05",
+    "post": "hello-agent",
+    "q": "A response shows stop_reason \"end_turn\", inputTokens 81 and outputTokens 145. What does this tell you?",
+    "options": [
+      "The model finished normally rather than hitting a token limit, and 226 total tokens are what limits and bills count",
+      "The model was cut off after 145 tokens by a limit, and the 81 input tokens are the cost in cents for the call",
+      "A tool failed and ended the turn early, so only the 145 output tokens are billed and the input is free of charge",
+      "The conversation was closed and its memory cleared, and 81 is the number of turns kept in the history so far"
+    ],
+    "answer": 0,
+    "why": "end_turn means the model completed its answer. totalTokens (81 + 145 = 226) is the figure that usage limits and bills count."
+  },
+  {
+    "id": "ag-06",
+    "post": "hello-agent",
+    "q": "An agent has a calculator tool and a current_time tool. It is asked for 18% GST on a laptop costing Rs 84,999, plus the final price. What happens?",
+    "options": [
+      "It uses only the calculator, since the question doesn't need the clock: GST ₹15,299.82 and a final price of ₹100,298.82",
+      "It calls both tools, because Strands requires every registered tool to be used once in each turn of the agent loop",
+      "It uses only the calculator and reports GST of ₹1,529.98 and a final price of ₹86,528.98 for the laptop",
+      "It calls current_time first, to find out which tax year applies, and only then uses the calculator tool"
+    ],
+    "answer": 0,
+    "why": "The model chooses a tool from the descriptions, and a bigger menu changes nothing about that decision. 84,999 × 0.18 = 15,299.82, and adding it to the price gives 100,298.82."
+  },
+  {
+    "id": "ag-07",
+    "post": "giving-agents-tools",
+    "q": "In the sales assistant, nobody coded \"fetch, then analyse, then email\". Where do analyze_sales's revenue and deals arguments come from?",
+    "options": [
+      "The model reads the dict returned by get_sales_data and copies the numbers into the next call",
+      "Strands passes the previous tool's return value to the next tool automatically, matched by argument position",
+      "A hard-coded pipeline inside the Agent class runs the three tools in a fixed order on every request",
+      "The model guesses plausible values for revenue and deals from its training data, without using the first result"
+    ],
+    "answer": 0,
+    "why": "Chaining happens through results. Each tool's output becomes context for the next call, and the model works out both the order and the arguments."
+  },
+  {
+    "id": "ag-08",
+    "post": "giving-agents-tools",
+    "q": "The send_email tool only received quarter=\"last quarter\", yet the email's subject says \"Q3 2026\". What does this show?",
+    "options": [
+      "The model filled in details that nothing supplied; with a real send_email, those would go out under your name",
+      "The tool looked the quarter up in a sales database, which is why it returned the more specific name Q3 2026",
+      "The system prompt contained today's date, so the model could convert the words last quarter into the real name",
+      "The decorator infers dates from the tool's name and docstring, and then rewrites the arguments before the call"
+    ],
+    "answer": 0,
+    "why": "Neither the code nor the prompt provided \"Q3 2026\", so the model invented it, and it also left a [Your Name] placeholder. Tools with side effects deserve the most care."
+  },
+  {
+    "id": "ag-09",
+    "post": "giving-agents-tools",
+    "q": "check_inventory reports \"out of stock\" for any product ID missing from its table. A user types the typo PROD-12. What is the problem and the fix?",
+    "options": [
+      "The agent reports a product that doesn't exist as out of stock; return a distinct \"not found\" for unknown IDs",
+      "The tool crashes with a KeyError for the unknown ID; wrap the dictionary lookup in a try/except block",
+      "The model refuses to answer questions about unknown products; lower the temperature to make it more flexible",
+      "There is no problem at all: an ID that is not in the table should simply count as out of stock"
+    ],
+    "answer": 0,
+    "why": "The agent repeats whatever its tool says, true or not, so it is only as accurate as its tools. The missing-case handling kept the tool from crashing but made the answer misleading."
+  },
+  {
+    "id": "ag-10",
+    "post": "giving-agents-tools",
+    "q": "\"Can I order PROD-123 right now?\" never mentions inventory, yet the agent calls check_inventory. What makes that work?",
+    "options": [
+      "The model reads the intent and matches it to the tool's description, with no keyword rules in your code",
+      "A regular expression inside the decorator maps words like order and available to the inventory tool",
+      "Strands tries every registered tool in turn and keeps the first one that returns a successful result",
+      "The question is routed by the product ID's prefix, which Strands compares with a list of known prefixes"
+    ],
+    "answer": 0,
+    "why": "A clear docstring replaces keyword matching. Different phrasings reach the same tool because the model works out what the user needs and pulls out the product ID."
+  },
+  {
+    "id": "ag-11",
+    "post": "giving-agents-tools",
+    "q": "You want an agent to always send a summary email. Does registering a send_email tool guarantee it will be called?",
+    "options": [
+      "No: the model decides whether and how to call it, so say so in the system prompt if it is required",
+      "Yes: Strands calls every registered tool exactly once per turn, whether or not the model asks for it",
+      "Yes, but only the first tool in the list is called, so the order of the tools list matters a lot",
+      "No, and a system prompt has no influence on whether a tool is chosen, because that is fixed in code"
+    ],
+    "answer": 0,
+    "why": "Tool use is the model's decision. The system prompt is the place to make a tool mandatory, and a rule that truly must hold should still be checked in code."
+  },
+  {
+    "id": "ag-12",
+    "post": "giving-agents-tools",
+    "q": "The tip calculator's docstring lists 15, 18 and 20 percent. Why?",
+    "options": [
+      "It gives the model sensible values to choose from when the user only says \"a good tip\"",
+      "Strands rejects any tip percentage that is not listed in the docstring, and raises an error instead",
+      "Those are the only values the function body can handle, and any other number makes it crash",
+      "It tells the model to call the tool three times, once for each percentage, and compare the results"
+    ],
+    "answer": 0,
+    "why": "The docstring is the model's menu. Listing typical values guides the arguments it fills in when the user's sentence doesn't give a number."
+  },
+  {
+    "id": "ag-13",
+    "post": "how-ai-agents-remember",
+    "q": "You call an LLM twice with no memory system and ask in the second call, \"What did I just say?\" Why can't it answer, and what does \"memory\" mean for an agent?",
+    "options": [
+      "The model is stateless; agent memory is whatever text gets put back into its prompt",
+      "The model stores the chat inside its weights, but only for about an hour after the last call",
+      "Memory is a separate neural network that is trained for each user and consulted before every answer",
+      "The API deletes the answer, but the model keeps a private copy that it does not show to the user"
+    ],
+    "answer": 0,
+    "why": "A model only knows what is in the current prompt. Short-term memory replays a conversation into it, and long-term memory retrieves stored facts into it."
+  },
+  {
+    "id": "ag-14",
+    "post": "how-ai-agents-remember",
+    "q": "In the LangGraph + AgentCore Memory lab, a question about earlier calculations is asked with the same actor_id but a new thread_id (session-2). What should the agent do?",
+    "options": [
+      "Say it has no record, because session-2 has no checkpoints: short-term memory is per session, not per actor",
+      "Recall 1337 and 515321 without trouble, because the actor_id is the same as in the first session",
+      "Copy the messages over from session-1 automatically, since both threads belong to the same actor",
+      "Raise an error as soon as it sees that the thread_id has changed in the middle of an actor's conversation"
+    ],
+    "answer": 0,
+    "why": "Checkpoints are loaded by thread_id. A new thread starts empty, and the right result is \"I have no record of that\", not a made-up calculation."
+  },
+  {
+    "id": "ag-15",
+    "post": "how-ai-agents-remember",
+    "q": "The multiply-then-add run is checkpointed after every step. About how many snapshots exist once the final answer is written, and how many messages does the last one hold?",
+    "options": [
+      "Seven snapshots, from an empty start up to a final one holding six messages",
+      "One snapshot only, which is overwritten at each step and finally holds all six messages",
+      "Six snapshots, each of them holding exactly one message, in the order the messages were added",
+      "Two snapshots, one for each tool call, because the model's own steps are not checkpointed"
+    ],
+    "answer": 0,
+    "why": "Every step leaves a snapshot behind. get_state_history lists them newest first, with fewer messages as you go back, until the empty start."
+  },
+  {
+    "id": "ag-16",
+    "post": "how-ai-agents-remember",
+    "q": "Which statement correctly contrasts Mem0 with the LangGraph checkpointer?",
+    "options": [
+      "The model decides what Mem0 stores by calling its memory tool; the checkpointer saves state automatically at every step",
+      "Both save automatically, but Mem0 only runs on AWS, while the checkpointer works with any model provider you choose",
+      "Mem0 stores every message verbatim, and the checkpointer stores only the facts that were extracted by a model",
+      "Both are scoped by thread_id, and the only difference between them is the database each of them writes to"
+    ],
+    "answer": 0,
+    "why": "The agent never chooses to save a checkpoint, while Mem0 only stores what the model sends it. Mem0 is scoped by user_id, and the checkpointer by thread_id and actor_id."
+  },
+  {
+    "id": "ag-17",
+    "post": "how-ai-agents-remember",
+    "q": "A memory store is filled with one embedding model, and later searched with a different one. What goes wrong?",
+    "options": [
+      "Vectors from different models aren't comparable, so the matches are meaningless",
+      "Search still works as before, but it uses roughly twice as much memory for every stored vector",
+      "Mem0 re-embeds the whole index on every query, which costs extra time but does not change the matches",
+      "FAISS detects the mismatch and quietly falls back to keyword search, so results are still reasonable"
+    ],
+    "answer": 0,
+    "why": "The embedding model and the index must agree, both on the model and on the number of dimensions (1024 in the lab). Use the same one for storing and searching."
+  },
+  {
+    "id": "ag-18",
+    "post": "how-ai-agents-remember",
+    "q": "Why use SequentialToolExecutor with a local FAISS index when the model may call the memory tool several times in one turn?",
+    "options": [
+      "Parallel writes to the local index can silently lose memories",
+      "It makes the embeddings more accurate, because each vector is computed with the previous one as context",
+      "FAISS can only answer one query per second, so the memory tool calls have to be spread out in time",
+      "It forces the model to call its tools in alphabetical order, which is how Mem0 keeps its entries consistent"
+    ],
+    "answer": 0,
+    "why": "The failure is silent: nothing errors, but some memories never make it into the index. Running the tool calls one at a time avoids it."
+  },
+  {
+    "id": "ag-19",
+    "post": "how-ai-agents-remember",
+    "q": "An assistant should continue a chat after a restart and also remember next week that the user takes decaf. What does it need?",
+    "options": [
+      "Both: a checkpointer for the conversation, and long-term memory for facts across sessions",
+      "Only a larger context window, since it can hold the whole conversation and every fact in a single prompt",
+      "Only the checkpointer, since it stores every message of every session forever and searches them by meaning",
+      "Only Mem0, since it also saves every tool result at each step of the graph so the chat can be resumed"
+    ],
+    "answer": 0,
+    "why": "The two aren't alternatives. Recent messages from the checkpointer and relevant facts from long-term memory both go into the prompt, and both are updated after the model answers."
+  },
+  {
+    "id": "ag-20",
+    "post": "agents-working-together",
+    "q": "A supervisor routes questions to workers named helper_1 and helper_2, both described as \"helps with stuff\". What is the likely outcome?",
+    "options": [
+      "Poor routing, because a worker's name and description are all the supervisor sees of it",
+      "Fine, because the supervisor reads each worker's system prompt and can tell the two helpers apart that way",
+      "The supervisor asks each worker to introduce itself first, and then routes the question to the better fit",
+      "Strands rejects descriptions that are too vague and refuses to build the supervisor until they are fixed"
+    ],
+    "answer": 0,
+    "why": "A supervisor knows its workers only by name and description (and what they return), so both must be specific."
+  },
+  {
+    "id": "ag-21",
+    "post": "agents-working-together",
+    "q": "What is the core difference between a supervisor and a graph?",
+    "options": [
+      "In a supervisor a model decides which worker goes next; in a graph your code decides, through edges and conditions",
+      "Supervisors run their workers in parallel, while a graph always runs its nodes one after another in sequence",
+      "Graphs need a model call on every edge to choose a route, and supervisors need no model call of their own",
+      "Supervisors cannot call tools at all, while a graph can, because its nodes are ordinary Python functions"
+    ],
+    "answer": 0,
+    "why": "That is the shift in who controls the path: a model for a supervisor, your code for a graph, and the agents themselves for a swarm."
+  },
+  {
+    "id": "ag-22",
+    "post": "agents-working-together",
+    "q": "A graph's condition reads only the final line of a node's answer, such as RISK_CATEGORY: HIGH. Why not search the whole answer for a category name?",
+    "options": [
+      "An explanation may mention another category in passing, so only the last labelled line is the real decision",
+      "Searching the whole answer is slower than reading one line, and graph conditions have a strict time budget",
+      "Models never mention a category outside the last line, so scanning the full answer would find the same thing",
+      "Python conditions can only compare single-line strings, and a multi-line answer would raise an exception"
+    ],
+    "answer": 0,
+    "why": "Routing lives in code, so it needs a reliable signal. A fixed LABEL: VALUE line, with only the last match read, keeps the route correct."
+  },
+  {
+    "id": "ag-23",
+    "post": "agents-working-together",
+    "q": "A suspicious order for an out-of-stock item goes through the order graph. Which path does it take, and why is it sure to finish?",
+    "options": [
+      "risk_analysis, fraud_check, inventory_check, then refund; edges only point forward, so every order reaches an end",
+      "risk_analysis, manual_review, then refund; the review step keeps retrying until the order finally succeeds",
+      "risk_analysis, inventory_check, then refund; fraud checks only run after a refund has already been issued",
+      "fraud_check, risk_analysis, inventory_check, then refund; the model picks a different order for each new order"
+    ],
+    "answer": 0,
+    "why": "The suspicious order never reached manual review because the edge conditions sent it to fraud check. The graph is acyclic, so there is always an end state, and the path can be audited."
+  },
+  {
+    "id": "ag-24",
+    "post": "agents-working-together",
+    "q": "A swarm is configured with repetitive_handoff_detection_window=8 and repetitive_handoff_min_unique_agents=3. What does that enforce?",
+    "options": [
+      "Among the last 8 handoffs at least 3 different agents must appear, otherwise the swarm stops a ping-pong loop",
+      "At most 8 agents may join the swarm, and at least 3 of them must produce a part of the final answer",
+      "Each agent may hand off at most 3 times within 8 seconds, after which its next handoff is silently ignored",
+      "Each handoff must be approved by 3 of the 8 agents before the shared context is passed on to the next one"
+    ],
+    "answer": 0,
+    "why": "It is one of the safety limits (with max handoffs, iterations and timeouts) that keep a swarm from looping and running up the bill."
+  },
+  {
+    "id": "ag-25",
+    "post": "agents-working-together",
+    "q": "Which pattern gives a worker the most context, and what is the consequence?",
+    "options": [
+      "Swarm: each agent sees the shared context of everyone's work, which grows every turn, making it the slowest and costliest pattern",
+      "Supervisor: each worker receives the supervisor's whole conversation, which is why it is the most expensive pattern of all",
+      "Graph: every node sees the outputs of every other node in the graph, including nodes that have not even run yet in the current execution",
+      "Agent as tool: the worker sees the user's full history and every earlier tool call, which grows with each turn"
+    ],
+    "answer": 0,
+    "why": "A supervisor's worker gets only the request written for it, and a graph node gets the original task plus the outputs of the nodes that led to it. The swarm's 154-second, five-turn run showed the price."
+  },
+  {
+    "id": "ag-26",
+    "post": "agents-working-together",
+    "q": "Auditors require a documented order-approval procedure whose steps are known in advance. Which pattern fits it, and which fits an open-ended game-design task?",
+    "options": [
+      "A graph for the procedure, a swarm for the design task",
+      "A swarm for the procedure, a graph for the design task",
+      "A supervisor for both",
+      "An agent used as a tool for the procedure, a graph for the design task"
+    ],
+    "answer": 0,
+    "why": "Use a graph when the procedure is known and has to be auditable. A swarm suits creative, iterative work where the next step depends on what turns up."
+  },
+  {
+    "id": "ag-27",
+    "post": "how-agents-talk",
+    "q": "Why does a shared protocol like MCP turn N apps × M tools integrations into N + M?",
+    "options": [
+      "Each app implements the protocol once and each tool offers it once, so any app can use any tool",
+      "It compresses all of the tool calls from every app into one request, so only a single connection is needed",
+      "It caches the results of tool calls across apps, so a second app never has to call the same tool again",
+      "It lets all of the apps share one API key and one account, which removes the need for separate connectors"
+    ],
+    "answer": 0,
+    "why": "Without a protocol every pair needs custom glue. With one, each side learns it once, like USB or email."
+  },
+  {
+    "id": "ag-28",
+    "post": "how-agents-talk",
+    "q": "An MCP server needs to ask the user for missing input in the middle of a tool call. Which client-side feature makes that possible?",
+    "options": [
+      "Elicitation",
+      "Root listing",
+      "Model sampling",
+      "Resource templates"
+    ],
+    "answer": 0,
+    "why": "Clients offer roots (folders the server may use), sampling (the server borrows the client's model) and elicitation (the server asks the user). They work because JSON-RPC runs in both directions."
+  },
+  {
+    "id": "ag-29",
+    "post": "how-agents-talk",
+    "q": "A stdio MCP server prints a debug line with print(). What happens?",
+    "options": [
+      "stdout carries the protocol, so the line is read as a malformed message and can break the connection; log to stderr",
+      "Nothing happens, because stdout is meant for humans and the protocol messages travel on a separate channel",
+      "The line appears in the client's chat window as an extra note, which can be confusing but is otherwise harmless",
+      "The server switches to HTTP transport automatically, because it assumes that stdio is no longer available to it"
+    ],
+    "answer": 0,
+    "why": "On stdio, the pipes are the protocol channel. Anything that is not a valid message on stdout corrupts the stream."
+  },
+  {
+    "id": "ag-30",
+    "post": "how-agents-talk",
+    "q": "A call fails with 429: \"Limit 200000, Used 195940, Requested 4545\". By how much was it over, and why did retries not help?",
+    "options": [
+      "By 485 tokens, on a daily budget: per-minute limits refill in seconds, but a spent daily budget doesn't",
+      "By 4,545 tokens, on a limit that resets every second, so the retries should have worked after a short wait",
+      "By 485 tokens, on a per-minute limit, but the client was configured with no retry so the call failed at once",
+      "By 195,940 tokens, because the key had been revoked, and a revoked key looks like an exhausted budget"
+    ],
+    "answer": 0,
+    "why": "195,940 + 4,545 = 200,485, which is 485 over the daily limit. A small question became a 4,545-token request because every model call resends the conversation, schemas and tool results."
+  },
+  {
+    "id": "ag-31",
+    "post": "how-agents-talk",
+    "q": "In Strands, a call that uses MCP tools fails when it runs after the with mcp_client: block has ended. Why?",
+    "options": [
+      "The server's lifetime is the with block; once it ends the server has stopped, so every agent call using its tools must happen inside",
+      "Tools registered through MCP are deleted by Strands after the first model call, so they cannot be used a second time in the same run",
+      "MCP forbids calling the same tool more than once per connection, and the with block enforces that limit for you",
+      "The client has to be registered again after every model call, and the with block takes care of that only for the very first call"
+    ],
+    "answer": 0,
+    "why": "MCPClient takes a recipe (a lambda) because Strands opens the connection itself on a background thread when the block starts, and closes it when the block ends."
+  },
+  {
+    "id": "ag-32",
+    "post": "how-agents-talk",
+    "q": "In A2A, what is the difference between a skill and a tool?",
+    "options": [
+      "A skill is advertised in the agent card for clients to read; a tool is private to the agent's own model, so clients see only skills",
+      "Skills run on the client side of the connection, while tools run on the server, and both of them appear in the public agent card",
+      "They are two names for the same JSON field in the agent card, and Strands uses whichever one is shorter",
+      "Tools are advertised in the agent card for clients to read, and skills are hidden inside the agent's own private system prompt"
+    ],
+    "answer": 0,
+    "why": "A2A agents are opaque: clients see what an agent can do, never how it does it."
+  },
+  {
+    "id": "ag-33",
+    "post": "how-agents-talk",
+    "q": "Opening an A2A server's address in a browser returns 405 Method Not Allowed. Is the server broken?",
+    "options": [
+      "No: / only accepts POST (JSON-RPC), and a browser sends GET; the agent card is at /.well-known/agent-card.json",
+      "Yes: the server crashed during startup, and the 405 is the default page that the web framework serves afterwards",
+      "Yes: the A2A SDK requires HTTPS, and any plain HTTP request is refused with a Method Not Allowed response",
+      "No, but only an MCP client can open that URL, because A2A servers are designed to answer MCP requests"
+    ],
+    "answer": 0,
+    "why": "The server log shows the pattern: the card is fetched with GET, then the message is sent with POST. The 405 from a browser is expected."
+  },
+  {
+    "id": "ag-34",
+    "post": "agents-to-production",
+    "q": "A Lambda-hosted agent may run for 15 minutes, yet long requests fail with a 504 after about 29 seconds. Why?",
+    "options": [
+      "The API Gateway REST API stops waiting for its backend after 29 seconds by default, while the function keeps running",
+      "Lambda cuts the function off at 29 seconds whenever its memory setting is low, regardless of the 15 minute limit",
+      "Bedrock model calls are limited to 29 seconds, after which the connection to the model is closed by the service",
+      "The load balancer's health check kills containers that take longer than 29 seconds to answer a single request"
+    ],
+    "answer": 0,
+    "why": "The request passes through API Gateway first. For long agents, use a faster model, a function URL, or AgentCore Runtime."
+  },
+  {
+    "id": "ag-35",
+    "post": "agents-to-production",
+    "q": "An ECS task has an execution role and a task role. Which job belongs to which?",
+    "options": [
+      "The execution role lets ECS pull the image and write logs before your code runs; the task role is what your code uses, here to call Bedrock",
+      "The execution role is what your code uses to call Bedrock; the task role is what ECS itself uses to pull the image and to write the logs",
+      "Both roles are used by your code, one for reading and one for writing, and ECS itself needs neither of them to start the task",
+      "The execution role is for people who sign in to the console, and the task role is only used when the same code runs in Lambda"
+    ],
+    "answer": 0,
+    "why": "Keeping them separate means the app can't, for example, push images, and ECS itself can't call Bedrock."
+  },
+  {
+    "id": "ag-36",
+    "post": "agents-to-production",
+    "q": "A module-level Agent object is fine on AgentCore Runtime but a bug on Lambda. Why?",
+    "options": [
+      "A Runtime session has its own microVM and serves one conversation; a warm Lambda container serves many callers and would leak history",
+      "Lambda forbids global variables altogether, so a module-level Agent raises an error as soon as the handler first runs after a cold start",
+      "Runtime recreates every module-level object on each request, so the object lives only for a single call and is never reused by the session",
+      "Lambda runs several copies of the module inside one container at once, so the agent is created far too often and wastes memory on each call"
+    ],
+    "answer": 0,
+    "why": "On Lambda, keep only the reusable client (like the model client) at module level, and build the agent inside the handler for each call."
+  },
+  {
+    "id": "ag-37",
+    "post": "agents-to-production",
+    "q": "An AgentCore Runtime is called twice with different runtimeSessionIds. The second answer says \"you haven't included the contract text\". Why?",
+    "options": [
+      "A new session id is a new microVM with no memory of the first call; reusing the id keeps the context",
+      "Runtime truncates any prompt over 1,000 characters, so the contract text never reached the second microVM",
+      "The first session expired after a single request, so the second call hit a runtime without any saved state",
+      "Runtime strips attachments from every second call, which is why the contract text was missing from the prompt"
+    ],
+    "answer": 0,
+    "why": "The session id is the conversation: one id maps to one microVM. It must also be at least 33 characters long."
+  },
+  {
+    "id": "ag-38",
+    "post": "agents-to-production",
+    "q": "A gateway role's trust policy includes aws:SourceAccount and aws:SourceArn conditions. What do they prevent?",
+    "options": [
+      "The confused deputy problem: the service being tricked into assuming your role for another account's resources",
+      "Brute-force attempts against JWT tokens, by limiting how many times a client can try to present one",
+      "Logs being replicated to other Regions, by pinning every log group to the account and Region of the gateway",
+      "Unauthenticated users reaching the load balancer, by requiring a valid source IP in front of every request"
+    ],
+    "answer": 0,
+    "why": "Without the conditions, the AgentCore service could be made to use your role for requests that don't come from your own account."
+  },
+  {
+    "id": "ag-39",
+    "post": "agents-to-production",
+    "q": "AgentCore Identity has two \"doors\". What are they?",
+    "options": [
+      "Inbound: checking who calls your agent, with a JWT such as one from Cognito. Outbound: a credential vault for calling other services",
+      "Inbound: pulling container images from ECR before the runtime starts. Outbound: sending the agent's logs and traces to CloudWatch",
+      "Inbound: the prompts that users type into the chat. Outbound: the completions that the model sends back to those same users",
+      "A pair of JWT checks, one for each Region in which the agent runtime is deployed, and a separate vault for storing the signing keys"
+    ],
+    "answer": 0,
+    "why": "Two doors, two keys, no raw secrets in code. The inbound token is never passed on to downstream services."
+  },
+  {
+    "id": "ag-40",
+    "post": "agents-to-production",
+    "q": "Why did the stock A2A agent have to be deployed twice?",
+    "options": [
+      "Its agent card must advertise its public URL, which is built from the runtime ARN that only exists after the first deploy",
+      "The first deploy always fails its health check, and the runtime only becomes healthy once it has been deployed a second time",
+      "ARM64 images need a second CodeBuild pass, because the first pass only builds the x86_64 variant of the image",
+      "Cognito only issues a usable token on the second deploy, once the runtime has been registered as an app client"
+    ],
+    "answer": 0,
+    "why": "A2A clients send messages to the URL in the card. The second deploy passes the real URL as AGENTCORE_RUNTIME_URL so the card advertises the right address."
+  },
+  {
+    "id": "ag-41",
+    "post": "agent-evaluation",
+    "q": "A guardrail is attached to an agent that has a process_refund tool. A user asks it to refund $50,000. Why is the guardrail the wrong control for this?",
+    "options": [
+      "Guardrails check input and the model's text, not the arguments of a tool call; AgentCore Policy checks the call itself at the gateway",
+      "Guardrails only run after the tool has executed, so they can block the reply text but can never stop the refund itself from happening",
+      "Guardrails automatically block any amount over 1,000 dollars, but that limit has to be switched on separately in the Bedrock console",
+      "Guardrails need a policy engine running in LOG_ONLY mode before they work, and that mode is not enabled for this gateway yet"
+    ],
+    "answer": 0,
+    "why": "Guardrails filter words, but an agent's dangerous moments are usually actions. Nothing in \"refund $50,000 to C-1234\" is hateful, violent or personal data."
+  },
+  {
+    "id": "ag-42",
+    "post": "agent-evaluation",
+    "q": "An AgentCore Policy engine has a permit for the refund tool and a forbid when the amount is over 1,000. What happens to a $500 refund, a $50,000 refund, and a call to a tool with no policy?",
+    "options": [
+      "$500 succeeds; $50,000 is denied by the forbid; the unpoliced tool is denied by default-deny",
+      "All three succeed, since forbid rules are only advisory and the engine logs them without actually blocking any call",
+      "$500 is denied because the permit has no condition on the amount, while the other two calls succeed",
+      "$500 and $50,000 both succeed because the permit is listed first; the unpoliced tool is denied"
+    ],
+    "answer": 0,
+    "why": "The engine is default-deny, and forbid wins over permit. The denial names the rule that fired, which is what an audit trail needs."
+  },
+  {
+    "id": "ag-43",
+    "post": "agent-evaluation",
+    "q": "In a guardrail test, the agent refuses \"What is the CEO's home address?\" and the response ends with stop_reason \"end_turn\". Did the guardrail block it?",
+    "options": [
+      "No: a guardrail intervention sets stop_reason to guardrail_intervened, so the model refused on its own",
+      "Yes: end_turn is how a blocked request is reported back to the application by the guardrail service",
+      "Yes, but only the input filter ran, and the output filter is what produced the end_turn stop reason",
+      "It cannot be told apart without reading the CloudWatch logs, because both outcomes look the same in code"
+    ],
+    "answer": 0,
+    "why": "Your application can tell the two apart from stop_reason. Refusals that come from the model's training are not the guardrail working."
+  },
+  {
+    "id": "ag-44",
+    "post": "agent-evaluation",
+    "q": "Two tracing notebooks run in the same Python kernel, and the second one's spans still go to the console exporter set by the first. Why?",
+    "options": [
+      "OpenTelemetry allows one global tracer provider per process, so each tracing notebook needs a fresh kernel",
+      "The console exporter overrides every other exporter in the process, and it can only be removed by uninstalling it",
+      "Langfuse and LangSmith cannot both be active at once, so enabling one silently disables the other exporter",
+      "Spans are batched in memory and only sent to the new backend after the kernel has been restarted once"
+    ],
+    "answer": 0,
+    "why": "Once one notebook has set the provider, another in the same process can't replace it, so its spans go to the wrong place."
+  },
+  {
+    "id": "ag-45",
+    "post": "agent-evaluation",
+    "q": "A generic Helpfulness judge scores a correct refusal of an off-topic question 0.50, while a custom judge scores it 1.00. Why do they differ?",
+    "options": [
+      "The generic judge only sees that the user didn't get what they asked for; the custom rubric knows the agent must stay in scope",
+      "The custom judge simply uses a larger model with a longer context window, so it spots details that the generic judge misses entirely",
+      "The generic judge only scores tool calls, so it gave the refusal a middling score because no tool had been used in that turn",
+      "Custom evaluators always give the top score to any answer, because their rubric is written by the agent's author"
+    ],
+    "answer": 0,
+    "why": "Built-in evaluators measure generic quality. A custom evaluator encodes your own rules, which a generic judge cannot know."
+  },
+  {
+    "id": "ag-46",
+    "post": "agent-evaluation",
+    "q": "A custom \"stay in scope\" evaluator never gives a Very Poor score across the whole test run. Does that prove it works?",
+    "options": [
+      "No: the test set had no failing case because the agent refused; add a case built to fail, such as the agent without its scope rule",
+      "Yes: a judge that never gives a failing score is well calibrated, and that is exactly what a good rubric is meant to achieve in practice",
+      "Yes: scores are only produced for failing answers, so the absence of a Very Poor score means that the whole run was completely clean",
+      "No: custom evaluators can only give positive scores, so a Very Poor result is impossible whatever the agent does during the run"
+    ],
+    "answer": 0,
+    "why": "An evaluation is only as good as its test cases. To test the judge itself, give it something it should catch."
+  },
+  {
+    "id": "ag-47",
+    "post": "trip-buddy-agent",
+    "q": "An LLM call fails with 429 \"You have no credits remaining\", and a retry fails identically. How should you read it?",
+    "options": [
+      "As a billing state, not rate limiting: waiting won't help, so add credits or switch provider",
+      "As a transient rate limit: wait a few seconds and retry with exponential backoff until the call succeeds",
+      "As model overload: switch to a larger model, which has more capacity and is less likely to refuse the call",
+      "As a revoked key: rotate it in the provider's dashboard and update the .env file before the next run"
+    ],
+    "answer": 0,
+    "why": "OpenAI uses 429 for both rate limits and no credits. Read the message, not the status code."
+  },
+  {
+    "id": "ag-48",
+    "post": "trip-buddy-agent",
+    "q": "With Gemini through an OpenAI-compatible client, the first tool call works but the next request returns a 400. What is the cause, and why was the fix in a single file?",
+    "options": [
+      "Gemini's thought signature wasn't sent back on turn two; the native client keeps it, and all lessons build their model in one make_llm()",
+      "Tool schemas are limited to a single call per session on that endpoint, so every lesson needed its own separate patch to carry on",
+      "The API key expires after one request on the compatible endpoint, so each lesson had to request a brand new key before it could continue",
+      "LangChain deletes tool messages from the history on the second turn, so each lesson had to restore them by hand before the next call"
+    ],
+    "answer": 0,
+    "why": "\"OpenAI-compatible\" covers the common path, not every field. Because all ten LLM files used make_llm(), changing one function fixed them all."
+  },
+  {
+    "id": "ag-49",
+    "post": "trip-buddy-agent",
+    "q": "In one /plan request, who chose which MCP building block?",
+    "options": [
+      "The user chose the prompt (/plan), the app chose the resource (trips://destinations), and the model chose the tools",
+      "The model chose the prompt, the user chose the resource, and the app chose the tools that were then called",
+      "The app chose the prompt and the tools, while the user chose the resource by typing the trips address",
+      "The model chose all three of them, because MCP lets the model decide every building block in a request"
+    ],
+    "answer": 0,
+    "why": "MCP is about who is in control: tools by the model, resources by the app, and prompts by the user. Lesson 10 shows all three in one request."
+  },
+  {
+    "id": "ag-50",
+    "post": "trip-buddy-agent",
+    "q": "Trip Buddy remembered a \"10% buffer\" rule yet still said ₹11,800 fits a ₹12,000 budget. Why didn't it follow the rule?",
+    "options": [
+      "No tool input could carry it out: compute_trip_cost had no buffer parameter, and the prompt forbids the model from doing maths",
+      "The rule was never written to the database, because the extractor skipped it as too short to count as a memory worth keeping",
+      "The embedding model couldn't match the word buffer with the budget question, so the rule was never recalled when planning",
+      "The budget was stored as text, not a number, so the comparison with 11,800 was made as a string comparison, not a numeric one"
+    ],
+    "answer": 0,
+    "why": "A procedural memory needs a tool that can carry it out, for example a buffer_pct parameter. Anything numeric that matters should come out of Python."
+  }
+]

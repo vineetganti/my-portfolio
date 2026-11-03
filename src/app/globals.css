@@ -416,6 +416,18 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--dg-ink);
 }
+/* The home-hero chart sits outside .prose, so it carries the svg sizing and a narrower slider row itself. */
+.hero-chart .diagram svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+.hero-chart .diagram-live .chart-slider {
+  grid-template-columns: 6.5rem 1fr 3.25rem;
+  gap: 0.5rem;
+}
+
 .diagram-live .chart-actions {
   display: flex;
   flex-wrap: wrap;

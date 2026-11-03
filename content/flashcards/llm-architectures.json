@@ -1,0 +1,652 @@
+[
+  {
+    "id": "llm-01",
+    "post": "python-internals-for-llms",
+    "q": "A pure-Python function does heavy arithmetic in a loop. You run it in 4 threads on a 4-core machine. How does the wall-clock time compare with running it in one thread?",
+    "options": [
+      "About the same, or slightly worse: only one thread can execute bytecode at a time",
+      "About 4 times faster, because the OS runs each of the four threads on its own core at the same time",
+      "About 2 times faster, because the GIL is released every other instruction",
+      "Much slower, because Python refuses to create threads for CPU-bound work"
+    ],
+    "answer": 0,
+    "why": "The GIL lets one thread run Python bytecode at a time. The threads take turns, and the switching adds overhead. Processes (each with its own GIL) are the fix for CPU-bound pure-Python work."
+  },
+  {
+    "id": "llm-02",
+    "post": "python-internals-for-llms",
+    "q": "A Python thread calls a large matrix multiplication on the GPU. Why does the GIL barely matter for this call?",
+    "options": [
+      "The native extension releases the GIL while the work runs, and the GPU computes outside the interpreter",
+      "Importing CUDA permanently disables the GIL for the whole process, so every thread can run bytecode in parallel",
+      "PyTorch compiles the Python bytecode into GPU instructions ahead of time, so no interpreter is involved at all",
+      "The GIL only applies to the CPU's first core, and the GPU work is scheduled on the remaining cores instead"
+    ],
+    "answer": 0,
+    "why": "Python only launches the work. The extension releases the lock, the GPU computes in native code, and the thread waits as an observer instead of executing bytecode."
+  },
+  {
+    "id": "llm-03",
+    "post": "python-internals-for-llms",
+    "q": "You time a GPU model with time.perf_counter() before and after y = model(x), with no other calls. What do you actually measure?",
+    "options": [
+      "Mostly the time to launch the kernels, because the launches return before the GPU has finished",
+      "The full forward pass, because model() blocks the Python thread until the output tensor has been computed",
+      "Only the host-to-device copy of x, since that is the one step in the line that blocks the CPU",
+      "The time PyTorch spends compiling the model's Python code into bytecode before the first kernel runs"
+    ],
+    "answer": 0,
+    "why": "Kernel launches are asynchronous. Calling torch.cuda.synchronize() before starting the clock and again before stopping it makes the measurement include the GPU's work."
+  },
+  {
+    "id": "llm-04",
+    "post": "python-internals-for-llms",
+    "q": "After del t on a large CUDA tensor, memory_allocated() drops but memory_reserved() and nvidia-smi do not. What explains it, and what hands the memory back to the driver?",
+    "options": [
+      "PyTorch's caching allocator keeps the freed block for reuse; torch.cuda.empty_cache() returns unused blocks to the driver",
+      "Python's garbage collector has not run yet, so the block is still referenced; gc.collect() returns the memory to the driver",
+      "The tensor is still referenced by the CUDA context itself; restarting the Python kernel is the only way to free it",
+      "The driver delays frees by about 30 seconds as a safety measure; calling torch.cuda.synchronize() ends the delay early"
+    ],
+    "answer": 0,
+    "why": "A freed tensor's block goes back to PyTorch's own cache, not to the driver. That makes the next allocation cheap, and empty_cache() releases the unused cached blocks."
+  },
+  {
+    "id": "llm-05",
+    "post": "python-internals-for-llms",
+    "q": "open('secret.txt') raises PermissionError. Which layer actually refused the access?",
+    "options": [
+      "The kernel: the openat syscall failed the permission check, and CPython turned the error code into an exception",
+      "CPython, which reads the file's mode bits and the user's groups before it ever calls into the C library",
+      "The C standard library, which keeps a per-user table of allowed files and rejects the call before the syscall",
+      "The Python virtual machine, which sandboxes every file access and compares it with an allow-list in the interpreter"
+    ],
+    "answer": 0,
+    "why": "Python's open() goes through CPython and libc to a syscall. The kernel enforces access control and returns an error code, which CPython raises as PermissionError."
+  },
+  {
+    "id": "llm-06",
+    "post": "python-internals-for-llms",
+    "q": "You set CUDA_VISIBLE_DEVICES=\"1,3\" before importing torch. Which physical GPU does torch.device(\"cuda:1\") refer to?",
+    "options": [
+      "Physical GPU 3, because the visible devices are renumbered from 0",
+      "Physical GPU 1, because the number in cuda:N is always the physical ID",
+      "Physical GPU 2, because the list is sorted and then offset by one",
+      "No GPU: cuda:1 raises an error when the variable is set"
+    ],
+    "answer": 0,
+    "why": "The application sees only the listed GPUs, renumbered from 0. So cuda:0 is physical GPU 1 and cuda:1 is physical GPU 3. The variable must be set before CUDA is initialised."
+  },
+  {
+    "id": "llm-07",
+    "post": "python-internals-for-llms",
+    "q": "An asyncio LLM server handles many users on one event loop. One handler computes for 2 seconds without ever awaiting. What happens to the other users?",
+    "options": [
+      "Their requests stall for that time, because nothing else runs until the coroutine awaits or returns",
+      "Nothing happens to them: asyncio preempts the busy coroutine at the next bytecode instruction and resumes the others",
+      "The GIL hands the CPU to the other coroutines every few milliseconds, so they are barely delayed at all",
+      "Only users who arrived earlier than the busy request are affected, and later arrivals are served normally"
+    ],
+    "answer": 0,
+    "why": "Coroutines switch only at an await. Blocking work belongs on a thread (asyncio.to_thread) or in another process, so the loop stays free."
+  },
+  {
+    "id": "llm-08",
+    "post": "python-internals-for-llms",
+    "q": "Which statement about default CUDA behaviour in PyTorch is correct?",
+    "options": [
+      "x.to(\"cuda\") blocks the Python thread until the copy finishes, but y = x_gpu @ x_gpu only queues a kernel and returns",
+      "Both x.to(\"cuda\") and the matrix multiplication are asynchronous by default, and only a call such as print() waits",
+      "Both are blocking by default, so the Python thread never runs ahead of the GPU at any point in the script",
+      "The copy is asynchronous by default and the matrix multiplication is blocking until the result is ready"
+    ],
+    "answer": 0,
+    "why": "Host-to-device copies are blocking unless you pass non_blocking=True with pinned memory. Kernel launches go into a stream queue and return at once."
+  },
+  {
+    "id": "llm-09",
+    "post": "python-internals-for-llms",
+    "q": "A training loop calls loss.item() on every step for logging, and GPU utilisation is poor. What is the most likely cause?",
+    "options": [
+      ".item() copies a value to the CPU, which forces a sync: Python waits for the queued GPU work and can no longer run ahead",
+      ".item() converts the whole model to FP32 on every call, which roughly doubles the memory traffic of each step",
+      ".item() disables PyTorch's caching allocator for that step, so every tensor needs a fresh cudaMalloc call",
+      ".item() releases the GIL, which lets other Python threads steal time from the thread that feeds the GPU"
+    ],
+    "answer": 0,
+    "why": ".item(), .cpu() and printing a GPU tensor all need the result, so they block until the GPU has finished. Logging every few steps, or keeping the value on the GPU, avoids the stall."
+  },
+  {
+    "id": "llm-10",
+    "post": "neural-network-fundamentals",
+    "q": "How many parameters does nn.Linear(512, 2048) with a bias have?",
+    "options": [
+      "1,050,624",
+      "1,048,576",
+      "1,049,088",
+      "2,099,200"
+    ],
+    "answer": 0,
+    "why": "The weight matrix is 2048 × 512 = 1,048,576 values, plus one bias per output, 2,048. The total is 1,050,624."
+  },
+  {
+    "id": "llm-11",
+    "post": "neural-network-fundamentals",
+    "q": "Roughly how much memory does AdamW mixed-precision training need for a 7-billion-parameter model (weights, gradients, master copy and both moments), compared with serving it in FP16?",
+    "options": [
+      "About 112 GB against 14 GB",
+      "About 56 GB against 14 GB",
+      "About 28 GB against 7 GB",
+      "About 112 GB against 28 GB"
+    ],
+    "answer": 0,
+    "why": "Training needs 16 bytes per parameter (16 B × 7×10⁹ = 112 GB) before activations. FP16 serving needs 2 bytes per parameter, 14 GB."
+  },
+  {
+    "id": "llm-12",
+    "post": "neural-network-fundamentals",
+    "q": "FP32 training with AdamW needs 16 bytes per parameter. Why does mixed-precision training (FP16 weights and gradients) not come out much lower?",
+    "options": [
+      "It adds an FP32 master copy of the weights (4 B), which cancels the saving from 2-byte weights and gradients",
+      "Mixed precision stores each Adam moment twice, once in FP16 and once in FP32, which doubles the optimizer state",
+      "The gradients must be kept in both formats for the whole step, which adds back the bytes saved on the weights",
+      "The optimizer state doubles whenever a GPU Tensor Core is used, so the saving on the weights disappears"
+    ],
+    "answer": 0,
+    "why": "Mixed precision is 2 (weights) + 2 (gradients) + 4 (FP32 master) + 4 + 4 (two moments) = 16 B, the same as FP32's 4 + 4 + 4 + 4. Its gain is speed, not optimizer memory."
+  },
+  {
+    "id": "llm-13",
+    "post": "neural-network-fundamentals",
+    "q": "You serve a model that still has dropout and batch-norm layers, but you forgot to call model.eval(). What goes wrong?",
+    "options": [
+      "Outputs become non-deterministic, and batch norm uses the current batch's statistics instead of its learned running ones",
+      "Nothing changes in the outputs: eval() only affects how memory is allocated, not how any layer computes its result",
+      "The model runs slower but gives identical outputs, since dropout and batch norm behave the same in both modes",
+      "Gradients are still computed for every layer but never applied, so the weights quietly stop updating during serving"
+    ],
+    "answer": 0,
+    "why": "In training mode dropout randomly zeroes activations and batch norm normalises with batch statistics. eval() makes dropout a pass-through and batch norm use its saved running statistics."
+  },
+  {
+    "id": "llm-14",
+    "post": "neural-network-fundamentals",
+    "q": "Which statement about model.eval() and torch.no_grad() is correct?",
+    "options": [
+      "eval() changes layer behaviour but still lets autograd record a graph; no_grad() skips the graph but leaves layer behaviour alone",
+      "They are two names for the same switch, and calling either one turns off dropout and the autograd graph together at once",
+      "no_grad() turns dropout off and makes batch norm use running statistics, while eval() is what frees the activations",
+      "eval() saves memory by disabling gradient storage, and no_grad() is what fixes batch norm to use its running statistics instead"
+    ],
+    "answer": 0,
+    "why": "They do different jobs, and inference normally uses both: eval() for deterministic layers, no_grad() so activations are freed once the next layer has used them."
+  },
+  {
+    "id": "llm-15",
+    "post": "neural-network-fundamentals",
+    "q": "nvidia-smi shows 6 GB free, yet allocating one 3 GB tensor raises an out-of-memory error. What is the most likely cause?",
+    "options": [
+      "Fragmentation: the free memory is scattered in pieces, none of them a contiguous 3 GB block",
+      "The 6 GB figure is reserved for the CUDA driver and the display, so it cannot be used by any application",
+      "PyTorch can only allocate blocks whose size is a power of two, and 3 GB is not one of them",
+      "The model weights are mirrored in CPU RAM, which reduces the VRAM available to new tensors by half"
+    ],
+    "answer": 0,
+    "why": "GPU allocators generally don't compact memory, so total free space can be plenty while no single block is big enough. PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True reduces it, and LLM engines avoid it with a pool of equal-sized blocks."
+  },
+  {
+    "id": "llm-16",
+    "post": "neural-network-fundamentals",
+    "q": "Process A calls torch.cuda.empty_cache() after deleting all its tensors, yet it still holds a few hundred MB on the GPU. Why?",
+    "options": [
+      "Every process that touches CUDA holds its own context, which empty_cache() cannot release; only ending the process does",
+      "empty_cache() only releases tensors that were created inside a torch.no_grad() block, so the rest stays reserved",
+      "That memory is the autograd graph, which is only freed on the next backward pass of the same process",
+      "The driver keeps one copy of the model weights per process for safety, and it is released after a timeout"
+    ],
+    "answer": 0,
+    "why": "The CUDA context is per process. empty_cache() hands unused cached blocks back to the driver, but the context itself stays until the process exits."
+  },
+  {
+    "id": "llm-17",
+    "post": "neural-network-fundamentals",
+    "q": "Activation checkpointing splits an n-layer network into segments of about √n layers and keeps only the segment boundaries. What does it trade?",
+    "options": [
+      "Activation memory falls from O(n) to about O(√n), for roughly one extra forward pass of recomputation",
+      "Parameter memory falls to about O(√n), at the cost of a lower learning rate during the backward pass",
+      "Training time is cut in half, at the cost of having to store every gradient twice across the segments",
+      "Activation memory stays the same, but the backward pass launches fewer kernels, so it finishes sooner"
+    ],
+    "answer": 0,
+    "why": "Most activations are dropped in the forward pass and recomputed during the backward pass. Memory is bought with extra compute."
+  },
+  {
+    "id": "llm-18",
+    "post": "neural-network-fundamentals",
+    "q": "Why does x.t() cost almost nothing, while x.t().contiguous() makes a copy?",
+    "options": [
+      "The transpose only swaps the strides, giving a view of the same data; contiguous() rearranges the data into row-major order",
+      "t() runs on the GPU and contiguous() runs on the CPU, so only the second one needs to wait for a transfer",
+      "t() compresses the tensor to save memory, and contiguous() decompresses it back, which requires a new allocation",
+      "t() builds a lazy graph that is only evaluated when contiguous() is called, which then performs the real transpose"
+    ],
+    "answer": 0,
+    "why": "A tensor is storage plus shape and strides. Views change the strides without moving data. A kernel that needs row-major layout forces the physical copy."
+  },
+  {
+    "id": "llm-19",
+    "post": "transformer-architecture-principles",
+    "q": "About how many parameters does one standard Transformer block with d = 4,096 have?",
+    "options": [
+      "About 201 million (12 × d²)",
+      "About 67 million (4 × d²)",
+      "About 17 million (d²)",
+      "About 805 million (48 × d²)"
+    ],
+    "answer": 0,
+    "why": "A block holds about 12 d² parameters: roughly 4 d² in attention and 8 d² in the feed-forward network. For d = 4,096 that is 12 × 16.8 million ≈ 201 million."
+  },
+  {
+    "id": "llm-20",
+    "post": "transformer-architecture-principles",
+    "q": "Attention scores are divided by √d_k before the softmax. What goes wrong without it?",
+    "options": [
+      "Dot products grow with the dimension, so the softmax saturates into regions with tiny gradients and learning stalls",
+      "The attention weights no longer add up to 1, so the weighted sum of the value vectors is scaled incorrectly",
+      "Padding tokens receive the highest weights, because their zero vectors have the largest dot products with every query",
+      "The scores become negative for long sequences, which the softmax cannot handle without an extra normalization"
+    ],
+    "answer": 0,
+    "why": "Larger d_k makes the dot products larger in magnitude. The scaling keeps the softmax in a range where gradients still flow."
+  },
+  {
+    "id": "llm-21",
+    "post": "transformer-architecture-principles",
+    "q": "You grow the context from 4,096 to 16,384 tokens. By what factor does the full N × N attention score matrix grow?",
+    "options": [
+      "16 times",
+      "4 times",
+      "2 times",
+      "64 times"
+    ],
+    "answer": 0,
+    "why": "The matrix has a score for every pair of tokens, so it grows with N². A 4× longer sequence means 16× more scores. That blow-up is what FlashAttention avoids materialising."
+  },
+  {
+    "id": "llm-22",
+    "post": "transformer-architecture-principles",
+    "q": "With RoPE, a query at position 3 and a key at position 1 get the same attention score as a query at position 7 and a key at position 5 (for the same q and k vectors). Why?",
+    "options": [
+      "Both pairs are 2 apart, and the rotated dot product depends only on the relative distance n − m",
+      "RoPE adds the same learned bias to every pair of positions, so equal biases give equal scores",
+      "The positions are both odd, and RoPE only encodes whether a position is odd or even, not distance",
+      "RoPE normalises each attention score by the absolute position, so the two pairs end up scaled alike"
+    ],
+    "answer": 0,
+    "why": "The query is rotated by an angle proportional to its position m and the key by one proportional to n. Their dot product therefore depends only on n − m."
+  },
+  {
+    "id": "llm-23",
+    "post": "transformer-architecture-principles",
+    "q": "A model with learned absolute position embeddings was trained with a maximum length of 2,048. What happens at 4,096 tokens?",
+    "options": [
+      "It has no trained embedding for positions beyond 2,048 and struggles to extrapolate",
+      "It works as well as sinusoidal encodings would, because both kinds generalise equally to unseen lengths",
+      "The embeddings are rescaled automatically to fit the longer input, so quality is unchanged at 4,096 tokens",
+      "Attention switches to a causal mask to compensate, which lets the model infer the missing positions"
+    ],
+    "answer": 0,
+    "why": "Learned encodings are a lookup table limited to the lengths seen in training. Sinusoidal, RoPE and ALiBi are built from functions that extend to longer sequences."
+  },
+  {
+    "id": "llm-24",
+    "post": "transformer-architecture-principles",
+    "q": "If you shuffle the tokens of an input to a Transformer that has no positional encoding, what does self-attention produce?",
+    "options": [
+      "The same outputs, just in the shuffled order (permutation invariance)",
+      "Completely different outputs, because attention is a sequential operation that depends on token order",
+      "An error, because positions are required for the attention scores to be computed at all",
+      "The same outputs in the original order, because attention re-sorts tokens by their embeddings"
+    ],
+    "answer": 0,
+    "why": "Self-attention treats the tokens as an unordered set, so \"Dog bites man\" and \"Man bites dog\" would look identical. Positional encodings are added to supply order."
+  },
+  {
+    "id": "llm-25",
+    "post": "transformer-architecture-principles",
+    "q": "A model has d = 512 and 8 attention heads. What are the head dimension and the effect of the head count on total attention compute?",
+    "options": [
+      "64 per head; compute stays about the same as one full-width head, because the heads are concatenated back to 512",
+      "512 per head; compute grows 8 times, because each head repeats the same full-width attention calculation",
+      "64 per head; compute shrinks 8 times, because all heads share the same query, key and value weights",
+      "8 per head; compute stays the same, because the heads are averaged instead of concatenated at the end"
+    ],
+    "answer": 0,
+    "why": "Each head projects Q, K and V into d / h = 64 dimensions. The outputs are concatenated back to 512 and mixed by W_O, so the cost is similar to a single full-width head."
+  },
+  {
+    "id": "llm-26",
+    "post": "transformer-architecture-principles",
+    "q": "Why are padding positions masked by setting their scores to a very large negative number before the softmax, instead of zeroing the weights after it?",
+    "options": [
+      "The softmax then gives them exactly zero weight while the real tokens' weights still sum to 1",
+      "Zeroing the weights after the softmax would make the gradients explode on the very first training step",
+      "Large negative numbers shorten the sequence, which lets the GPU skip the padded rows and save memory",
+      "The softmax cannot be applied to positive scores, so the padded positions must be made negative first"
+    ],
+    "answer": 0,
+    "why": "Masking before the softmax makes the remaining weights renormalise correctly. Zeroing afterwards would leave weights that no longer sum to 1."
+  },
+  {
+    "id": "llm-27",
+    "post": "transformer-architecture-principles",
+    "q": "What does lowering the sampling temperature from 1.0 to 0.5 do?",
+    "options": [
+      "It sharpens the distribution, raising the top token's probability, but it still samples, so other tokens can appear",
+      "It makes decoding fully greedy, so the single most likely token is chosen at every step without any sampling",
+      "It flattens the distribution so that rare tokens become more likely, which makes the output more varied",
+      "It cuts the vocabulary down to the 50 most likely tokens and then samples uniformly among those tokens"
+    ],
+    "answer": 0,
+    "why": "Temperature rescales the logits before the softmax. Only as it approaches 0 does sampling approach greedy decoding, and top-k or top-p are separate ways of cutting the tail."
+  },
+  {
+    "id": "llm-28",
+    "post": "transformer-inference-optimization",
+    "q": "A 13B-parameter model in FP16 decodes on a GPU with 2 TB/s of memory bandwidth. Ignoring the KV cache, about how long does one decode step take at batch size 1?",
+    "options": [
+      "About 13 ms",
+      "About 6.5 ms",
+      "About 26 ms",
+      "About 1.3 ms"
+    ],
+    "answer": 0,
+    "why": "Decoding is memory-bound: the weights (13B × 2 bytes = 26 GB) are streamed from HBM for every token. 26 GB ÷ 2 TB/s ≈ 13 ms, or about 77 tokens per second for one sequence."
+  },
+  {
+    "id": "llm-29",
+    "post": "transformer-inference-optimization",
+    "q": "How large is the KV cache per token for Llama-2-7B in FP16 (32 layers, 32 KV heads, head dimension 128)?",
+    "options": [
+      "512 KiB",
+      "256 KiB",
+      "1 MiB",
+      "128 KiB"
+    ],
+    "answer": 0,
+    "why": "2 (K and V) × 32 layers × 32 heads × 128 × 2 bytes = 524,288 bytes. At 4,096 tokens that is 2 GiB for a single sequence."
+  },
+  {
+    "id": "llm-30",
+    "post": "transformer-inference-optimization",
+    "q": "A model with 64 query heads uses grouped-query attention with 8 KV heads. Compared with full multi-head attention, how big is its KV cache?",
+    "options": [
+      "One eighth",
+      "One quarter",
+      "One half",
+      "One sixty-fourth"
+    ],
+    "answer": 0,
+    "why": "The cache stores K and V per KV head, so 8 instead of 64 gives 1/8. Multi-query attention (a single KV head) would be 1/64."
+  },
+  {
+    "id": "llm-31",
+    "post": "transformer-inference-optimization",
+    "q": "In FlashAttention's online softmax, a new tile raises the running maximum from m_old to m_new. What must happen to keep the result exact?",
+    "options": [
+      "The running sum and the output accumulator are multiplied by e^(m_old − m_new) before the new tile is added",
+      "The whole attention computation restarts from the first tile, using the new maximum as the reference",
+      "The earlier tiles are written out to HBM and read back so they can be recomputed with the new maximum",
+      "The new maximum is ignored until the final tile, and only then are all the partial sums corrected at once"
+    ],
+    "answer": 0,
+    "why": "Earlier terms were computed relative to the old maximum. Rescaling by e^(m_old − m_new) brings them to the new reference, so the result matches a full softmax without ever holding the N × N matrix."
+  },
+  {
+    "id": "llm-32",
+    "post": "transformer-inference-optimization",
+    "q": "You quantize the weight 0.2749 to symmetric INT8 with a scale of 0.02. What is the stored integer, and what does it dequantize to?",
+    "options": [
+      "q = 14, dequantizing to 0.28",
+      "q = 13, dequantizing to 0.26",
+      "q = 27, dequantizing to 0.54",
+      "q = 14, dequantizing to 0.14"
+    ],
+    "answer": 0,
+    "why": "q = round(0.2749 ÷ 0.02) = round(13.745) = 14, and 14 × 0.02 = 0.28. The error, about 0.005, is within the bound of s ÷ 2 = 0.01."
+  },
+  {
+    "id": "llm-33",
+    "post": "transformer-inference-optimization",
+    "q": "In FP16, softmax over logits 12 and 14 breaks if computed naively. Why does subtracting the maximum first fix it?",
+    "options": [
+      "e^12 and e^14 exceed FP16's maximum of 65,504 and become infinity; after subtraction the exponents are −2 and 0, which cannot overflow",
+      "Subtracting the maximum turns the logits into integers, which FP16 can represent exactly, so no rounding error remains in the sum",
+      "It removes the denominator from the softmax entirely, so no division happens and nothing can become NaN afterwards in the output",
+      "It converts the softmax into a sigmoid, whose output is bounded between 0 and 1 for any input value that arrives from the layer"
+    ],
+    "answer": 0,
+    "why": "Naively, the infinities give NaN after the division. With the maximum subtracted, the values are 0.135 and 1, and the probabilities (0.119 and 0.881) come out the same as the exact result."
+  },
+  {
+    "id": "llm-34",
+    "post": "transformer-inference-optimization",
+    "q": "An INT8 matrix multiplication accumulates in INT32. Why not INT16?",
+    "options": [
+      "Each INT8 product reaches 16,129, and a sum over 4,096 terms reaches about 6.6×10⁷, which overflows INT16 but fits easily in INT32",
+      "INT16 is not supported by any GPU instruction, so the hardware has no way to add two numbers of that width in one operation",
+      "INT32 is needed to hold the scale factors, which are multiplied into every product before it is accumulated in the sum",
+      "Accumulating in INT16 would change the stored weights themselves, because the running sums are written back into the weight tensor"
+    ],
+    "answer": 0,
+    "why": "127 × 127 = 16,129 per product, and the sum over K = 4,096 terms is at most about 6.6×10⁷, far below INT32's limit of about 2.1×10⁹, so the result cannot overflow."
+  },
+  {
+    "id": "llm-35",
+    "post": "transformer-inference-optimization",
+    "q": "Quantization-aware training uses fake quantization in the forward pass. How do gradients get through round(), whose true derivative is 0 almost everywhere?",
+    "options": [
+      "The straight-through estimator treats rounding as the identity in the backward pass, inside the clip range",
+      "The gradient is computed on the INT8 values directly, using integer arithmetic throughout the backward pass",
+      "round() is swapped for a sigmoid at inference time, and the sigmoid's gradient is used during training instead",
+      "Gradients are skipped for quantized layers, and the weights are updated only from the calibration data"
+    ],
+    "answer": 0,
+    "why": "Forward: ŵ = s · clamp(round(w ÷ s)). Backward: ∂ŵ/∂w ≈ 1 where the value is inside the range. Master weights stay in FP32, because tiny updates would be lost in low-bit values."
+  },
+  {
+    "id": "llm-36",
+    "post": "vllm-inference-engine-design",
+    "q": "vLLM uses a block size of 16. Which block and slot hold the keys for token index 37 of a sequence?",
+    "options": [
+      "Logical block 2, slot 5",
+      "Logical block 3, slot 5",
+      "Logical block 2, slot 37",
+      "Logical block 5, slot 2"
+    ],
+    "answer": 0,
+    "why": "Block = ⌊37 ÷ 16⌋ = 2 and slot = 37 mod 16 = 5. The block table then maps logical block 2 to a physical block in the pool."
+  },
+  {
+    "id": "llm-37",
+    "post": "vllm-inference-engine-design",
+    "q": "A sequence has 100 tokens and the block size is 16. How many KV slots are wasted by PagedAttention for this sequence?",
+    "options": [
+      "12, in the last block",
+      "0, because paging wastes nothing",
+      "28, because blocks are rounded up to powers of two",
+      "Up to the whole reservation for max_model_len"
+    ],
+    "answer": 0,
+    "why": "100 tokens need ⌈100 ÷ 16⌉ = 7 blocks = 112 slots. The only waste is inside the last block, always fewer than B slots. Equal-sized blocks also remove external fragmentation."
+  },
+  {
+    "id": "llm-38",
+    "post": "vllm-inference-engine-design",
+    "q": "A KV pool holds 6,000 blocks of 16 tokens. About how many 1,536-token requests can be in flight at once?",
+    "options": [
+      "62",
+      "96",
+      "37",
+      "125"
+    ],
+    "answer": 0,
+    "why": "Each request needs 1,536 ÷ 16 = 96 blocks, and ⌊6,000 ÷ 96⌋ = 62."
+  },
+  {
+    "id": "llm-39",
+    "post": "vllm-inference-engine-design",
+    "q": "A running request needs a new KV block, but the pool is empty. What does vLLM's scheduler do?",
+    "options": [
+      "Preempts the most recently admitted running request, frees its blocks and puts it back in the waiting queue to be recomputed later",
+      "Aborts the oldest running request with an out-of-memory error, and returns all of its blocks to the pool immediately afterwards",
+      "Swaps the block table out to disk and resumes the starved request from there as soon as a block frees up in the pool",
+      "Stops admitting new requests and waits for the longest running sequence to finish before it continues with the rest of the batch"
+    ],
+    "answer": 0,
+    "why": "Preemption is by recomputation. The preempted request returns to WAITING, and its prefill may be partly served from the prefix cache when it is rerun."
+  },
+  {
+    "id": "llm-40",
+    "post": "vllm-inference-engine-design",
+    "q": "Why does chunked prefill help users who are already receiving a streamed answer?",
+    "options": [
+      "A long prompt is split across several steps that also carry decode tokens, so running streams don't wait for one huge step",
+      "It shrinks the prompt by dropping the least important tokens before prefill, so every step is cheaper to run for everybody",
+      "It moves the whole prefill onto the CPU so that decoding on the GPU is never interrupted by long prompts arriving late",
+      "It gives long prompts a higher priority than short ones, so they finish quickly and free their blocks sooner for other requests"
+    ],
+    "answer": 0,
+    "why": "Without chunking, a long prompt is processed in one big step and every running request waits that long for its next token. Chunks share the token budget with decodes."
+  },
+  {
+    "id": "llm-41",
+    "post": "vllm-inference-engine-design",
+    "q": "Two prompts share their first 40 tokens, and the block size is 16. How many KV blocks can prefix caching share between them?",
+    "options": [
+      "2 blocks (the 32 tokens in full blocks)",
+      "3 blocks (all 40 tokens, rounded up)",
+      "1 block (only the first 16 tokens, the one full block they have in common)",
+      "None: prefix caching only works for identical prompts"
+    ],
+    "answer": 0,
+    "why": "Only full blocks are cached, each identified by a hash of all the tokens up to and including it. 40 tokens fill two full blocks and part of a third, which is not shared."
+  },
+  {
+    "id": "llm-42",
+    "post": "vllm-inference-engine-design",
+    "q": "A client disconnects halfway through a streamed completion. How much GPU work is wasted?",
+    "options": [
+      "At most one step: the step already running finishes, and the engine drops the request at the next step boundary",
+      "None at all: the GPU kernel is cancelled instantly the moment the server notices that the client disconnected",
+      "The whole request, which must run to completion before its blocks can be released back to the pool again",
+      "Every request in the batch, because the step is restarted from scratch without the cancelled sequence in it"
+    ],
+    "answer": 0,
+    "why": "The server aborts the request, but a forward pass already on the GPU runs to completion. At the next boundary the blocks return to the pool."
+  },
+  {
+    "id": "llm-43",
+    "post": "vllm-inference-engine-design",
+    "q": "Which pair of vLLM settings most directly trades throughput against each user's time per output token?",
+    "options": [
+      "max_num_seqs and max_num_batched_tokens",
+      "block_size and kv_cache_dtype",
+      "gpu_memory_utilization and max_model_len",
+      "tokenizer_mode and chat_template"
+    ],
+    "answer": 0,
+    "why": "Larger values put more work into each step: higher throughput, but each step (and so each user's next token) takes longer."
+  },
+  {
+    "id": "llm-44",
+    "post": "batching-llm-requests",
+    "q": "Four requests share one static batch with output lengths 60, 140, 400 and 200 tokens. What fraction of the decode work is useful?",
+    "options": [
+      "50%",
+      "75%",
+      "20%",
+      "100%"
+    ],
+    "answer": 0,
+    "why": "Every row runs for 400 steps, the longest output. Useful work is (60 + 140 + 400 + 200) ÷ (4 × 400) = 800 ÷ 1,600 = 50%."
+  },
+  {
+    "id": "llm-45",
+    "post": "batching-llm-requests",
+    "q": "Requests arrive at 4 per second. What is the average wait just to fill a naive batch of 9?",
+    "options": [
+      "1 second",
+      "2 seconds",
+      "0.5 seconds",
+      "2.25 seconds"
+    ],
+    "answer": 0,
+    "why": "The average fill wait is (N − 1) ÷ 2λ = 8 ÷ 8 = 1 second, before the batch has even started. That is why naive batching is poor at low load."
+  },
+  {
+    "id": "llm-46",
+    "post": "batching-llm-requests",
+    "q": "A server receives 12 requests per second, and each spends 2.5 seconds in the system. How many requests are in flight on average?",
+    "options": [
+      "30",
+      "4.8",
+      "14.5",
+      "9.5"
+    ],
+    "answer": 0,
+    "why": "Little's law: L = λ × W = 12 × 2.5 = 30. The server must have room for about 30 at once."
+  },
+  {
+    "id": "llm-47",
+    "post": "batching-llm-requests",
+    "q": "In an M/M/1 queue, utilization rises from 90% to 95%. By what factor does the average time in the system change?",
+    "options": [
+      "It doubles, from 10× to 20× the service time",
+      "It rises by only 5%, in line with the change in utilization itself",
+      "It rises by about 50%, because the curve only bends upward past 95%",
+      "It barely moves, staying within a few percent until 100% is reached"
+    ],
+    "answer": 0,
+    "why": "W = (1/μ) ÷ (1 − ρ). At ρ = 0.90 that is 10× the service time, and at 0.95 it is 20×. Latency explodes near capacity, which is why the benchmark sweeps past the knee."
+  },
+  {
+    "id": "llm-48",
+    "post": "batching-llm-requests",
+    "q": "Which set lists the three triggers that flush a dynamic batch?",
+    "options": [
+      "Size, age (max wait) and memory",
+      "Size, priority and token budget",
+      "Age, temperature and queue depth",
+      "Arrival rate, GPU temperature and memory"
+    ],
+    "answer": 0,
+    "why": "A dynamic batcher launches when it reaches max_batch_size, when the oldest request has waited max_wait_ms, or when one more request would break the memory budget."
+  },
+  {
+    "id": "llm-49",
+    "post": "batching-llm-requests",
+    "q": "A request's first token arrives at 0.30 s and it completes at 2.30 s after producing 101 tokens. What is its TPOT?",
+    "options": [
+      "20 ms",
+      "19.8 ms",
+      "23 ms",
+      "2 s"
+    ],
+    "answer": 0,
+    "why": "TPOT = (completion_time − first_token_time) ÷ (n_out − 1) = 2.0 s ÷ 100 = 20 ms. The first token belongs to TTFT, so it is not counted."
+  },
+  {
+    "id": "llm-50",
+    "post": "batching-llm-requests",
+    "q": "You compare a naive batcher with vLLM, and each backend stops a request at its own end-of-sequence token. What is wrong with this benchmark?",
+    "options": [
+      "Output lengths differ between strategies, so some may simply produce shorter answers; lengths must be fixed or enforced equally",
+      "Nothing is wrong: stopping at the end-of-sequence token is the fairest option, since every model decides naturally",
+      "The arrival trace should be different for each strategy, so that no scheduler benefits from a lucky request pattern",
+      "Warm-up runs should be included in the measurement, because real users also hit a cold server and a cold cache"
+    ],
+    "answer": 0,
+    "why": "A fair comparison uses the same seeded arrival trace, the same prompts and the same output lengths, with warm-up excluded and repeated runs, so the differences come from the scheduler alone."
+  }
+]
