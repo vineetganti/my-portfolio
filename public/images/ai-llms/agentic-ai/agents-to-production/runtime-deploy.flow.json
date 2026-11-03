@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "S3 bucket",
+      "to": "CodeBuild",
+      "type": "data"
+    },
+    {
+      "from": "CodeBuild",
+      "to": "ECR",
+      "type": "data"
+    },
+    {
+      "from": "ECR",
+      "to": "Runtime",
+      "type": "data"
+    }
+  ]
+}

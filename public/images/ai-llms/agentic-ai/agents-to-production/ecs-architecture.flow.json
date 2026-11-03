@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {
+      "from": "browser",
+      "to": "ALB security group",
+      "label": ":80",
+      "type": "data"
+    },
+    {
+      "from": "ALB security group",
+      "to": "task security group",
+      "label": ":8080",
+      "type": "data"
+    },
+    {
+      "from": "task security group",
+      "to": "Bedrock",
+      "type": "data"
+    }
+  ]
+}

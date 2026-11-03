@@ -1,0 +1,44 @@
+{
+  "steps": [
+    {
+      "from": "Short-term",
+      "to": "1–2 Extract, classify",
+      "type": "data"
+    },
+    {
+      "from": "1–2 Extract, classify",
+      "to": "3 Consolidate",
+      "type": "metadata"
+    },
+    {
+      "from": "3 Consolidate",
+      "to": "4 Store",
+      "type": "data"
+    },
+    {
+      "from": "4 Store",
+      "to": "memory_store/  (the filing cabinet, survives restarts)",
+      "type": "data"
+    },
+    {
+      "from": "memory_store/  (the filing cabinet, survives restarts)",
+      "to": "5 Recall",
+      "type": "data"
+    },
+    {
+      "from": "New chat",
+      "to": "5 Recall",
+      "type": "request"
+    },
+    {
+      "from": "5 Recall",
+      "to": "System prompt",
+      "type": "data"
+    },
+    {
+      "from": "System prompt",
+      "to": "The answer",
+      "type": "request"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "steps": [
+    {
+      "from": "S3",
+      "to": "AgentCore Gateway",
+      "type": "metadata"
+    },
+    {
+      "from": "Identity",
+      "to": "AgentCore Gateway",
+      "type": "metadata"
+    },
+    {
+      "from": "Strands agent",
+      "to": "AgentCore Gateway",
+      "label": "MCP",
+      "type": "request"
+    },
+    {
+      "from": "AgentCore Gateway",
+      "to": "Open-Meteo",
+      "label": "HTTPS",
+      "type": "request"
+    },
+    {
+      "from": "AgentCore Gateway",
+      "to": "Strands agent",
+      "type": "data"
+    }
+  ]
+}

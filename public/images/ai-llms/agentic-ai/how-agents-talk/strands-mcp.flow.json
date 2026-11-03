@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "from": "Strands Agent",
+      "to": "MCPClient",
+      "type": "data"
+    },
+    {
+      "from": "MCPClient",
+      "to": "Strands Agent",
+      "type": "data"
+    },
+    {
+      "from": "MCPClient",
+      "to": "MCP server",
+      "type": "data"
+    },
+    {
+      "from": "MCP server",
+      "to": "MCPClient",
+      "type": "data"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "steps": [
+    {
+      "from": "Python API",
+      "to": "Data bridge",
+      "type": "request"
+    },
+    {
+      "from": "Data bridge",
+      "to": "Dispatcher",
+      "type": "data"
+    },
+    {
+      "from": "Dispatcher",
+      "to": "ATen kernel",
+      "type": "request"
+    },
+    {
+      "from": "ATen kernel",
+      "to": "Backend lib",
+      "type": "request"
+    },
+    {
+      "from": "Backend lib",
+      "to": "Result",
+      "type": "data"
+    }
+  ]
+}

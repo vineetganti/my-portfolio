@@ -1,0 +1,35 @@
+{
+  "steps": [
+    {
+      "from": "Input",
+      "to": "Model",
+      "type": "data"
+    },
+    {
+      "from": "Model",
+      "to": "Prediction",
+      "type": "data"
+    },
+    {
+      "from": "Prediction",
+      "to": "Loss",
+      "type": "data"
+    },
+    {
+      "from": "Target",
+      "to": "Loss",
+      "type": "data"
+    },
+    {
+      "from": "Loss",
+      "to": "Optimizer",
+      "type": "data"
+    },
+    {
+      "from": "Optimizer",
+      "to": "Model",
+      "label": "update weights and biases",
+      "type": "metadata"
+    }
+  ]
+}

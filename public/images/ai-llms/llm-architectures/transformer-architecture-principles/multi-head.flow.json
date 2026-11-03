@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "from": "X",
+      "to": "head 1",
+      "type": "data"
+    },
+    {
+      "from": "head 1",
+      "to": "concat",
+      "type": "data"
+    },
+    {
+      "from": "X",
+      "to": "head 2",
+      "type": "data"
+    },
+    {
+      "from": "head 2",
+      "to": "concat",
+      "type": "data"
+    },
+    {
+      "from": "X",
+      "to": "head 8",
+      "type": "data"
+    },
+    {
+      "from": "head 8",
+      "to": "concat",
+      "type": "data"
+    },
+    {
+      "from": "concat",
+      "to": "× W_O",
+      "type": "data"
+    }
+  ]
+}

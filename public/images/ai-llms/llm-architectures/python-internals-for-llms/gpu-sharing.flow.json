@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "Process A",
+      "to": "CUDA driver",
+      "type": "data"
+    },
+    {
+      "from": "Process B",
+      "to": "CUDA driver",
+      "type": "data"
+    },
+    {
+      "from": "Process C",
+      "to": "CUDA driver",
+      "type": "data"
+    }
+  ]
+}

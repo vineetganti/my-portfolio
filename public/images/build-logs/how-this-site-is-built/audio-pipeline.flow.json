@@ -1,0 +1,30 @@
+{
+  "steps": [
+    {
+      "from": "#post-content",
+      "to": "collectChunks()",
+      "type": "data"
+    },
+    {
+      "from": "collectChunks()",
+      "to": "chunks[ ]",
+      "type": "data"
+    },
+    {
+      "from": "speak(i)",
+      "to": "SpeechSynthesisUtterance",
+      "type": "data"
+    },
+    {
+      "from": "SpeechSynthesisUtterance",
+      "to": "onend",
+      "type": "data"
+    },
+    {
+      "from": "onend",
+      "to": "speak(i)",
+      "label": "next chunk",
+      "type": "data"
+    }
+  ]
+}

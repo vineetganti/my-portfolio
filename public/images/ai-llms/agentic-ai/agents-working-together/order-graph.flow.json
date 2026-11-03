@@ -1,0 +1,48 @@
+{
+  "steps": [
+    {
+      "from": "risk_analysis",
+      "to": "manual_review",
+      "label": "HIGH_VALUE",
+      "type": "data"
+    },
+    {
+      "from": "risk_analysis",
+      "to": "(straight on)",
+      "label": "LOW_RISK",
+      "type": "data"
+    },
+    {
+      "from": "risk_analysis",
+      "to": "fraud_check",
+      "type": "data"
+    },
+    {
+      "from": "manual_review",
+      "to": "inventory_check",
+      "type": "data"
+    },
+    {
+      "from": "(straight on)",
+      "to": "inventory_check",
+      "type": "data"
+    },
+    {
+      "from": "fraud_check",
+      "to": "inventory_check",
+      "type": "data"
+    },
+    {
+      "from": "inventory_check",
+      "to": "shipping",
+      "label": "IN_STOCK",
+      "type": "data"
+    },
+    {
+      "from": "inventory_check",
+      "to": "refund",
+      "label": "OUT_OF_STOCK",
+      "type": "data"
+    }
+  ]
+}

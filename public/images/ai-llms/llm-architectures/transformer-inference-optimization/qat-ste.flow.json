@@ -1,0 +1,44 @@
+{
+  "steps": [
+    {
+      "from": "FP32 weight w",
+      "to": "quantize",
+      "type": "data"
+    },
+    {
+      "from": "quantize",
+      "to": "dequantize",
+      "type": "data"
+    },
+    {
+      "from": "dequantize",
+      "to": "layer uses ŵ",
+      "type": "data"
+    },
+    {
+      "from": "layer uses ŵ",
+      "to": "loss L",
+      "type": "data"
+    },
+    {
+      "from": "start here",
+      "to": "∂L/∂ŵ",
+      "type": "data"
+    },
+    {
+      "from": "∂L/∂ŵ",
+      "to": "pass through",
+      "type": "data"
+    },
+    {
+      "from": "pass through",
+      "to": "STE",
+      "type": "data"
+    },
+    {
+      "from": "STE",
+      "to": "∂L/∂w",
+      "type": "data"
+    }
+  ]
+}

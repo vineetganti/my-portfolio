@@ -1,0 +1,34 @@
+{
+  "steps": [
+    {
+      "from": "Python code",
+      "to": "1. Extension module (C API)",
+      "type": "request"
+    },
+    {
+      "from": "1. Extension module (C API)",
+      "to": "C / C++ /",
+      "type": "data"
+    },
+    {
+      "from": "Python code",
+      "to": "2. ctypes",
+      "type": "request"
+    },
+    {
+      "from": "2. ctypes",
+      "to": "C / C++ /",
+      "type": "data"
+    },
+    {
+      "from": "Python code",
+      "to": "3. Binding generators",
+      "type": "request"
+    },
+    {
+      "from": "3. Binding generators",
+      "to": "C / C++ /",
+      "type": "data"
+    }
+  ]
+}

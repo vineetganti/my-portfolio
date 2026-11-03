@@ -444,6 +444,110 @@ body {
   }
 }
 
+/* ---------- Message-flow diagrams (src/components/flow) ---------- */
+.diagram-flow {
+  position: relative;
+}
+/* Room above the drawing for the Pause button, so it never covers a box corner. */
+.prose .diagram-flow {
+  padding-top: 22px;
+}
+.diagram-flow .flow-svg {
+  display: block;
+}
+.diagram-flow .flow-marker .flow-m {
+  stroke: none;
+}
+/* Marker looks. The legend under the diagram uses the same classes, so the two always match. */
+.flow-m-data { fill: var(--dg-amber); }
+.flow-m-metadata { fill: var(--dg-muted); }
+.flow-m-request { fill: var(--dg-ink); }
+.diagram-flow .flow-m-uri,
+.flow-legend .flow-m-uri { fill: none; stroke: var(--dg-green); stroke-width: 2; }
+.flow-legend .flow-m { stroke: none; }
+.flow-legend .flow-m-uri { stroke: var(--dg-green); }
+
+.diagram-flow:not([data-flow-ready]) .flow-toggle,
+.diagram-flow:not([data-flow-ready]) .flow-legend {
+  display: none;
+}
+
+.diagram-flow .flow-toggle {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--dg-faint);
+  border-radius: 4px;
+  background: var(--dg-bg);
+  color: var(--dg-muted);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.diagram-flow .flow-toggle:hover,
+.diagram-flow .flow-toggle:focus-visible {
+  border-color: var(--dg-ink);
+  color: var(--dg-ink);
+}
+/* A small tooltip under the button, from its data-tip. */
+.diagram-flow .flow-toggle::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--dg-faint);
+  border-radius: 4px;
+  background: var(--dg-raised);
+  color: var(--dg-ink);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 2;
+}
+.diagram-flow .flow-toggle:hover::after,
+.diagram-flow .flow-toggle:focus-visible::after {
+  opacity: 1;
+}
+
+.flow-legend {
+  display: flex; /* a span, because the markdown image sits inside a <p> */
+  flex-wrap: wrap;
+  gap: 0.25rem 1.1rem;
+  margin-top: 0.6rem;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dg-muted);
+}
+.flow-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+@media print {
+  .diagram-flow .flow-edge,
+  .diagram-flow .flow-label {
+    opacity: 1 !important;
+  }
+  .diagram-flow .flow-marker,
+  .diagram-flow .flow-toggle {
+    display: none;
+  }
+}
+
 @media print {
   .diagram .dg-item {
     opacity: 1 !important;

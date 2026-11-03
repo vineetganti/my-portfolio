@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "Your Strands code",
+      "to": "Groq (this post)",
+      "type": "metadata"
+    },
+    {
+      "from": "Your Strands code",
+      "to": "Another provider",
+      "type": "metadata"
+    },
+    {
+      "from": "Your Strands code",
+      "to": "A local server",
+      "type": "metadata"
+    }
+  ]
+}

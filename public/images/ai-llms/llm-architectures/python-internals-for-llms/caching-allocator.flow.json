@@ -1,0 +1,27 @@
+{
+  "steps": [
+    {
+      "from": "new tensor",
+      "to": "cache has a free block",
+      "type": "data"
+    },
+    {
+      "from": "cache has a free block",
+      "to": "reuse it",
+      "label": "yes",
+      "type": "data"
+    },
+    {
+      "from": "cache has a free block",
+      "to": "cudaMalloc",
+      "label": "no",
+      "type": "data"
+    },
+    {
+      "from": "cudaMalloc",
+      "to": "reuse it",
+      "label": "block joins the pool, then is used",
+      "type": "data"
+    }
+  ]
+}

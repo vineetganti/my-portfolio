@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "from": "question",
+      "to": "Supervisor",
+      "type": "request"
+    },
+    {
+      "from": "Supervisor",
+      "to": "News agent",
+      "type": "data"
+    },
+    {
+      "from": "Supervisor",
+      "to": "Financial agent",
+      "type": "data"
+    },
+    {
+      "from": "Supervisor",
+      "to": "Sentiment agent",
+      "type": "data"
+    },
+    {
+      "from": "News agent",
+      "to": "one answer",
+      "type": "request"
+    },
+    {
+      "from": "Financial agent",
+      "to": "one answer",
+      "type": "request"
+    },
+    {
+      "from": "Sentiment agent",
+      "to": "one answer",
+      "type": "request"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "from": "Source",
+      "to": "Lexer",
+      "type": "data"
+    },
+    {
+      "from": "Lexer",
+      "to": "Parser",
+      "type": "data"
+    },
+    {
+      "from": "Parser",
+      "to": "Compiler",
+      "type": "data"
+    },
+    {
+      "from": "Compiler",
+      "to": "PVM",
+      "type": "data"
+    }
+  ]
+}

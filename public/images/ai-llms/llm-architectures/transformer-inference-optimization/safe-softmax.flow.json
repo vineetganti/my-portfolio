@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "from": "e^z",
+      "to": "fits in FP16?",
+      "type": "data"
+    },
+    {
+      "from": "fits in FP16?",
+      "to": "divide by the sum",
+      "type": "data"
+    },
+    {
+      "from": "z − max(z)",
+      "to": "e^(z − max)",
+      "type": "data"
+    },
+    {
+      "from": "e^(z − max)",
+      "to": "divide by the sum 1.135",
+      "type": "data"
+    }
+  ]
+}

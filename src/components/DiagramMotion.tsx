@@ -15,7 +15,7 @@ const TRIGGER = 0.92;
  *
  * Only diagrams below the fold are hidden (by the `dg-armed` class), so nothing on screen
  * flashes. Without JavaScript, with reduced motion, or in print, every diagram stays visible.
- * Live charts (`.diagram-live`) are left alone.
+ * Live charts (`.diagram-live`) and message-flow diagrams (`.diagram-flow`) are left alone.
  */
 export default function DiagramMotion() {
   useEffect(() => {
@@ -24,7 +24,7 @@ export default function DiagramMotion() {
     const armed: HTMLElement[] = [];
     const viewport = window.innerHeight;
 
-    for (const diagram of document.querySelectorAll<HTMLElement>(".prose .diagram:not(.diagram-live)")) {
+    for (const diagram of document.querySelectorAll<HTMLElement>(".prose .diagram:not(.diagram-live):not(.diagram-flow)")) {
       if (diagram.getBoundingClientRect().top < viewport * TRIGGER) continue;
       const svg = diagram.querySelector(":scope > svg");
       if (!svg) continue;

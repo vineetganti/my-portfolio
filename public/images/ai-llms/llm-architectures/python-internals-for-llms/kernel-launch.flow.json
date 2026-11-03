@@ -1,0 +1,29 @@
+{
+  "steps": [
+    {
+      "from": "Write",
+      "to": "Compile",
+      "type": "data"
+    },
+    {
+      "from": "Compile",
+      "to": "Load",
+      "type": "data"
+    },
+    {
+      "from": "Load",
+      "to": "Launch",
+      "type": "data"
+    },
+    {
+      "from": "Launch",
+      "to": "Queue",
+      "type": "request"
+    },
+    {
+      "from": "Queue",
+      "to": "Run",
+      "type": "request"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "steps": [
+    {
+      "from": "Short-term",
+      "to": "What the model sees",
+      "label": "messages",
+      "type": "data"
+    },
+    {
+      "from": "Long-term",
+      "to": "What the model sees",
+      "label": "facts",
+      "type": "data"
+    },
+    {
+      "from": "What the model sees",
+      "to": "Model (Groq)",
+      "type": "request"
+    },
+    {
+      "from": "Model (Groq)",
+      "to": "Short-term",
+      "type": "data"
+    },
+    {
+      "from": "Model (Groq)",
+      "to": "Long-term",
+      "type": "data"
+    }
+  ]
+}

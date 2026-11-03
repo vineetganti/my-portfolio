@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "from": "model",
+      "to": "Agent",
+      "type": "data"
+    },
+    {
+      "from": "tools",
+      "to": "Agent",
+      "type": "data"
+    },
+    {
+      "from": "system_prompt",
+      "to": "Agent",
+      "type": "data"
+    },
+    {
+      "from": "Agent",
+      "to": "AgentResult",
+      "label": "returns",
+      "type": "request"
+    }
+  ]
+}

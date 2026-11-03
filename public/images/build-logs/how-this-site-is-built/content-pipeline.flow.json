@@ -1,0 +1,12 @@
+{
+  "steps": [
+    { "from": "content/blog/*.mdx", "to": "gray-matter", "type": "data" },
+    { "from": "gray-matter", "to": "parsePost()", "type": "metadata" },
+    { "from": "parsePost()", "to": "BlogPost", "type": "metadata" },
+    { "from": "BlogPost", "to": "queries in blog.ts", "label": "every page asks for posts at build time", "type": "request" },
+    { "from": "queries in blog.ts", "to": "pages (all prerendered)", "type": "data" },
+    { "from": "pages (all prerendered)", "to": "MdxContent", "label": "the post page hands its body to MdxContent", "type": "data" },
+    { "from": "MdxContent", "to": "custom components", "type": "data" },
+    { "from": "custom components", "to": "static HTML", "type": "data" }
+  ]
+}

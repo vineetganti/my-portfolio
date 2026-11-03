@@ -1,0 +1,46 @@
+{
+  "steps": [
+    {
+      "from": "student",
+      "to": "teacher",
+      "label": "question",
+      "type": "request"
+    },
+    {
+      "from": "teacher",
+      "to": "math_tutor",
+      "type": "request"
+    },
+    {
+      "from": "math_tutor",
+      "to": "teacher",
+      "type": "data"
+    },
+    {
+      "from": "teacher",
+      "to": "writing_coach",
+      "type": "request"
+    },
+    {
+      "from": "writing_coach",
+      "to": "teacher",
+      "type": "data"
+    },
+    {
+      "from": "teacher",
+      "to": "science_helper",
+      "type": "request"
+    },
+    {
+      "from": "science_helper",
+      "to": "teacher",
+      "type": "data"
+    },
+    {
+      "from": "teacher",
+      "to": "student",
+      "label": "answer",
+      "type": "data"
+    }
+  ]
+}

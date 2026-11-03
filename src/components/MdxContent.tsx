@@ -8,6 +8,8 @@ import rehypeHighlight from "rehype-highlight";
 import Callout from "@/components/Callout";
 import CopyButton from "@/components/CopyButton";
 import DiagramMotion from "@/components/DiagramMotion";
+import FlowDiagram from "@/components/flow/FlowDiagram";
+import { isMarkerType, type FlowStep } from "@/components/flow/markers";
 import QueueingKnee from "@/components/charts/QueueingKnee";
 import NaiveFillWait from "@/components/charts/NaiveFillWait";
 import PoissonArrivals from "@/components/charts/PoissonArrivals";
@@ -82,6 +84,28 @@ function readDiagram(src: string): string | null {
   return svg;
 }
 
+// A diagram can ship a `<name>.flow.json` beside its SVG: the steps of a looping message-flow
+// animation (see components/flow). No file, no animation.
+const flowCache = new Map<string, FlowStep[] | null>();
+function readFlow(src: string): FlowStep[] | null {
+  if (flowCache.has(src)) return flowCache.get(src) ?? null;
+  const file = path.join(PUBLIC_DIR, src.replace(/\.svg$/, ".flow.json"));
+  let steps: FlowStep[] | null = null;
+  if (file.startsWith(PUBLIC_DIR + path.sep) && fs.existsSync(file)) {
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(file, "utf-8")).steps;
+      const valid = Array.isArray(raw)
+        ? raw.filter((s): s is FlowStep => typeof s?.from === "string" && typeof s?.to === "string" && isMarkerType(s?.type))
+        : [];
+      steps = valid.length > 0 ? valid : null;
+    } catch {
+      steps = null;
+    }
+  }
+  flowCache.set(src, steps);
+  return steps;
+}
+
 function Image({ src, alt, ...rest }: React.ComponentPropsWithoutRef<"img">) {
   const svg = typeof src === "string" ? readDiagram(src) : null;
   if (svg === null) {
@@ -89,6 +113,8 @@ function Image({ src, alt, ...rest }: React.ComponentPropsWithoutRef<"img">) {
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={src} alt={alt} {...rest} />;
   }
+  const steps = typeof src === "string" ? readFlow(src) : null;
+  if (steps) return <FlowDiagram svg={svg} steps={steps} alt={alt ?? ""} />;
   return (
     <span
       className="diagram"

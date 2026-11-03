@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "from": "“Pull last quarter's sales data and email a summary to team@company.com”",
+      "to": "Model: works out the order, then copies each result into the next call",
+      "type": "request"
+    },
+    {
+      "from": "Model: works out the order, then copies each result into the next call",
+      "to": "get_sales_data",
+      "label": "call 1",
+      "type": "request"
+    },
+    {
+      "from": "Model: works out the order, then copies each result into the next call",
+      "to": "analyze_sales",
+      "label": "call 2",
+      "type": "request"
+    },
+    {
+      "from": "Model: works out the order, then copies each result into the next call",
+      "to": "send_email",
+      "label": "call 3",
+      "type": "request"
+    },
+    {
+      "from": "get_sales_data",
+      "to": "analyze_sales",
+      "label": "quarter",
+      "type": "data"
+    },
+    {
+      "from": "analyze_sales",
+      "to": "send_email",
+      "label": "text",
+      "type": "request"
+    }
+  ]
+}

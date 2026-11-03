@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {
+      "from": "user or app",
+      "to": "door 1: inbound",
+      "label": "JWT",
+      "type": "data"
+    },
+    {
+      "from": "door 1: inbound",
+      "to": "your agent",
+      "type": "data"
+    },
+    {
+      "from": "your agent",
+      "to": "door 2: outbound",
+      "type": "data"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "steps": [
+    {
+      "from": "You",
+      "to": "Gradio chat UI",
+      "type": "request"
+    },
+    {
+      "from": "ReAct loop",
+      "to": "MCP server",
+      "label": "JSON-RPC",
+      "type": "request"
+    },
+    {
+      "from": "ReAct loop",
+      "to": "Local Guide agent",
+      "label": "HTTP",
+      "type": "request"
+    },
+    {
+      "from": "make_llm()",
+      "to": "Gemini API",
+      "type": "request"
+    },
+    {
+      "from": "Local Guide agent",
+      "to": "Gemini API",
+      "type": "request"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "steps": [
+    {
+      "from": "submit()",
+      "to": "QUEUED",
+      "type": "request"
+    },
+    {
+      "from": "QUEUED",
+      "to": "RUNNING",
+      "type": "data"
+    },
+    {
+      "from": "RUNNING",
+      "to": "FINISHED",
+      "type": "data"
+    },
+    {
+      "from": "RUNNING",
+      "to": "FAILED",
+      "label": "exception",
+      "type": "data"
+    },
+    {
+      "from": "FINISHED",
+      "to": "done.set()",
+      "type": "data"
+    },
+    {
+      "from": "FAILED",
+      "to": "done.set()",
+      "type": "data"
+    }
+  ]
+}

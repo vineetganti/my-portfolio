@@ -1,0 +1,62 @@
+{
+  "steps": [
+    {
+      "from": "user",
+      "to": "your agent",
+      "type": "data"
+    },
+    {
+      "from": "another team's agent",
+      "to": "your agent",
+      "label": "A2A",
+      "type": "data"
+    },
+    {
+      "from": "your agent",
+      "to": "another team's agent",
+      "type": "data"
+    },
+    {
+      "from": "your agent",
+      "to": "a vendor's agent",
+      "label": "A2A",
+      "type": "data"
+    },
+    {
+      "from": "a vendor's agent",
+      "to": "your agent",
+      "type": "data"
+    },
+    {
+      "from": "your agent",
+      "to": "weather server",
+      "type": "data"
+    },
+    {
+      "from": "weather server",
+      "to": "your agent",
+      "type": "data"
+    },
+    {
+      "from": "your agent",
+      "to": "AWS docs server",
+      "label": "MCP",
+      "type": "data"
+    },
+    {
+      "from": "AWS docs server",
+      "to": "your agent",
+      "type": "data"
+    },
+    {
+      "from": "your agent",
+      "to": "files server",
+      "type": "data"
+    },
+    {
+      "from": "files server",
+      "to": "your agent",
+      "type": "data"
+    }
+  ]
+}

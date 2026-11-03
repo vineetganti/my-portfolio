@@ -1,0 +1,34 @@
+{
+  "steps": [
+    {
+      "from": "Your code",
+      "to": "CPython",
+      "type": "data"
+    },
+    {
+      "from": "CPython",
+      "to": "C standard library (libc)",
+      "type": "data"
+    },
+    {
+      "from": "C standard library (libc)",
+      "to": "OS kernel",
+      "type": "data"
+    },
+    {
+      "from": "OS kernel",
+      "to": "allowed",
+      "type": "data"
+    },
+    {
+      "from": "OS kernel",
+      "to": "denied",
+      "type": "data"
+    },
+    {
+      "from": "denied",
+      "to": "Your code",
+      "type": "data"
+    }
+  ]
+}

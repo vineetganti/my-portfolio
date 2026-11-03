@@ -356,6 +356,38 @@ of the frame, because the audio player treats the whole `.diagram` as one image.
 
 ---
 
+### Message-flow animation
+
+A node-and-arrow diagram can play a looping animation in which one message at a time travels along
+its arrows. Nothing in the SVG or the post changes: put a file named like the SVG, with `.flow.json`
+instead of `.svg`, beside it (`content-pipeline.svg` gets `content-pipeline.flow.json`).
+
+```json
+{
+  "steps": [
+    { "from": "gray-matter", "to": "parsePost()", "type": "metadata" },
+    { "from": "BlogPost", "to": "queries in blog.ts", "label": "every page asks for posts at build time", "type": "request" }
+  ]
+}
+```
+
+- `from` and `to` are the **text of the boxes** in the diagram (matched ignoring case). If two boxes share a
+  name, write `Model#2` for the second one. The arrow between them is found from the arrow's two ends, so
+  the marker follows its real route, bends included.
+- `label` is optional and must be the exact text of a label that is already in the SVG; it lights up
+  while its step plays. Most arrows have no label, and that is fine.
+- `type` picks the marker: `data` (rounded bar), `metadata` (diamond), `request` (filled circle) or `uri`
+  (hollow square). A small legend of the types a diagram uses appears under it.
+- The order of the list is the order of playback; the loop restarts after a short pause. At rest every
+  arrow is faint. A step that cannot find its boxes or arrow is skipped, with a warning in the
+  browser console during development.
+- Readers get a Pause/Play button. It pauses by itself when off screen, and under reduced motion it starts
+  paused with the first step lit. Diagrams with a flow file do not get the scroll-in fade.
+- The code is in `src/components/flow/`; the marker looks live in `markers.ts` and the `.flow-m-*` rules in
+  `globals.css`, so the markers and the legend cannot drift apart.
+
+---
+
 ### Recorded audio (m4a)
 
 Recordings are kept out of git and served from Vercel Blob. To attach one to a post:
