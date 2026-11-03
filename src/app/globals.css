@@ -355,6 +355,102 @@ body {
 .diagram .dg-pos { fill: color-mix(in srgb, var(--dg-green) var(--v), var(--dg-bg)); }
 .diagram .dg-neg { fill: color-mix(in srgb, var(--dg-red) var(--v), var(--dg-bg)); }
 
+/* Ambient motion (DiagramMotion.tsx). Below-fold diagrams start with their parts hidden
+   (dg-armed) and fade them in, in drawing order, once scrolled to (dg-in). Scoped to
+   no-preference so reduced motion never leaves a part invisible. */
+@media (prefers-reduced-motion: no-preference) {
+  .diagram.dg-armed .dg-item {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  .diagram.dg-in .dg-item {
+    transition: opacity 0.45s ease-out, transform 0.45s ease-out;
+    transition-delay: calc(var(--i, 0) * var(--dg-step, 30ms));
+  }
+  /* Dashed arrows drift along their direction while the diagram is hovered. The large
+     offset over a long time keeps the speed gentle without a visible loop point. */
+  .diagram:hover [stroke-dasharray][marker-end] {
+    animation: dg-flow 60s linear infinite;
+  }
+}
+
+@keyframes dg-flow {
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+
+/* ---------- Live charts (src/components/charts) ---------- */
+.diagram-live .chart-readout {
+  margin-top: 0.75rem;
+  padding: 0 0.25rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--dg-muted);
+}
+.diagram-live .chart-readout strong {
+  color: var(--dg-ink);
+}
+.diagram-live .chart-controls {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0 0.25rem 0.25rem;
+}
+.diagram-live .chart-slider {
+  display: grid;
+  grid-template-columns: minmax(6rem, 11rem) 1fr 6rem;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--dg-muted);
+}
+.diagram-live .chart-slider input[type="range"] {
+  width: 100%;
+  min-height: 1.75rem;
+  accent-color: var(--dg-amber);
+}
+.diagram-live .chart-slider output {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--dg-ink);
+}
+.diagram-live .chart-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.diagram-live .chart-button {
+  padding: 0.4rem 0.9rem;
+  min-height: 2.25rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--dg-raised);
+  color: var(--dg-ink);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.diagram-live .chart-button:hover {
+  border-color: var(--dg-amber);
+}
+@media (max-width: 480px) {
+  .diagram-live .chart-slider {
+    grid-template-columns: 1fr 6rem;
+  }
+  .diagram-live .chart-slider > span {
+    grid-column: 1 / -1;
+  }
+}
+
+@media print {
+  .diagram .dg-item {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
 .prose hr {
   border-color: var(--rule);
   margin: 3rem 0;

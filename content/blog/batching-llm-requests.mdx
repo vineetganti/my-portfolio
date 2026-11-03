@@ -143,6 +143,10 @@ async def replay(times, make_request, scheduler):
 
 ![Top: 20 seconds of simulated arrivals at an average of 1.5 requests per second: 33 arrivals, including a 2.7-second lull and a burst of 9 in 1.5 seconds. Bottom: a histogram of the gaps between 2,000 simulated arrivals follows the exponential curve, with a mean of 0.67 seconds](/images/ai-llms/llm-architectures/batching-llm-requests/poisson-arrivals.svg)
 
+The picture above is one draw of that trace. Try your own: change the rate, or draw again. This chart uses its own random numbers, so its counts will not match the 33 arrivals above, but the shape holds at every rate: bursts, lulls, and gaps that average `1/λ`.
+
+<PoissonArrivals />
+
 The prompts themselves supply the **variable lengths**. Sampling prompts from a real chat dataset (vLLM's own benchmarks use ShareGPT conversations) gives a realistic mix. Drawing lengths from a chosen distribution gives more control. Either way, the same seeded trace and the same prompts go to every strategy.
 
 ### How busy can a server get before waiting explodes?
@@ -167,7 +171,7 @@ W = 1 ÷ (μ − λ)  =  (1/μ) ÷ (1 − ρ)
 ρ = 0.5 → 2× the service time     ρ = 0.8 → 5×     ρ = 0.9 → 10×     ρ = 0.95 → 20×
 ```
 
-![The average time in an M/M/1 queue, as a multiple of the service time, plotted against utilization: 2 times at 50% load, 5 at 80%, 10 at 90% and 20 at 95%. The curve is flat at first and shoots up near full load](/images/ai-llms/llm-architectures/batching-llm-requests/queueing-knee.svg)
+<QueueingKnee />
 
 A batching server isn't an M/M/1 queue, but the shape is universal: latency stays flat at low load and shoots up near capacity. Batching raises `μ` (a bigger batch serves more requests per second), which moves the knee to the right. That is why the benchmark sweeps the arrival rate (5, 20 and 50 requests per second): the interesting part of every curve is where it bends.
 
@@ -364,7 +368,7 @@ N = 16:    λ = 1 request/s  →  7.5 s      λ = 20 requests/s  →  0.375 s   
 
 On top of that come the batch's own run time and any wait for the previous batch to finish. So naive batching looks fine at high load and terrible at low load.
 
-![Two timelines with a batch size of four. At 1 request per second the first request waits about 3 seconds for the batch to fill, an average of 1.5 seconds per request. At 20 requests per second the batch fills in about 0.15 seconds, an average of 0.075 seconds](/images/ai-llms/llm-architectures/batching-llm-requests/naive-fill-wait.svg)
+<NaiveFillWait />
 
 ### 0.3 How does dynamic batching decide when to flush the queue?
 

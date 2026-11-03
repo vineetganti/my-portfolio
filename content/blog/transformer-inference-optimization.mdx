@@ -106,7 +106,7 @@ T       = tokens already in the cache               c_kv = KV bytes per token (0
 
 So latency per token is **linear in the context length**, on top of a constant floor set by the weights:
 
-![A stacked chart of the idealised time per decode step: reading the weights costs a constant 7 milliseconds, reading the KV cache adds time that grows linearly with context length and overtakes the weight cost at about 27 thousand tokens](/images/ai-llms/llm-architectures/transformer-inference-optimization/decode-latency.svg)
+<DecodeLatency />
 
 - For short contexts, the weights dominate and latency is almost flat.
 - At batch 1 the two costs meet at `T ≈ 14 GB ÷ 0.5 MiB ≈ 27,000` tokens. With a larger batch `B`, the KV term grows `B` times and takes over much earlier.

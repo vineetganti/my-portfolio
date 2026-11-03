@@ -134,7 +134,7 @@ The training phase extends the forward pass with ways to learn from errors and a
 | `torch.float16`, `torch.bfloat16` | 2 |
 | `torch.int8` | 1 |
 
-![Weight memory of a 7 billion parameter model is 28 GB in FP32, 14 GB in FP16 or BF16, 7 GB in INT8 and 3.5 GB in INT4, and only the FP32 version does not fit a 24 GB GPU](/images/ai-llms/llm-architectures/neural-network-fundamentals/dtype-memory.svg)
+<DtypeMemory />
 
 - **Parameter management in `nn.Module`.** When you define a network with `torch.nn.Module`, parameters are registered with `self.register_parameter()` (or implicitly through `nn.Parameter`). That lets the module track them, move them between devices, and include them in the optimizer's parameter list for gradient updates.
 

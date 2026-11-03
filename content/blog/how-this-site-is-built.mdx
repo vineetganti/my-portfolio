@@ -834,6 +834,13 @@ The phone fix was tested in an emulated phone with a stubbed speech engine, not 
 | Change | The first note (Apple Maps versus Google Maps) was first written as a blog post in a short-lived Notes blog section. It was moved into the notes feed and that section was removed |
 | Change | **Audio moved out of git.** The recordings were re-encoded from 433 MB to 113 MB (mono AAC, 64 kbps) and now live in Vercel Blob. The site keeps `content/audio.json` and an `AUDIO_BASE_URL` setting, and `scripts/upload-audio.mjs` uploads new files |
 
+### 2026-11-03
+
+| Type | Change |
+| --- | --- |
+| **Feature** | **Diagram motion.** Diagrams below the fold fade their parts in, in drawing order, as they scroll into view, and dashed arrows drift on hover. It is one small client component plus CSS rules, applies to every inlined SVG, and is off with reduced motion, without JavaScript and in print |
+| **Feature** | **Live charts.** Five charts in three posts are now interactive: the queueing knee, the naive batch fill wait, the Poisson arrivals, the decode latency against context length, and the weight memory by precision. Each has sliders, a sentence that restates the numbers, and starts at the values its picture showed. The charts that are sketches or measurements stayed as pictures, because moving them would invent data |
+
 ## What's next
 
 - Tags are still free-form and a little inconsistent. A small fixed list would make them a better filter.

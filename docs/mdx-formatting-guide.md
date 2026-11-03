@@ -292,6 +292,13 @@ The one custom component. Use it to pull a point out of the flow.
 
   For a heatmap, give each cell `class="dg-pos"` or `class="dg-neg"` and
   `style="--v:40%"`; the colour is mixed from the background toward green or red.
+- **Diagrams move a little by themselves.** A diagram below the fold fades its parts in,
+  in drawing order, the first time it scrolls into view (`src/components/DiagramMotion.tsx`
+  and the `dg-armed` / `dg-in` rules in `globals.css`). Diagrams already on screen when the
+  page loads are not hidden, so nothing flashes. Hovering a diagram makes its dashed arrows
+  drift. There is nothing to add to a post: it applies to every inlined SVG. It is off with
+  reduced motion, without JavaScript and in print. The parts are revealed in the order the SVG
+  draws them, so draw the background first, then boxes, then arrows and labels.
 - Raster images (PNG, JPEG, WebP) get a **white backing, 12px padding and a rounded
   border**, and span up to the full text width. Dark screenshots will sit inside a
   white frame.
@@ -312,6 +319,40 @@ The one custom component. Use it to pull a point out of the flow.
   In JSX, numeric attributes use braces.
 - Prefer PNG/SVG for diagrams and WebP/JPEG for photos, and compress large files.
   Images are served as-is, with no automatic resizing.
+
+---
+
+### Live charts
+
+A few charts are interactive components instead of pictures: drag a slider and the curve, the
+numbers and the sentence under the chart all change. Use one by putting its tag on its own line
+where the image would go (leave a blank line above and below):
+
+```mdx
+<QueueingKnee />
+```
+
+The components live in `src/components/charts/` and are registered in the `components` map in
+`src/components/MdxContent.tsx`. Each one starts at the values its old picture showed, so it
+renders correctly before JavaScript runs.
+
+| Tag | Post | Controls |
+|---|---|---|
+| `<QueueingKnee />` | batching-llm-requests | utilization ρ (also drag on the chart) |
+| `<NaiveFillWait />` | batching-llm-requests | arrival rate, batch size |
+| `<PoissonArrivals />` | batching-llm-requests | arrival rate, new random draw |
+| `<DecodeLatency />` | transformer-inference-optimization | context length, batch size |
+| `<DtypeMemory />` | neural-network-fundamentals | parameter count, GPU memory |
+
+Every tag takes an optional `alt="…"` that replaces the built-in description. The description is
+what the audio player reads aloud, so write it like image alt text.
+
+**Adding another one.** Make it only when the picture comes from a formula or a simulation that
+the post already states, so the controls change real numbers. Do not turn a sketch or a
+measurement into a slider; that would invent data. Wrap the chart in `ChartFrame` and use
+`Slider` from `ChartFrame.tsx`, draw the SVG with the same palette hexes as the static diagrams
+(the `.diagram` rules recolour them for dark mode), and keep paragraphs, lists and headings out
+of the frame, because the audio player treats the whole `.diagram` as one image.
 
 ---
 

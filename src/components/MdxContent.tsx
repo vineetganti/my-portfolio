@@ -7,6 +7,12 @@ import rehypeSlug from "rehype-slug";
 import rehypeHighlight from "rehype-highlight";
 import Callout from "@/components/Callout";
 import CopyButton from "@/components/CopyButton";
+import DiagramMotion from "@/components/DiagramMotion";
+import QueueingKnee from "@/components/charts/QueueingKnee";
+import NaiveFillWait from "@/components/charts/NaiveFillWait";
+import PoissonArrivals from "@/components/charts/PoissonArrivals";
+import DecodeLatency from "@/components/charts/DecodeLatency";
+import DtypeMemory from "@/components/charts/DtypeMemory";
 
 type HeadingProps = React.ComponentPropsWithoutRef<"h2">;
 
@@ -101,6 +107,11 @@ const components = {
   table: Table,
   img: Image,
   Callout,
+  QueueingKnee,
+  NaiveFillWait,
+  PoissonArrivals,
+  DecodeLatency,
+  DtypeMemory,
 };
 
 export default function MdxContent({ source }: { source: string }) {
@@ -116,6 +127,7 @@ export default function MdxContent({ source }: { source: string }) {
           },
         }}
       />
+      <DiagramMotion />
     </div>
   );
 }
