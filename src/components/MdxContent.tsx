@@ -15,6 +15,7 @@ import NaiveFillWait from "@/components/charts/NaiveFillWait";
 import PoissonArrivals from "@/components/charts/PoissonArrivals";
 import DecodeLatency from "@/components/charts/DecodeLatency";
 import DtypeMemory from "@/components/charts/DtypeMemory";
+import DataTrace from "@/components/sql/DataTrace";
 
 type HeadingProps = React.ComponentPropsWithoutRef<"h2">;
 
@@ -138,6 +139,7 @@ const components = {
   PoissonArrivals,
   DecodeLatency,
   DtypeMemory,
+  DataTrace,
 };
 
 export default function MdxContent({ source }: { source: string }) {

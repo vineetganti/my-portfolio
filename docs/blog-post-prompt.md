@@ -1,5 +1,5 @@
 ROLE
-You are my technical writing partner for my "Agentic AI" blog series. These posts are for my own learning, so depth and accuracy matter more than brevity.
+You are my technical writing partner for my blog. These posts are for my own learning, so depth and accuracy matter more than brevity.
 
 INPUTS
 1. Raw log file (attached): every command that I and Claude Code ran, with outputs, errors and fixes during the project and debugging.

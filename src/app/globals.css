@@ -456,6 +456,166 @@ body {
   }
 }
 
+/* ---------- SQL data traces (src/components/sql) ---------- */
+.prose .data-trace {
+  width: 100%;
+  font-size: 0.85rem;
+  color: var(--dg-ink);
+}
+.data-trace .dt-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+.data-trace .dt-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  padding: 0.25rem 0.75rem 0.25rem 0.3rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--dg-raised);
+  color: var(--dg-muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+.data-trace .dt-step[aria-selected="true"] {
+  border-color: var(--dg-amber);
+  background: var(--dg-amber-t);
+  color: var(--dg-ink);
+}
+.data-trace .dt-step-n {
+  display: inline-grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  background: var(--dg-bg);
+  font-variant-numeric: tabular-nums;
+}
+.data-trace .dt-caption {
+  margin-bottom: 0.6rem;
+  line-height: 1.5;
+  color: var(--dg-muted);
+}
+.data-trace .dt-tables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+.data-trace .dt-table {
+  min-width: 0;
+  max-width: 100%;
+}
+.data-trace .dt-name {
+  margin-bottom: 0.25rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--dg-amber);
+}
+.data-trace .dt-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.prose .data-trace table {
+  margin: 0;
+  width: auto;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.prose .data-trace th,
+.prose .data-trace td {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--dg-grid);
+  white-space: nowrap;
+  text-align: left;
+  vertical-align: top;
+}
+.prose .data-trace th {
+  background: var(--dg-neutral);
+  color: var(--dg-ink);
+  font-weight: 700;
+}
+.data-trace .dt-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.data-trace .dt-null {
+  font-style: italic;
+  color: var(--dg-faint);
+}
+.data-trace .dt-empty {
+  font-style: italic;
+  color: var(--dg-faint);
+}
+.data-trace .dt-mark {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.data-trace .dt-keep,
+.data-trace .dt-new { background: var(--dg-green-t); }
+.data-trace .dt-keep .dt-mark,
+.data-trace .dt-new .dt-mark { color: var(--dg-green); }
+.data-trace .dt-drop { background: var(--dg-red-t); }
+.data-trace tr.dt-drop td:not(.dt-mark) { text-decoration: line-through; text-decoration-color: var(--dg-red); }
+.data-trace .dt-drop .dt-mark { color: var(--dg-red); }
+.data-trace .dt-bad { background: var(--dg-red-t); }
+.data-trace .dt-bad .dt-mark { color: var(--dg-red); }
+.data-trace .dt-upd { background: var(--dg-amber-t); }
+.data-trace .dt-upd .dt-mark { color: var(--dg-amber); }
+.data-trace .dt-hit { background: var(--dg-cream-t); }
+.data-trace .dt-hit .dt-mark { color: var(--dg-amber); }
+.data-trace .dt-error {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--dg-red);
+  border-radius: 8px;
+  background: var(--dg-red-t);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+.data-trace .dt-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.data-trace .dt-nav .chart-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.data-trace .dt-count {
+  color: var(--dg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.data-trace .dt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+.data-trace .dt-chip {
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid var(--dg-grid);
+}
+.data-trace .dt-chip.dt-keep,
+.data-trace .dt-chip.dt-new { border-color: var(--dg-green); color: var(--dg-green); }
+.data-trace .dt-chip.dt-drop,
+.data-trace .dt-chip.dt-bad { border-color: var(--dg-red); color: var(--dg-red); }
+.data-trace .dt-chip.dt-upd,
+.data-trace .dt-chip.dt-hit { border-color: var(--dg-amber); color: var(--dg-amber); }
+
 /* ---------- Message-flow diagrams (src/components/flow) ---------- */
 .diagram-flow {
   position: relative;

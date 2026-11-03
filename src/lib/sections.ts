@@ -32,6 +32,12 @@ export const SECTIONS: Section[] = [
       "Learning core engineering by building things from first principles: shells, distributed systems and more.",
   },
   {
+    slug: "data-engineering",
+    title: "Data Engineering",
+    description:
+      "The SQL and pipeline patterns behind warehouses and lakehouses: modeling, loading, history, change data and data quality.",
+  },
+  {
     slug: "build-logs",
     title: "Build Logs",
     description:
@@ -60,6 +66,12 @@ export const SERIES: Series[] = [
     title: "Agentic AI",
     description:
       "Building agents with Strands and Groq: tools, memory, multi-agent patterns and the protocols agents talk through.",
+  },
+  {
+    slug: "de-sql",
+    title: "Data Engineering SQL",
+    description:
+      "A practice bank for the SQL data engineering runs on, from DDL to whole pipelines, with every answer run on real sample data.",
   },
   {
     slug: "mit-distributed-systems",

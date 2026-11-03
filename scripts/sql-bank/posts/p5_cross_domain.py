@@ -1,0 +1,791 @@
+from build import Group, Post, Q, Show, Step
+from posts.common import HOW_TO_READ, series_callout
+
+SLUG = "de-sql-cross-domain"
+
+# ------------------------------------------------------------------ intervals and states
+
+q73 = Q(
+    id="q73",
+    title="Healthcare: merge overlapping coverage periods",
+    level="Hard",
+    pattern="Interval merging",
+    prompt="""
+`member_eligibility` holds coverage spans that overlap and touch. Collapse them into continuous coverage periods per member, treating spans that touch (one ends on the 31st, the next starts on the 1st) as continuous.
+""",
+    setup="""
+CREATE TABLE member_eligibility (member_id VARCHAR, plan_id VARCHAR, start_date DATE, end_date DATE);
+INSERT INTO member_eligibility VALUES
+    ('M1', 'P1', DATE '2025-01-01', DATE '2025-06-30'),
+    ('M1', 'P2', DATE '2025-03-01', DATE '2025-03-31'),   -- inside the first span
+    ('M1', 'P2', DATE '2025-07-01', DATE '2025-09-30'),   -- touches the first span
+    ('M1', 'P3', DATE '2025-11-01', DATE '2025-12-31'),   -- after a gap
+    ('M2', 'P1', DATE '2025-02-01', DATE '2025-04-30'),
+    ('M2', 'P1', DATE '2025-04-15', DATE '2025-05-31');   -- overlaps
+""",
+    show=["member_eligibility"],
+    answer="""
+WITH ordered AS (
+    SELECT *,
+           MAX(end_date) OVER (PARTITION BY member_id ORDER BY start_date, end_date
+                               ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS covered_until
+    FROM member_eligibility
+),
+grouped AS (
+    SELECT *,
+           SUM(CASE WHEN covered_until IS NULL OR start_date > covered_until + 1 THEN 1 ELSE 0 END)
+               OVER (PARTITION BY member_id ORDER BY start_date, end_date
+                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS period_no
+    FROM ordered
+)
+SELECT member_id, period_no, MIN(start_date) AS coverage_start, MAX(end_date) AS coverage_end
+FROM grouped
+GROUP BY member_id, period_no
+ORDER BY member_id, period_no;
+""",
+    hint="Sort by start date. A span starts a new period only if it begins after everything before it has ended. 'Everything before it' is a running maximum, not just the previous row.",
+    explain="""
+- **`covered_until`** is the running maximum end date of all *earlier* spans. It has to be a maximum, not `LAG(end_date)`: M1's March span ends before the January span does, and comparing the July span with March's end would wrongly start a new period.
+- **A new period starts** when a span begins more than one day after `covered_until`. The `+ 1` merges touching spans (June 30 then July 1); drop it if touching spans should stay separate.
+- **A running sum of the start flags** numbers the periods, and grouping by that number collapses each into one continuous range: the same islands trick as sessionization (post 04, Q57).
+""",
+    steps=[
+        Step("Flags", "Each span with the furthest end date seen before it. Only spans that start after a real gap begin a new period.",
+             tables=[Show("ordered", "SELECT member_id, plan_id, start_date, end_date, MAX(end_date) OVER (PARTITION BY member_id ORDER BY start_date, end_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS covered_until, CASE WHEN MAX(end_date) OVER (PARTITION BY member_id ORDER BY start_date, end_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) IS NULL OR start_date > MAX(end_date) OVER (PARTITION BY member_id ORDER BY start_date, end_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) + 1 THEN 'new' END AS _mark FROM member_eligibility ORDER BY member_id, start_date")]),
+    ],
+    trace_alt="One step: each coverage span with the latest end date before it, with the spans that begin a new period marked: M1's first and November spans, and M2's first span.",
+    check="Grain: one row per continuous coverage period. NULL: an open-ended span with a NULL `end_date` breaks the running maximum; store `9999-12-31` instead.",
+)
+
+q74 = Q(
+    id="q74",
+    title="Healthcare: the latest version of each claim line",
+    level="Hard",
+    pattern="Versioned records",
+    prompt="""
+`claims` stores every adjudication version of every claim line. Keep the **latest version** of each `(claim_id, line_no)`, drop lines whose latest status is `VOID`, and return billed and paid totals per claim.
+""",
+    setup="""
+CREATE TABLE claims (claim_id VARCHAR, line_no INT, version INT, status VARCHAR, billed_amt DECIMAL(10,2), paid_amt DECIMAL(10,2));
+INSERT INTO claims VALUES
+    ('CL-1', 1, 1, 'PAID', 200.00, 150.00), ('CL-1', 1, 2, 'PAID', 200.00, 180.00),
+    ('CL-1', 2, 1, 'PAID',  50.00,  50.00), ('CL-1', 2, 2, 'VOID',  50.00,   0.00),
+    ('CL-2', 1, 1, 'VOID', 300.00,   0.00), ('CL-2', 1, 2, 'PAID', 300.00, 240.00);
+""",
+    show=["claims"],
+    answer="""
+WITH latest AS (
+    SELECT *
+    FROM claims
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY claim_id, line_no ORDER BY version DESC) = 1
+)
+SELECT claim_id, SUM(billed_amt) AS total_billed, SUM(paid_amt) AS total_paid
+FROM latest
+WHERE status <> 'VOID'
+GROUP BY claim_id
+ORDER BY claim_id;
+""",
+    hint="Pick the latest version first, then filter on its status. The other order gives a different answer.",
+    explain="""
+- **Latest version first:** `ROW_NUMBER() … ORDER BY version DESC = 1` keeps one row per claim line.
+- **Then filter `VOID`.** Filtering before picking the latest would resurrect earlier versions: CL-1 line 2's latest version is VOID, and filtering first would fall back to its version 1 and count $50 paid that was reversed. CL-2 line 1 was voided then re-adjudicated, and its latest version is PAID.
+- This "latest version, then the business filter" order applies to any versioned source: orders, policies, contracts.
+""",
+    steps=[
+        Step("Latest", "The latest version of each line; voided lines drop out after.",
+             tables=[Show("claims", "SELECT *, CASE WHEN ROW_NUMBER() OVER (PARTITION BY claim_id, line_no ORDER BY version DESC) > 1 THEN 'drop' WHEN status = 'VOID' THEN 'drop' ELSE 'keep' END AS _mark FROM claims ORDER BY claim_id, line_no, version")]),
+        Step("Filter first (wrong)", "Filtering VOID before picking the latest brings back CL-1 line 2's reversed payment.",
+             tables=[Show("WHERE status <> 'VOID' first", "WITH f AS (SELECT * FROM claims WHERE status <> 'VOID' QUALIFY ROW_NUMBER() OVER (PARTITION BY claim_id, line_no ORDER BY version DESC) = 1) SELECT claim_id, SUM(billed_amt) AS total_billed, SUM(paid_amt) AS total_paid, CASE WHEN claim_id = 'CL-1' THEN 'bad' END AS _mark FROM f GROUP BY 1 ORDER BY 1")]),
+    ],
+    trace_alt="Two steps: the claim versions with only each line's latest non-void version kept; and the filter-first version, which gives CL-1 a paid total of 230 instead of 180.",
+    check="Grain: one row per claim. NULL: a NULL status passes `<> 'VOID'` as unknown and is dropped; use `IS DISTINCT FROM 'VOID'` if NULL statuses should count.",
+)
+
+q75 = Q(
+    id="q75",
+    title="IoT: downsample to 5-minute buckets, and find the silent ones",
+    level="Hard",
+    pattern="Time bucketing",
+    prompt="""
+`sensor_reading` streams irregular readings. Return the average value per device per 5-minute bucket between 10:00 and 10:30, and list the buckets in which a device sent **nothing**.
+""",
+    setup="""
+CREATE TABLE sensor_reading (device_id VARCHAR, reading_ts TIMESTAMP, value DOUBLE);
+INSERT INTO sensor_reading VALUES
+    ('D1', TIMESTAMP '2025-03-01 10:01', 20.0), ('D1', TIMESTAMP '2025-03-01 10:03', 22.0),
+    ('D1', TIMESTAMP '2025-03-01 10:07', 21.0), ('D1', TIMESTAMP '2025-03-01 10:21', 25.0),
+    ('D2', TIMESTAMP '2025-03-01 10:02', 5.0),  ('D2', TIMESTAMP '2025-03-01 10:06', 6.0),
+    ('D2', TIMESTAMP '2025-03-01 10:11', 7.0),  ('D2', TIMESTAMP '2025-03-01 10:16', 6.5),
+    ('D2', TIMESTAMP '2025-03-01 10:22', 6.0),  ('D2', TIMESTAMP '2025-03-01 10:27', 5.5);
+""",
+    show=["sensor_reading"],
+    answer="""
+WITH buckets AS (
+    SELECT b AS bucket_start
+    FROM generate_series(TIMESTAMP '2025-03-01 10:00', TIMESTAMP '2025-03-01 10:25', INTERVAL 5 MINUTE) t(b)
+),
+expected AS (
+    SELECT d.device_id, b.bucket_start
+    FROM (SELECT DISTINCT device_id FROM sensor_reading) d CROSS JOIN buckets b
+),
+actual AS (
+    SELECT device_id, time_bucket(INTERVAL 5 MINUTE, reading_ts) AS bucket_start,
+           ROUND(AVG(value), 2) AS avg_value, COUNT(*) AS readings
+    FROM sensor_reading
+    GROUP BY ALL
+)
+SELECT e.device_id, e.bucket_start, a.avg_value, COALESCE(a.readings, 0) AS readings
+FROM expected e
+LEFT JOIN actual a USING (device_id, bucket_start)
+ORDER BY e.device_id, e.bucket_start;
+""",
+    display="""
+-- Snowflake buckets timestamps with TIME_SLICE
+SELECT device_id, TIME_SLICE(reading_ts, 5, 'MINUTE') AS bucket_start, AVG(value) AS avg_value
+FROM sensor_reading
+GROUP BY ALL;
+""",
+    hint="Bucketing gives you the buckets that have data. The silent ones need a list of buckets that *should* exist.",
+    explain="""
+- **Bucketing** floors each timestamp to its 5-minute slot: `time_bucket` in DuckDB, `TIME_SLICE` in Snowflake ([docs](https://docs.snowflake.com/en/sql-reference/functions/time_slice)), `date_bin` in Postgres. Averaging per slot **downsamples** the stream to a fixed grain.
+- **Silence isn't in the data.** A device that sent nothing has no rows to group, so a `GROUP BY` can never report it. The **expected** grid (every device × every bucket) defines what should exist, and a `LEFT JOIN` shows the gaps: D1 was silent from 10:10 to 10:20 and again from 10:25.
+- **`readings = 0`** marks a silent bucket explicitly, which is easier to alert on than a NULL average.
+""",
+    check="Grain: one row per device per expected bucket. NULL: a silent bucket's average is NULL, which is honest; don't fill it with 0, which is a real sensor value.",
+)
+
+q76 = Q(
+    id="q76",
+    title="IoT: compress a status log into state intervals",
+    level="Hard",
+    pattern="State changes",
+    prompt="""
+`machine_status` logs a reading every few minutes. Collapse runs of the same consecutive status into intervals with a start, an end and a duration, where a state **ends when the next state begins** (not at its last reading).
+""",
+    setup="""
+CREATE TABLE machine_status (machine_id VARCHAR, status VARCHAR, status_ts TIMESTAMP);
+INSERT INTO machine_status VALUES
+    ('MX', 'RUN',  TIMESTAMP '2025-03-01 08:00'), ('MX', 'RUN',  TIMESTAMP '2025-03-01 08:05'),
+    ('MX', 'RUN',  TIMESTAMP '2025-03-01 08:10'), ('MX', 'IDLE', TIMESTAMP '2025-03-01 08:15'),
+    ('MX', 'IDLE', TIMESTAMP '2025-03-01 08:20'), ('MX', 'RUN',  TIMESTAMP '2025-03-01 08:25'),
+    ('MX', 'DOWN', TIMESTAMP '2025-03-01 08:40');
+""",
+    show=["machine_status"],
+    answer="""
+WITH marked AS (
+    SELECT *,
+           CASE WHEN status IS DISTINCT FROM LAG(status) OVER (PARTITION BY machine_id ORDER BY status_ts)
+                THEN 1 ELSE 0 END AS is_change
+    FROM machine_status
+),
+runs AS (
+    SELECT *,
+           SUM(is_change) OVER (PARTITION BY machine_id ORDER BY status_ts
+                                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run_no
+    FROM marked
+),
+intervals AS (
+    SELECT machine_id, run_no, status, MIN(status_ts) AS state_start
+    FROM runs GROUP BY ALL
+)
+SELECT machine_id, status, state_start,
+       LEAD(state_start) OVER (PARTITION BY machine_id ORDER BY state_start) AS state_end,
+       datediff('minute', state_start,
+                LEAD(state_start) OVER (PARTITION BY machine_id ORDER BY state_start)) AS minutes
+FROM intervals
+ORDER BY state_start;
+""",
+    hint="Mark the rows where the status differs from the previous one, number the runs with a running sum, and then let each run end where the next one starts.",
+    explain="""
+- **`is_change`** is 1 where the status differs from the previous reading. `IS DISTINCT FROM` makes the first row (previous is NULL) count as a change.
+- **A running sum of the change flags** gives every row its run number, constant within a stretch of the same status: the islands pattern again, with the change flag as the boundary.
+- **End at the next start, not the last reading.** The first RUN stretch's last reading is 08:10, but the machine was running until it went idle at 08:15. Using `MAX(status_ts)` per run would report 10 minutes of running instead of 15, and a one-reading state such as the RUN at 08:25 would last 0 minutes. `LEAD(state_start)` closes each state when the next begins.
+- The last state (DOWN) is still in progress, so its end is NULL. Fill it with the reporting time if you need a duration.
+""",
+    check="Grain: one row per state interval. NULL: the current state's end is NULL by design; `datediff` returns NULL for it.",
+)
+
+q77 = Q(
+    id="q77",
+    title="Ride-share: peak concurrent trips per hour",
+    level="Hard",
+    pattern="Sweep line",
+    prompt="""
+For each hour from 08:00 to 11:00, report the **maximum number of trips in progress at the same time**. A trip is in progress on `[start_ts, end_ts)`. One trip runs through a whole hour without starting or ending in it, and that hour must still show it.
+""",
+    setup="""
+CREATE TABLE trips (trip_id VARCHAR, start_ts TIMESTAMP, end_ts TIMESTAMP);
+INSERT INTO trips VALUES
+    ('T1', TIMESTAMP '2025-03-01 08:05', TIMESTAMP '2025-03-01 08:40'),
+    ('T2', TIMESTAMP '2025-03-01 08:20', TIMESTAMP '2025-03-01 08:50'),
+    ('T3', TIMESTAMP '2025-03-01 08:40', TIMESTAMP '2025-03-01 09:10'),   -- starts as T1 ends
+    ('T4', TIMESTAMP '2025-03-01 08:55', TIMESTAMP '2025-03-01 11:20');   -- runs through 10:00-11:00
+""",
+    show=["trips"],
+    answer="""
+WITH hours AS (
+    SELECT h FROM generate_series(TIMESTAMP '2025-03-01 08:00', TIMESTAMP '2025-03-01 10:00', INTERVAL 1 HOUR) t(h)
+),
+events AS (
+    SELECT start_ts AS ts, +1 AS delta FROM trips
+    UNION ALL SELECT end_ts, -1 FROM trips
+    UNION ALL SELECT h, 0 FROM hours                 -- a marker at every hour start
+),
+running AS (
+    SELECT ts, delta,
+           SUM(delta) OVER (ORDER BY ts, delta
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS in_progress
+    FROM events
+)
+SELECT date_trunc('hour', ts) AS hour, MAX(in_progress) AS peak_concurrent
+FROM running
+WHERE ts >= TIMESTAMP '2025-03-01 08:00' AND ts < TIMESTAMP '2025-03-01 11:00'
+GROUP BY ALL
+ORDER BY hour;
+""",
+    hint="Turn each trip into +1 at its start and −1 at its end; a running sum is the number in progress. Then ask what the running sum is at an hour where no trip starts or ends.",
+    explain="""
+- **The sweep line:** every trip becomes two events, +1 at its start and −1 at its end. Sorted by time, the running sum is the number of trips in progress at each moment, and the peak of an hour is the largest running sum inside it. One sort instead of comparing every trip with every other.
+- **`ORDER BY ts, delta`** puts −1 before +1 at the same instant, which implements half-open intervals: T1 ending at 08:40 and T3 starting at 08:40 don't overlap. The tie order *is* the interval rule.
+- **Hour markers (`delta = 0`)** carry the running sum into every hour. Without them, an hour where nothing starts or ends has no events at all and disappears from the result, even though T4 was in progress for all of 10:00–11:00. Worse, an hour whose only event is an *end* under-reports: 09:00 would show 1, because the moment of peak concurrency (the hour start, with T3 and T4 both running) has no row. With a marker, 09:00 reads 2 and 10:00 reads 1.
+""",
+    steps=[
+        Step("Events", "Starts, ends and hour markers in time order, with the running count.",
+             tables=[Show("running", "WITH hours AS (SELECT h FROM generate_series(TIMESTAMP '2025-03-01 08:00', TIMESTAMP '2025-03-01 10:00', INTERVAL 1 HOUR) t(h)), events AS (SELECT start_ts AS ts, +1 AS delta, trip_id || ' start' AS what FROM trips UNION ALL SELECT end_ts, -1, trip_id || ' end' FROM trips UNION ALL SELECT h, 0, 'hour marker' FROM hours) SELECT ts, what, delta, SUM(delta) OVER (ORDER BY ts, delta ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS in_progress, CASE WHEN delta = 0 THEN 'hit' END AS _mark FROM events ORDER BY ts, delta")]),
+        Step("Without markers", "Without the hour markers, 10:00 has no events and vanishes, and 09:00 reports 1: its only event is T3 ending, so the two trips in progress when the hour began are never seen.",
+             tables=[Show("no markers", "WITH events AS (SELECT start_ts AS ts, +1 AS delta FROM trips UNION ALL SELECT end_ts, -1 FROM trips), running AS (SELECT ts, SUM(delta) OVER (ORDER BY ts, delta ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS in_progress FROM events) SELECT date_trunc('hour', ts) AS hour, MAX(in_progress) AS peak_concurrent FROM running WHERE ts < TIMESTAMP '2025-03-01 11:00' GROUP BY ALL ORDER BY 1")]),
+    ],
+    trace_alt="Two steps: the start, end and hour-marker events in order with the running count of trips in progress; and the version without markers, which loses the 10:00 hour and under-reports 09:00 as 1.",
+    check="Grain: one row per hour. NULL: a trip with no end time never subtracts; give in-progress trips the reporting time as their end.",
+)
+
+q78 = Q(
+    id="q78",
+    title="Ride-share: driver utilisation",
+    level="Hard",
+    pattern="Gaps",
+    prompt="""
+Per driver per day, compute minutes driving, minutes idle **between** trips, and utilisation, driving ÷ (driving + idle).
+""",
+    setup="""
+CREATE TABLE trips (trip_id VARCHAR, driver_id VARCHAR, start_ts TIMESTAMP, end_ts TIMESTAMP);
+INSERT INTO trips VALUES
+    ('T1', 'DR1', TIMESTAMP '2025-03-01 08:00', TIMESTAMP '2025-03-01 08:30'),
+    ('T2', 'DR1', TIMESTAMP '2025-03-01 08:45', TIMESTAMP '2025-03-01 09:15'),
+    ('T3', 'DR1', TIMESTAMP '2025-03-01 10:15', TIMESTAMP '2025-03-01 10:45'),
+    ('T4', 'DR2', TIMESTAMP '2025-03-01 09:00', TIMESTAMP '2025-03-01 09:40');
+""",
+    show=["trips"],
+    answer="""
+WITH t AS (
+    SELECT *, CAST(start_ts AS DATE) AS d,
+           datediff('minute', start_ts, end_ts) AS drive_min,
+           LAG(end_ts) OVER (PARTITION BY driver_id, CAST(start_ts AS DATE) ORDER BY start_ts) AS prev_end
+    FROM trips
+)
+SELECT driver_id, d,
+       SUM(drive_min)                                                     AS driving_min,
+       SUM(COALESCE(datediff('minute', prev_end, start_ts), 0))           AS idle_min,
+       ROUND(100.0 * SUM(drive_min)
+             / NULLIF(SUM(drive_min) + SUM(COALESCE(datediff('minute', prev_end, start_ts), 0)), 0), 1) AS utilisation_pct
+FROM t
+GROUP BY driver_id, d
+ORDER BY driver_id, d;
+""",
+    hint="Idle time is the gap from the previous trip's end to this trip's start, within the same day.",
+    explain="""
+- **`LAG(end_ts)` per driver and day** gives the previous trip's end; idle is the gap to this trip's start. DR1 waited 15 and then 60 minutes.
+- **The first trip has no previous trip**, so its gap is NULL, treated as 0. Time before the first trip and after the last isn't counted, which is the usual convention: utilisation within the working span.
+- **`NULLIF`** guards the division; DR2 has one trip and no idle time, so 100%.
+- Overlapping trips (a data error) would give negative gaps. Check `prev_end <= start_ts` in a quality test rather than silently netting them.
+""",
+    check="Grain: one row per driver per day. NULL: the first trip's NULL gap becomes 0 explicitly.",
+)
+
+# ------------------------------------------------------------------ rating and attribution
+
+q79 = Q(
+    id="q79",
+    title="Telecom: tiered rating with a monthly running total",
+    level="Hard",
+    pattern="Tiered pricing",
+    prompt="""
+Rate calls per subscriber per month: the first 100 minutes are free, the next 100 cost 0.05 per minute, and anything above 200 costs 0.10. A single day's usage can cross a tier boundary. Return each subscriber's monthly charge.
+""",
+    setup="""
+CREATE TABLE cdr (subscriber_id VARCHAR, call_ts TIMESTAMP, duration_sec INT);
+INSERT INTO cdr VALUES
+    ('S1', TIMESTAMP '2025-03-01 09:00', 3600), ('S1', TIMESTAMP '2025-03-02 09:00', 4800),   -- 60 + 80 min
+    ('S1', TIMESTAMP '2025-03-03 09:00', 6000),                                               -- 100 min
+    ('S2', TIMESTAMP '2025-03-01 10:00', 3000);                                               -- 50 min
+""",
+    show=["cdr"],
+    answer="""
+WITH daily AS (
+    SELECT subscriber_id, CAST(date_trunc('month', call_ts) AS DATE) AS month, CAST(call_ts AS DATE) AS d,
+           SUM(duration_sec) / 60.0 AS minutes
+    FROM cdr GROUP BY ALL
+),
+ladder AS (
+    SELECT *,
+           SUM(minutes) OVER w - minutes AS from_min,      -- usage before this day
+           SUM(minutes) OVER w           AS to_min         -- usage after this day
+    FROM daily
+    WINDOW w AS (PARTITION BY subscriber_id, month ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+),
+tiers AS (
+    SELECT *,
+           GREATEST(0, LEAST(to_min, 200) - GREATEST(from_min, 100)) AS tier2_min,
+           GREATEST(0, to_min - GREATEST(from_min, 200))             AS tier3_min
+    FROM ladder
+)
+SELECT subscriber_id, month,
+       SUM(minutes)                                          AS minutes,
+       ROUND(SUM(tier2_min) * 0.05 + SUM(tier3_min) * 0.10, 2) AS charge
+FROM tiers
+GROUP BY ALL
+ORDER BY subscriber_id;
+""",
+    hint="Each day occupies a slice of the month's usage ladder, from the minutes used before it to the minutes used after it. Price the part of each slice that falls inside each tier.",
+    explain="""
+- **The ladder:** a running total over the month gives each day a slice `[from_min, to_min)` of cumulative usage. S1's second day covers minutes 60 to 140.
+- **Clamping a slice to a tier:** `LEAST(to_min, cap) − GREATEST(from_min, floor)`, floored at 0, is the part of the slice inside the tier `[floor, cap)`. S1's second day has 40 minutes in the free tier and 40 in tier 2; its third day has 60 in tier 2 and 40 in tier 3.
+- S1: tier 2 is 100 minutes (5.00), tier 3 is 40 minutes (4.00), so 9.00. S2 stays in the free tier.
+- **Why not price each day on its own:** a day doesn't know which tier it starts in. Only the running total does.
+
+`GREATEST` and `LEAST` are safe here because no argument can be NULL; remember Snowflake's NULL behaviour (post 02, Q27) if one could.
+""",
+    check="Grain: one row per subscriber per month. NULL: a NULL `duration_sec` is skipped by `SUM`, so that call is free; reject it in quality checks instead.",
+)
+
+q80 = Q(
+    id="q80",
+    title="AdTech: last-touch attribution within 7 days",
+    level="Hard",
+    pattern="Range joins",
+    prompt="""
+Credit each conversion to the user's **most recent impression in the 7 days before it**. A conversion with no impression in that window stays unattributed. Each conversion is credited at most once.
+""",
+    setup="""
+CREATE TABLE impressions (user_id VARCHAR, campaign_id VARCHAR, imp_ts TIMESTAMP);
+INSERT INTO impressions VALUES
+    ('u1', 'C-SPRING', TIMESTAMP '2025-03-01 09:00'), ('u1', 'C-RETARGET', TIMESTAMP '2025-03-05 18:00'),
+    ('u2', 'C-SPRING', TIMESTAMP '2025-02-20 09:00'),
+    ('u3', 'C-VIDEO',  TIMESTAMP '2025-03-06 12:00'), ('u3', 'C-SPRING', TIMESTAMP '2025-03-06 12:00');
+CREATE TABLE conversions (conversion_id VARCHAR, user_id VARCHAR, conv_ts TIMESTAMP, value DECIMAL(10,2));
+INSERT INTO conversions VALUES
+    ('CV1', 'u1', TIMESTAMP '2025-03-06 10:00', 80.00),
+    ('CV2', 'u2', TIMESTAMP '2025-03-06 10:00', 50.00),
+    ('CV3', 'u3', TIMESTAMP '2025-03-07 09:00', 30.00);
+""",
+    show=["impressions", "conversions"],
+    answer="""
+SELECT c.conversion_id, c.user_id, c.value,
+       i.campaign_id AS attributed_campaign, i.imp_ts
+FROM conversions c
+LEFT JOIN impressions i
+       ON i.user_id = c.user_id
+      AND i.imp_ts <= c.conv_ts
+      AND i.imp_ts >  c.conv_ts - INTERVAL 7 DAY
+QUALIFY ROW_NUMBER() OVER (PARTITION BY c.conversion_id
+                           ORDER BY i.imp_ts DESC NULLS LAST, i.campaign_id) = 1
+ORDER BY c.conversion_id;
+""",
+    hint="Join each conversion to the impressions in its window, then keep exactly one per conversion. What breaks the tie when two impressions share a timestamp?",
+    explain="""
+- **The range join** pairs each conversion with that user's impressions in `(conv − 7 days, conv]`.
+- **`QUALIFY ROW_NUMBER() … = 1` per conversion** keeps the most recent one, so each conversion is credited exactly once and revenue isn't double-counted across campaigns.
+- **The tiebreak:** u3 saw two campaigns at the same second. Without `campaign_id` in the `ORDER BY`, which one wins can change between runs, and so would the campaign report. Any deterministic rule is better than none; agree it with the business.
+- **`LEFT JOIN`** keeps CV2: u2's only impression is 14 days old, so the conversion stays, unattributed, with a NULL campaign. An inner join would drop $50 of revenue from the report.
+- Engines with an as-of join (Q85) can find the latest impression directly, then check it's within 7 days.
+""",
+    check="Grain: one row per conversion. NULL: unattributed conversions have NULL campaigns; report them as their own bucket.",
+)
+
+q81 = Q(
+    id="q81",
+    title="AdTech: click-through rate from two duplicated streams",
+    level="Hard",
+    pattern="Join semantics",
+    prompt="""
+Impressions and clicks are both delivered at least once. Compute click-through rate per campaign, `clicks ÷ impressions`, and separately count **orphan clicks** whose impression doesn't exist.
+""",
+    setup="""
+CREATE TABLE impressions (imp_id VARCHAR, campaign_id VARCHAR);
+INSERT INTO impressions VALUES ('I1', 'C-A'), ('I2', 'C-A'), ('I2', 'C-A'), ('I3', 'C-A'), ('I4', 'C-B');
+CREATE TABLE clicks (click_id VARCHAR, imp_id VARCHAR);
+INSERT INTO clicks VALUES ('K1', 'I1'), ('K1', 'I1'), ('K2', 'I2'), ('K3', 'I9');
+""",
+    show=["impressions", "clicks"],
+    answer="""
+WITH imp AS (SELECT DISTINCT imp_id, campaign_id FROM impressions),
+clk AS (SELECT DISTINCT click_id, imp_id FROM clicks)
+SELECT i.campaign_id,
+       COUNT(DISTINCT i.imp_id)                                       AS impressions,
+       COUNT(DISTINCT c.click_id)                                     AS clicks,
+       ROUND(100.0 * COUNT(DISTINCT c.click_id) / COUNT(DISTINCT i.imp_id), 1) AS ctr_pct,
+       (SELECT COUNT(*) FROM clk WHERE imp_id NOT IN (SELECT imp_id FROM imp)) AS orphan_clicks_all_campaigns
+FROM imp i
+LEFT JOIN clk c ON c.imp_id = i.imp_id
+GROUP BY i.campaign_id
+ORDER BY i.campaign_id;
+""",
+    hint="Deduplicate both streams by their own ids before joining, and keep impressions without clicks.",
+    explain="""
+- **Deduplicate both sides first.** Duplicate impression I2 inflates the denominator, and duplicate click K1 inflates the numerator. Deduplicating after the join can't undo the fan-out a duplicate causes.
+- **`LEFT JOIN` from impressions** keeps impressions nobody clicked; they're most of the denominator.
+- **Orphan clicks** (K3 points at an impression that never arrived) can't be credited to a campaign. Counting them separately turns a silent loss into a data-quality signal: bots, lost impression logs or a key mismatch.
+- `NOT IN` is safe here only because `imp_id` is never NULL in the deduplicated set; with a nullable key, use `NOT EXISTS` (post 01, Q14).
+""",
+    check="Grain: one row per campaign. NULL: a click with a NULL `imp_id` matches no impression, and `NULL NOT IN (…)` is unknown, so the orphan count silently skips it too. Count clicks with NULL keys as their own quality metric.",
+)
+
+# ------------------------------------------------------------------ operations
+
+q82 = Q(
+    id="q82",
+    title="Logistics: SLA breaches from out-of-order events",
+    level="Hard",
+    pattern="Event pivots",
+    prompt="""
+Shipment events (`PICKED`, `IN_TRANSIT`, `DELIVERED`) arrive out of order and sometimes twice. Per shipment, return the pick-up and delivery times, the transit hours and whether the lane's SLA was breached. Shipments not yet delivered are reported as open, not dropped.
+""",
+    setup="""
+CREATE TABLE shipment (shipment_id VARCHAR, origin VARCHAR, dest VARCHAR);
+INSERT INTO shipment VALUES ('SH1', 'PUNE', 'DELHI'), ('SH2', 'PUNE', 'DELHI'), ('SH3', 'PUNE', 'GOA');
+CREATE TABLE lane_sla (origin VARCHAR, dest VARCHAR, sla_hours INT);
+INSERT INTO lane_sla VALUES ('PUNE', 'DELHI', 48), ('PUNE', 'GOA', 24);
+CREATE TABLE shipment_event (shipment_id VARCHAR, event_type VARCHAR, event_ts TIMESTAMP);
+INSERT INTO shipment_event VALUES
+    ('SH1', 'DELIVERED', TIMESTAMP '2025-03-03 10:00'), ('SH1', 'PICKED', TIMESTAMP '2025-03-01 09:00'),
+    ('SH1', 'PICKED', TIMESTAMP '2025-03-01 09:00'),
+    ('SH2', 'PICKED', TIMESTAMP '2025-03-01 09:00'), ('SH2', 'DELIVERED', TIMESTAMP '2025-03-02 20:00'),
+    ('SH3', 'PICKED', TIMESTAMP '2025-03-02 08:00'), ('SH3', 'IN_TRANSIT', TIMESTAMP '2025-03-02 12:00');
+""",
+    show=["shipment_event", "lane_sla"],
+    answer="""
+WITH milestones AS (
+    SELECT shipment_id,
+           MIN(CASE WHEN event_type = 'PICKED'    THEN event_ts END) AS picked_ts,
+           MIN(CASE WHEN event_type = 'DELIVERED' THEN event_ts END) AS delivered_ts
+    FROM shipment_event
+    GROUP BY shipment_id
+)
+SELECT m.shipment_id, m.picked_ts, m.delivered_ts,
+       datediff('hour', m.picked_ts, m.delivered_ts) AS transit_hours,
+       l.sla_hours,
+       CASE WHEN m.delivered_ts IS NULL                                     THEN 'OPEN'
+            WHEN datediff('hour', m.picked_ts, m.delivered_ts) > l.sla_hours THEN 'BREACHED'
+            ELSE 'MET' END                                                  AS sla_status
+FROM milestones m
+JOIN shipment s USING (shipment_id)
+JOIN lane_sla l ON l.origin = s.origin AND l.dest = s.dest
+ORDER BY m.shipment_id;
+""",
+    hint="Pivot by event *type*, not by arrival order, and decide what an undelivered shipment's status is before you compare with the SLA.",
+    explain="""
+- **Pivot by type with `MIN(CASE …)`**: each milestone's time comes from the event's own timestamp, so the order events *arrived* in doesn't matter, and the duplicate PICKED collapses.
+- **The SLA comes from the lane**, so join shipment → lane before comparing.
+- **`OPEN` before the comparison:** SH3 hasn't been delivered, so its transit time is NULL, and `NULL > 24` is unknown. Without the first branch it would fall into `ELSE` and be reported as **MET**, a shipment that hasn't arrived counted as on time. Ordering the `CASE` so the NULL case is handled first avoids that.
+""",
+    check="Grain: one row per shipment. NULL: an undelivered shipment's NULL comparison is the trap; the first `CASE` branch handles it.",
+)
+
+q83 = Q(
+    id="q83",
+    title="Logistics: days of cover from a true 7-day average",
+    level="Hard",
+    pattern="Moving averages",
+    prompt="""
+`sales_daily` has no row on days with no sales. Compute each SKU's average daily demand over the **7 calendar days** up to 2025-03-07, its days of cover (`on_hand ÷ average demand`), and a reorder flag when cover is under 14 days. A SKU with no recent demand has infinite cover, not an error.
+""",
+    setup="""
+CREATE TABLE sales_daily (sku VARCHAR, sale_date DATE, units INT);
+INSERT INTO sales_daily VALUES
+    ('A', DATE '2025-03-01', 10), ('A', DATE '2025-03-02', 12), ('A', DATE '2025-03-03', 8),
+    ('A', DATE '2025-03-04', 10), ('A', DATE '2025-03-05', 9),  ('A', DATE '2025-03-06', 11),
+    ('A', DATE '2025-03-07', 10),
+    ('B', DATE '2025-03-01', 14), ('B', DATE '2025-03-07', 14),
+    ('C', DATE '2025-02-01', 5);
+CREATE TABLE inventory (sku VARCHAR, on_hand INT);
+INSERT INTO inventory VALUES ('A', 100), ('B', 70), ('C', 40);
+""",
+    show=["sales_daily", "inventory"],
+    answer="""
+WITH demand AS (
+    SELECT sku, SUM(units) / 7.0 AS avg_daily_demand          -- divide by calendar days, not rows
+    FROM sales_daily
+    WHERE sale_date BETWEEN DATE '2025-03-07' - 6 AND DATE '2025-03-07'
+    GROUP BY sku
+)
+SELECT i.sku, i.on_hand,
+       ROUND(COALESCE(d.avg_daily_demand, 0), 2)                          AS avg_daily_demand,
+       ROUND(i.on_hand / NULLIF(d.avg_daily_demand, 0), 1)                AS days_of_cover,
+       COALESCE(i.on_hand / NULLIF(d.avg_daily_demand, 0) < 14, FALSE)    AS reorder
+FROM inventory i
+LEFT JOIN demand d USING (sku)
+ORDER BY i.sku;
+""",
+    hint="If a SKU sold on 2 of the last 7 days, how many days should you divide by?",
+    explain="""
+- **Divide by calendar days.** B sold 14 units on two of the seven days: its true demand is 28 ÷ 7 = 4 per day. The obvious window function, `AVG(units) OVER (ORDER BY sale_date ROWS 6 PRECEDING)`, averages the last seven *rows*, which for B are spread over weeks, and reports 14 per day, three and a half times too much (step 2). That B would be flagged for an urgent reorder it doesn't need.
+- **Infinite cover:** C has sold nothing in the window, so `NULLIF(…, 0)` makes the division NULL rather than an error, and the reorder flag is `COALESCE`d to FALSE.
+- For a rolling version over many days, use a calendar spine (post 04, Q62) or a `RANGE` frame of 6 days divided by 7, never a `ROWS` frame over sparse data.
+""",
+    steps=[
+        Step("Per SKU", "Sales in the 7-day window. B sold on only two days.",
+             tables=[Show("window", "SELECT sku, COUNT(*) AS days_with_sales, SUM(units) AS units, ROUND(SUM(units) / 7.0, 2) AS per_calendar_day, ROUND(AVG(units), 2) AS per_row_avg, CASE WHEN sku = 'B' THEN 'hit' END AS _mark FROM sales_daily WHERE sale_date BETWEEN DATE '2025-03-07' - 6 AND DATE '2025-03-07' GROUP BY sku ORDER BY sku")]),
+        Step("ROWS frame (wrong)", "A ROWS window over sparse rows averages B's two sales: 14 per day.",
+             tables=[Show("AVG OVER ROWS 6 PRECEDING, latest row", "SELECT sku, sale_date, ROUND(AVG(units) OVER (PARTITION BY sku ORDER BY sale_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW), 2) AS rows_avg, CASE WHEN sku = 'B' THEN 'bad' END AS _mark FROM sales_daily QUALIFY ROW_NUMBER() OVER (PARTITION BY sku ORDER BY sale_date DESC) = 1 ORDER BY sku")]),
+    ],
+    trace_alt="Two steps: per SKU, units in the window divided by 7 calendar days against the per-row average, with B at 4 against 14; and the ROWS-frame moving average that reports 14 for B.",
+    check="Grain: one row per SKU. NULL: no demand gives NULL cover (infinite) and an explicit FALSE flag.",
+)
+
+q84 = Q(
+    id="q84",
+    title="Energy: estimate missing meter reads",
+    level="Hard",
+    pattern="Interpolation",
+    prompt="""
+`meter_read` holds cumulative kWh read at irregular times, sometimes twice in a day and sometimes not for days. For every day from 1 to 6 March, return the day's end-of-day reading, estimating missing days by linear interpolation between the surrounding actual reads.
+""",
+    setup="""
+CREATE TABLE meter_read (meter_id VARCHAR, read_ts TIMESTAMP, cumulative_kwh DOUBLE);
+INSERT INTO meter_read VALUES
+    ('MT1', TIMESTAMP '2025-03-01 08:00', 1000.0), ('MT1', TIMESTAMP '2025-03-01 20:00', 1010.0),
+    ('MT1', TIMESTAMP '2025-03-02 20:00', 1030.0), ('MT1', TIMESTAMP '2025-03-05 20:00', 1090.0),
+    ('MT1', TIMESTAMP '2025-03-06 20:00', 1100.0);
+""",
+    show=["meter_read"],
+    answer="""
+WITH days AS (
+    SELECT CAST(d AS DATE) AS day FROM generate_series(DATE '2025-03-01', DATE '2025-03-06', INTERVAL 1 DAY) t(d)
+),
+daily_actual AS (                                      -- the LAST read of each day
+    SELECT meter_id, CAST(read_ts AS DATE) AS day, cumulative_kwh
+    FROM meter_read
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY meter_id, CAST(read_ts AS DATE) ORDER BY read_ts DESC) = 1
+),
+grid AS (
+    SELECT m.meter_id, days.day, a.cumulative_kwh AS actual
+    FROM (SELECT DISTINCT meter_id FROM meter_read) m CROSS JOIN days
+    LEFT JOIN daily_actual a ON a.meter_id = m.meter_id AND a.day = days.day
+),
+bracketed AS (
+    SELECT *,
+           LAST_VALUE(actual IGNORE NULLS)  OVER prev AS prev_val,
+           LAST_VALUE(CASE WHEN actual IS NOT NULL THEN day END IGNORE NULLS) OVER prev AS prev_day,
+           FIRST_VALUE(actual IGNORE NULLS) OVER next AS next_val,
+           FIRST_VALUE(CASE WHEN actual IS NOT NULL THEN day END IGNORE NULLS) OVER next AS next_day
+    FROM grid
+    WINDOW prev AS (PARTITION BY meter_id ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+           next AS (PARTITION BY meter_id ORDER BY day ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+)
+SELECT meter_id, day,
+       ROUND(COALESCE(actual,
+             prev_val + (next_val - prev_val) * (day - prev_day) / (next_day - prev_day)), 1) AS kwh,
+       actual IS NULL AS is_estimated
+FROM bracketed
+ORDER BY day;
+""",
+    hint="Reduce each day to one actual reading first. Then each missing day needs the nearest actual before it and after it.",
+    explain="""
+- **One reading per day first.** 1 March has two reads; joining both to the calendar would give 1 March two rows. Keeping the **last** read of the day matches "end-of-day reading".
+- **The spine** gives every day a row; missing days have a NULL `actual`.
+- **`LAST_VALUE(… IGNORE NULLS)`** over the rows up to the current one finds the previous actual read; **`FIRST_VALUE(… IGNORE NULLS)`** over the rows from the current one finds the next. The same trick on the date gives how far apart they are.
+- **Linear interpolation:** `prev + (next − prev) × (days since prev ÷ days between)`. 3 March is one day into a three-day gap from 1,030 to 1,090, so 1,050.
+- **`is_estimated`** flags the synthetic values. Billing and analytics must be able to tell measured from estimated.
+- Days before the first read or after the last have no bracket, so they stay NULL rather than being extrapolated.
+""",
+    check="Grain: one row per meter per day. NULL: unbracketed days stay NULL on purpose; `IGNORE NULLS` is what lets the window skip the gaps.",
+)
+
+q85 = Q(
+    id="q85",
+    title="Markets: the prevailing quote for each trade",
+    level="Hard",
+    pattern="As-of joins",
+    prompt="""
+Enrich each trade with the **prevailing quote**: the latest quote for the same symbol at or before the trade's time. A trade before the first quote of its symbol must still appear.
+""",
+    setup="""
+CREATE TABLE trades (trade_id VARCHAR, symbol VARCHAR, trade_ts TIMESTAMP, qty INT);
+INSERT INTO trades VALUES
+    ('TR1', 'ACME', TIMESTAMP '2025-03-03 09:30:05', 100), ('TR2', 'ACME', TIMESTAMP '2025-03-03 09:30:20', 50),
+    ('TR3', 'BOLT', TIMESTAMP '2025-03-03 09:30:01', 10),  ('TR4', 'ACME', TIMESTAMP '2025-03-03 09:30:10', 70);
+CREATE TABLE quotes (symbol VARCHAR, quote_ts TIMESTAMP, bid DOUBLE, ask DOUBLE);
+INSERT INTO quotes VALUES
+    ('ACME', TIMESTAMP '2025-03-03 09:30:00', 10.00, 10.02), ('ACME', TIMESTAMP '2025-03-03 09:30:10', 10.01, 10.03),
+    ('ACME', TIMESTAMP '2025-03-03 09:30:15', 10.05, 10.07), ('BOLT', TIMESTAMP '2025-03-03 09:30:02', 5.00, 5.01);
+""",
+    show=["trades", "quotes"],
+    answer="""
+SELECT t.trade_id, t.symbol, t.trade_ts, q.quote_ts, q.bid, q.ask
+FROM trades t
+ASOF LEFT JOIN quotes q
+  ON q.symbol = t.symbol
+ AND t.trade_ts >= q.quote_ts
+ORDER BY t.trade_id;
+""",
+    display="""
+SELECT t.trade_id, t.symbol, t.trade_ts, q.quote_ts, q.bid, q.ask
+FROM trades t
+ASOF JOIN quotes q
+  MATCH_CONDITION (t.trade_ts >= q.quote_ts)
+  ON t.symbol = q.symbol;
+""",
+    hint="An equality join on the timestamp almost never matches. You need the latest row on one side that is not after the row on the other.",
+    explain="""
+- **An as-of join** matches each trade to the quote with the greatest `quote_ts` that is `<=` the trade time, per symbol. DuckDB writes the inequality inside `ON` ([docs](https://duckdb.org/docs/stable/guides/sql_features/asof_join)); Snowflake puts it in `MATCH_CONDITION` ([docs](https://docs.snowflake.com/en/sql-reference/constructs/asof-join)).
+- **`>=` includes a quote at the same instant:** TR4 at 09:30:10 matches the quote from 09:30:10 exactly. Use `>` if a simultaneous quote shouldn't count.
+- **The left join** keeps TR3: BOLT's first quote comes after the trade, so there's no prevailing quote and bid/ask are NULL.
+- **Why not an equality join:** quotes and trades tick at different instants, so `quote_ts = trade_ts` matches almost nothing. Without an as-of join, the portable alternative is a range join plus `QUALIFY ROW_NUMBER() … ORDER BY quote_ts DESC = 1` (Q80), which is far more expensive on large tables.
+""",
+    check="Grain: one row per trade. NULL: trades before any quote have NULL bid and ask.",
+)
+
+q86 = Q(
+    id="q86",
+    title="Master data: build the golden record field by field",
+    level="Hard",
+    pattern="Survivorship",
+    prompt="""
+`customer_source` has records for the same real customer from three systems (same `match_key`). Build one golden record per `match_key` where **each field** takes its value from the most complete record that has a non-NULL value for it, breaking ties by the most recent `updated_at`.
+""",
+    setup="""
+CREATE TABLE customer_source (source_system VARCHAR, match_key VARCHAR, full_name VARCHAR, email VARCHAR, phone VARCHAR,
+                              completeness_score INT, updated_at TIMESTAMP);
+INSERT INTO customer_source VALUES
+    ('CRM',     'MK-1', 'Ana Lopez',   'ana@example.com', NULL,          90, TIMESTAMP '2025-02-01 09:00'),
+    ('Billing', 'MK-1', 'A. Lopez',    'ana.l@work.com',  '+1 555 0101', 70, TIMESTAMP '2025-03-01 09:00'),
+    ('Support', 'MK-1', 'Ana M Lopez', NULL,              '+1 555 0199', 70, TIMESTAMP '2025-03-10 09:00'),
+    ('CRM',     'MK-2', 'Raj Patel',   'raj@example.com', '+91 98000',   80, TIMESTAMP '2025-01-15 09:00');
+""",
+    show=["customer_source"],
+    answer="""
+SELECT match_key,
+       (array_agg(full_name ORDER BY completeness_score DESC, updated_at DESC) FILTER (WHERE full_name IS NOT NULL))[1] AS full_name,
+       (array_agg(email     ORDER BY completeness_score DESC, updated_at DESC) FILTER (WHERE email     IS NOT NULL))[1] AS email,
+       (array_agg(phone     ORDER BY completeness_score DESC, updated_at DESC) FILTER (WHERE phone     IS NOT NULL))[1] AS phone,
+       string_agg(DISTINCT source_system, ', ' ORDER BY source_system)                                                 AS sources
+FROM customer_source
+GROUP BY match_key
+ORDER BY match_key;
+""",
+    display="""
+SELECT match_key,
+       ARRAY_AGG(full_name) WITHIN GROUP (ORDER BY completeness_score DESC, updated_at DESC)[0]::STRING AS full_name,
+       ARRAY_AGG(email)     WITHIN GROUP (ORDER BY completeness_score DESC, updated_at DESC)[0]::STRING AS email,
+       ARRAY_AGG(phone)     WITHIN GROUP (ORDER BY completeness_score DESC, updated_at DESC)[0]::STRING AS phone
+FROM customer_source
+GROUP BY match_key;
+-- Snowflake's ARRAY_AGG leaves NULL values out, so [0] is the best non-NULL value.
+""",
+    hint="Picking the best *row* isn't enough: the best row can be missing a field another row has.",
+    explain="""
+- **Field-level survivorship:** each field is ranked independently. The CRM record is the most complete, so it wins the name and email, but it has no phone; the phone comes from the best record that *has* one. Between Billing and Support, both scored 70, the more recent Support record wins.
+- **`FILTER (WHERE field IS NOT NULL)`** removes NULLs before ranking, so a NULL from the top record never wins. Snowflake's `ARRAY_AGG` already omits NULLs ([docs](https://docs.snowflake.com/en/sql-reference/functions/array_agg)), and its arrays are 0-indexed where DuckDB's are 1-indexed.
+- **Picking one whole row** (`QUALIFY ROW_NUMBER() … = 1`) would give MK-1 a NULL phone even though two systems know it.
+- **Keep lineage:** `sources` records which systems contributed. Real MDM also stores *which* source won each field, so a steward can explain or override it.
+""",
+    check="Grain: one row per `match_key`. NULL: a field NULL in every source stays NULL; the `FILTER` only stops NULLs from beating real values.",
+)
+
+
+INTRO = f"""
+The case studies built one pipeline each. This post is a set of stand-alone problems from other industries, chosen because each drills a pattern that the earlier posts didn't: merging intervals, versioned records, time buckets and silence, state compression, sweep lines, tiered pricing, range and as-of joins, interpolation and survivorship. Each one has a trap that a plausible first answer falls into, and the step-throughs show it.
+
+{series_callout(SLUG)}
+
+The post covers three areas:
+
+- Intervals and states: healthcare coverage, claims, sensors and machines
+- Rating and attribution: telecom tiers and ad clicks
+- Operations: logistics, energy, markets and master data
+
+## How to use this post
+
+{HOW_TO_READ.strip()} Every answer ends with an **Engineer check**: the grain, what happens if it runs twice, and what NULL does. The [first post](/blog/de-sql-foundations#how-the-answers-are-checked) explains how the answers were run and checked.
+
+![Four time-based patterns from this post on one timeline: merging overlapping coverage spans into continuous periods with a running maximum; compressing repeated status readings into state intervals that end where the next state begins; counting trips in progress with a sweep line of +1 and −1 events plus hour markers; and an as-of join that matches each trade to the latest quote at or before it](/images/data-engineering/de-sql/de-sql-cross-domain/time-patterns.svg)
+"""
+
+OUTRO = """
+## Summary
+
+Most hard SQL problems are time problems in disguise. Overlapping spans merge with a running maximum and a running sum of new-period flags. Repeated readings compress into states that end where the next one begins. Concurrency is a running sum of +1 and −1, with markers for the moments nothing happens. Prices that depend on cumulative usage come from a running total and a clamp. Attribution and market data need range or as-of joins, with a deterministic tiebreak and a left join so unmatched rows stay visible. Averages over sparse data must divide by calendar time, not rows. And whenever data is versioned or comes from several systems, decide the order of operations explicitly: latest version before the business filter, and survivorship field by field.
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Interval merge** | Running `MAX(end)` of earlier rows, then islands | Contained spans don't break periods |
+| **Latest version, then filter** | `ROW_NUMBER` first, business rule second | Filtering first resurrects reversed versions |
+| **Expected grid** | Every entity × every bucket, left-joined to data | Silence can't be found in the data itself |
+| **State intervals** | Change flags, run numbers, end at the next start | Durations aren't cut short at the last reading |
+| **Sweep line** | +1 / −1 events, running sum, hour markers | Concurrency in one sort, empty hours included |
+| **Tier clamp** | `LEAST(to, cap) − GREATEST(from, floor)` | A day's usage can straddle tiers |
+| **Range join + one winner** | Window join, `QUALIFY ROW_NUMBER() = 1`, tiebreak | Each conversion is credited once, the same way every run |
+| **As-of join** | Latest row at or before a time | Equality joins on timestamps almost never match |
+| **Calendar-day averages** | Divide by days, not rows | Sparse data inflates `ROWS` averages |
+| **Field-level survivorship** | Rank each field's non-NULL values separately | The best record can still be missing a field |
+
+### Test yourself
+
+<details>
+<summary>Why does interval merging use a running maximum of end dates instead of `LAG(end_date)`?</summary>
+
+A long early span can contain a later short one. Comparing the next span with the short span's end would start a new period inside coverage that never stopped.
+
+</details>
+
+<details>
+<summary>An hour has no trip starting or ending in it. Why can a sweep-line query lose it, and how do you keep it?</summary>
+
+The running sum only has rows at start and end events, so the hour has no rows to group. Add a zero-delta marker at every hour start; it carries the running count into the hour.
+
+</details>
+
+<details>
+<summary>A SKU sold 14 units on 2 of the last 7 days. What is its average daily demand, and what does `AVG(units) OVER (ROWS 6 PRECEDING)` report?</summary>
+
+28 ÷ 7 = 4 per day. The `ROWS` average divides by the two rows it finds and reports 14.
+
+</details>
+
+<details>
+<summary>Why does `CASE WHEN transit_hours > sla THEN 'BREACHED' ELSE 'MET' END` report an undelivered shipment as met?</summary>
+
+Its transit time is NULL, the comparison is unknown, and unknown falls through to `ELSE`. Handle the NULL case in an earlier branch.
+
+</details>
+
+<details>
+<summary>What does an as-of join return for a trade that happens before the first quote of its symbol?</summary>
+
+With a left as-of join, the trade with NULL quote columns. With an inner as-of join, nothing: the trade disappears.
+
+</details>
+
+## Sources
+
+- Snowflake: [ASOF JOIN](https://docs.snowflake.com/en/sql-reference/constructs/asof-join), [TIME_SLICE](https://docs.snowflake.com/en/sql-reference/functions/time_slice), [ARRAY_AGG](https://docs.snowflake.com/en/sql-reference/functions/array_agg), [GREATEST](https://docs.snowflake.com/en/sql-reference/functions/greatest)
+- DuckDB: [AsOf joins](https://duckdb.org/docs/stable/guides/sql_features/asof_join), [time_bucket](https://duckdb.org/docs/stable/sql/functions/date), [window functions and IGNORE NULLS](https://duckdb.org/docs/stable/sql/functions/window_functions)
+- PostgreSQL: [date_bin](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-BIN)
+"""
+
+POST = Post(
+    slug=SLUG,
+    title="SQL for Data Engineers: Hard Problems Across Industries",
+    description="Part 5 of a data engineering SQL practice bank: stand-alone problems from healthcare, IoT, ride-share, telecom, ad tech, logistics, energy, markets and master data, covering interval merging, sweep lines, tiered rating, range and as-of joins, interpolation and survivorship. Every answer is run on real sample data.",
+    order=5,
+    tags=["Data Engineering", "SQL", "Practice"],
+    intro=INTRO,
+    groups=[
+        Group("Intervals and states", "Problems where the rows describe stretches of time, and the answer is about how they overlap, repeat or go quiet.", [q73, q74, q75, q76, q77, q78]),
+        Group("Rating and attribution", "Money that depends on running totals, and credit that has to land on exactly one row.", [q79, q80, q81]),
+        Group("Operations and master data", "Out-of-order events, sparse data, irregular reads, ticking markets and conflicting sources.", [q82, q83, q84, q85, q86]),
+    ],
+    outro=OUTRO,
+)

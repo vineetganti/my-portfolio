@@ -1,0 +1,597 @@
+from build import Group, Post, Q, Show, Step
+from posts.common import HOW_TO_READ, series_callout
+
+SLUG = "de-sql-capstones"
+
+# ------------------------------------------------------------------ Q87
+
+q87 = Q(
+    id="q87",
+    title="Load a three-fact warehouse in the right order",
+    level="Expert",
+    pattern="Synthesis: dimensional modeling",
+    prompt="""
+Raw feeds deliver sales lines, return lines and daily stock counts, all keyed by product code. Build conformed `dim_product` (with an Unknown member) and three facts at their own grains: `fact_sales` (order line), `fact_returns` (return line) and `fact_inventory_snapshot` (product per day). Load them in an order that guarantees every fact resolves its keys, and finish with a check that each fact's grain is unique and that no fact points at a product that doesn't exist.
+""",
+    setup="""
+CREATE TABLE raw_product (product_code VARCHAR, product_name VARCHAR, category VARCHAR);
+INSERT INTO raw_product VALUES ('SKU-1', 'Mouse', 'Accessories'), ('SKU-2', 'Monitor', 'Displays');
+CREATE TABLE raw_sales (order_id VARCHAR, line_no INT, product_code VARCHAR, sale_date DATE, qty INT, net_amount DECIMAL(10,2));
+INSERT INTO raw_sales VALUES ('SO-1', 1, 'SKU-1', DATE '2025-03-01', 2, 50.00), ('SO-1', 2, 'SKU-2', DATE '2025-03-01', 1, 300.00),
+                             ('SO-2', 1, 'SKU-9', DATE '2025-03-02', 1, 20.00);
+CREATE TABLE raw_returns (return_id VARCHAR, line_no INT, product_code VARCHAR, return_date DATE, qty INT, refund DECIMAL(10,2));
+INSERT INTO raw_returns VALUES ('RT-1', 1, 'SKU-2', DATE '2025-03-05', 1, 300.00);
+CREATE TABLE raw_stock (product_code VARCHAR, count_date DATE, on_hand INT);
+INSERT INTO raw_stock VALUES ('SKU-1', DATE '2025-03-01', 40), ('SKU-2', DATE '2025-03-01', 8),
+                             ('SKU-1', DATE '2025-03-02', 38), ('SKU-2', DATE '2025-03-02', 7);
+""",
+    show=["raw_sales", "raw_returns", "raw_stock"],
+    answer="""
+-- 1. Conformed dimension first, with the Unknown member
+CREATE SEQUENCE product_sk_seq START 1;
+CREATE TABLE dim_product (product_sk INTEGER PRIMARY KEY DEFAULT nextval('product_sk_seq'),
+                          product_code VARCHAR NOT NULL, product_name VARCHAR, category VARCHAR);
+INSERT INTO dim_product VALUES (-1, 'UNKNOWN', 'Unknown', 'Unknown');
+INSERT INTO dim_product (product_code, product_name, category)
+SELECT product_code, product_name, category FROM raw_product;
+
+-- 2. Transaction facts: resolve keys against the loaded dimension, unknowns to -1
+CREATE TABLE fact_sales AS
+SELECT s.order_id, s.line_no, COALESCE(d.product_sk, -1) AS product_sk, s.sale_date, s.qty, s.net_amount
+FROM raw_sales s LEFT JOIN dim_product d USING (product_code);
+
+CREATE TABLE fact_returns AS
+SELECT r.return_id, r.line_no, COALESCE(d.product_sk, -1) AS product_sk, r.return_date, r.qty, r.refund
+FROM raw_returns r LEFT JOIN dim_product d USING (product_code);
+
+-- 3. Periodic snapshot fact: one row per product per day
+CREATE TABLE fact_inventory_snapshot AS
+SELECT COALESCE(d.product_sk, -1) AS product_sk, s.count_date, s.on_hand
+FROM raw_stock s LEFT JOIN dim_product d USING (product_code);
+
+-- 4. Prove every grain and every key
+SELECT 'fact_sales' AS fact,
+       COUNT(*) - COUNT(DISTINCT (order_id, line_no))                          AS duplicate_grain_rows,
+       COUNT(*) FILTER (WHERE product_sk NOT IN (SELECT product_sk FROM dim_product)) AS orphan_keys,
+       COUNT(*) FILTER (WHERE product_sk = -1)                                 AS unknown_keys
+FROM fact_sales
+UNION ALL
+SELECT 'fact_returns', COUNT(*) - COUNT(DISTINCT (return_id, line_no)),
+       COUNT(*) FILTER (WHERE product_sk NOT IN (SELECT product_sk FROM dim_product)),
+       COUNT(*) FILTER (WHERE product_sk = -1)
+FROM fact_returns
+UNION ALL
+SELECT 'fact_inventory_snapshot', COUNT(*) - COUNT(DISTINCT (product_sk, count_date)),
+       COUNT(*) FILTER (WHERE product_sk NOT IN (SELECT product_sk FROM dim_product)),
+       COUNT(*) FILTER (WHERE product_sk = -1)
+FROM fact_inventory_snapshot;
+""",
+    hint="Which tables must exist before which? And what single query would tell you the load kept its promises?",
+    explain="""
+**Load order and why:**
+
+1. **Dimensions before facts.** A fact load looks up surrogate keys; if the dimension isn't loaded, every fact goes to Unknown. In a real pipeline this is an orchestration dependency (the fact tasks wait for the dimension task).
+2. **The Unknown member before any fact**, so a key that doesn't resolve (SKU-9 here) has somewhere to point. The sale still counts in revenue; the `unknown_keys` column makes it visible.
+3. **Transaction facts** (sales, returns) are insert-oriented, each at its own grain: order line and return line.
+4. **The snapshot fact** is a level, not a flow (post 02, Q26): one row per product per day, never summed across days.
+
+**The closing check** proves the promises in one result: zero duplicate grain rows in each fact (`COUNT(*) − COUNT(DISTINCT grain)`), zero orphan keys, and a count of Unknown keys to monitor. In production this is the quality gate (post 02, Q35) that runs before the facts are published.
+
+Returns are a separate fact, not negative sales rows, because their grain (a return line) and their dates differ. They meet sales only through the conformed `dim_product` (drill-across, post 02, Q34).
+""",
+    steps=[
+        Step("Dimension", "The conformed dimension, with the Unknown member, is loaded first.",
+             run="""CREATE SEQUENCE product_sk_seq START 1;
+CREATE TABLE dim_product (product_sk INTEGER PRIMARY KEY DEFAULT nextval('product_sk_seq'), product_code VARCHAR NOT NULL, product_name VARCHAR, category VARCHAR);
+INSERT INTO dim_product VALUES (-1, 'UNKNOWN', 'Unknown', 'Unknown');
+INSERT INTO dim_product (product_code, product_name, category) SELECT product_code, product_name, category FROM raw_product;""",
+             tables=[Show("dim_product", "SELECT *, CASE WHEN product_sk = -1 THEN 'hit' ELSE 'new' END AS _mark FROM dim_product ORDER BY product_sk")]),
+        Step("Facts", "Each fact resolves its keys; SKU-9 isn't in the catalog and points at -1.",
+             run="""CREATE TABLE fact_sales AS SELECT s.order_id, s.line_no, COALESCE(d.product_sk, -1) AS product_sk, s.sale_date, s.qty, s.net_amount FROM raw_sales s LEFT JOIN dim_product d USING (product_code);
+CREATE TABLE fact_returns AS SELECT r.return_id, r.line_no, COALESCE(d.product_sk, -1) AS product_sk, r.return_date, r.qty, r.refund FROM raw_returns r LEFT JOIN dim_product d USING (product_code);
+CREATE TABLE fact_inventory_snapshot AS SELECT COALESCE(d.product_sk, -1) AS product_sk, s.count_date, s.on_hand FROM raw_stock s LEFT JOIN dim_product d USING (product_code);""",
+             tables=[Show("fact_sales", "SELECT *, CASE WHEN product_sk = -1 THEN 'hit' ELSE 'new' END AS _mark FROM fact_sales ORDER BY 1, 2"),
+                     Show("fact_returns", "SELECT *, 'new' AS _mark FROM fact_returns"),
+                     Show("fact_inventory_snapshot", "SELECT *, 'new' AS _mark FROM fact_inventory_snapshot ORDER BY 2, 1")]),
+    ],
+    trace_alt="Two steps: the product dimension loaded with its Unknown member; then the three facts, with SKU-9's sale pointing at the Unknown member.",
+    check="Grain: each fact's grain is proven by the closing check. Run twice: these `CREATE TABLE` statements fail the second time; in production the facts load incrementally (Q89) and the dimension with SCD logic (Q88). NULL: `NOT IN` is safe here because `product_sk` is a non-NULL primary key.",
+)
+
+# ------------------------------------------------------------------ Q88
+
+q88 = Q(
+    id="q88",
+    title="One SCD2 loader for every kind of change",
+    level="Expert",
+    pattern="Synthesis: SCD2",
+    prompt="""
+Write a re-runnable SCD2 load for `dim_customer` from a **full snapshot** of the source (load date 2025-06-01) that handles every case in one run:
+
+- **new** customers get version 1,
+- **changed** customers have their current version closed and a new one opened,
+- **unchanged** customers are untouched,
+- customers **missing** from the snapshot have their current version closed (they left),
+- **reactivated** customers (closed earlier, back in the snapshot) get a new current version.
+""",
+    setup="""
+CREATE SEQUENCE customer_sk_seq START 10;
+CREATE TABLE dim_customer (customer_sk INTEGER PRIMARY KEY DEFAULT nextval('customer_sk_seq'), customer_code VARCHAR, city VARCHAR,
+                           effective_from DATE, effective_to DATE, is_current BOOLEAN, row_hash VARCHAR, version INT);
+INSERT INTO dim_customer VALUES
+    (1, 'C1', 'Austin', DATE '2025-01-01', DATE '9999-12-31', TRUE,  'h-austin', 1),
+    (2, 'C2', 'Pune',   DATE '2025-01-01', DATE '9999-12-31', TRUE,  'h-pune',   1),
+    (3, 'C3', 'Lyon',   DATE '2025-01-01', DATE '9999-12-31', TRUE,  'h-lyon',   1),
+    (4, 'C4', 'Oslo',   DATE '2025-01-01', DATE '2025-03-31', FALSE, 'h-oslo',   1);
+CREATE TABLE stg_snapshot (customer_code VARCHAR, city VARCHAR, row_hash VARCHAR);
+INSERT INTO stg_snapshot VALUES
+    ('C1', 'Austin', 'h-austin'),    -- unchanged
+    ('C2', 'Mumbai', 'h-mumbai'),    -- changed
+    ('C4', 'Bergen', 'h-bergen'),    -- reactivated
+    ('C5', 'Kyoto',  'h-kyoto');     -- new
+                                     -- C3 is missing: it left
+""",
+    show=["dim_customer", "stg_snapshot"],
+    answer="""
+-- A. Close current versions that changed, or whose customer is no longer in the snapshot
+UPDATE dim_customer AS t
+SET is_current = FALSE, effective_to = DATE '2025-06-01' - 1
+WHERE t.is_current
+  AND NOT EXISTS (SELECT 1 FROM stg_snapshot s
+                  WHERE s.customer_code = t.customer_code AND s.row_hash = t.row_hash);
+
+-- B. Open a version for every snapshot customer without a current one:
+--    new, changed (just closed in A) and reactivated (closed in an earlier run)
+INSERT INTO dim_customer (customer_code, city, effective_from, effective_to, is_current, row_hash, version)
+SELECT s.customer_code, s.city, DATE '2025-06-01', DATE '9999-12-31', TRUE, s.row_hash,
+       COALESCE((SELECT MAX(version) FROM dim_customer d WHERE d.customer_code = s.customer_code), 0) + 1
+FROM stg_snapshot s
+WHERE NOT EXISTS (SELECT 1 FROM dim_customer d WHERE d.customer_code = s.customer_code AND d.is_current);
+""",
+    result="SELECT customer_sk, customer_code, city, effective_from, effective_to, is_current, version FROM dim_customer ORDER BY customer_code, version",
+    diff=("dim_customer", "customer_sk"),
+    rerun=True,
+    hint="Two statements cover all five cases if each one asks the right question. Step A: which current rows are no longer exactly right? Step B: which snapshot customers have no current row?",
+    explain="""
+Two statements handle all five cases, because each asks one precise question:
+
+| Case | Step A (close) | Step B (open) |
+| --- | --- | --- |
+| C1 unchanged | its current row matches the snapshot exactly, so it stays | it has a current row, so nothing |
+| C2 changed | no snapshot row has its code **and** its hash, so it's closed | no current row any more, so version 2 |
+| C3 left | not in the snapshot at all, so it's closed | not in the snapshot, so nothing |
+| C4 reactivated | already closed in an earlier run, not current | no current row, so version 2 |
+| C5 new | has no row | no current row, so version 1 |
+
+- **Step A's single `NOT EXISTS`** covers both "changed" and "left": a current row survives only if the snapshot has the same customer with the same hash.
+- **Step B's `NOT EXISTS (… is_current)`** finds every snapshot customer without a current row, whatever the reason.
+- **`MAX(version) + 1`** over all of a customer's versions keeps numbering correct across leave-and-return cycles: C4's history goes version 1, closed, then version 2.
+- **The snapshot must be complete.** Closing missing customers is only right for a *full* extract. Run this on an incremental extract and every customer not in it is closed. Guard against it by checking the snapshot's row count against the previous run before loading.
+- **Re-run:** the second run finds every current row matching and every snapshot customer current, so nothing changes. The build verified it.
+""",
+    check="Grain: one current row per customer in the snapshot, history for everyone. Run twice: verified unchanged. NULL: the hash must be NULL-safe (post 02, Q19), or a change to or from NULL keeps the old version open.",
+)
+
+# ------------------------------------------------------------------ Q89
+
+q89 = Q(
+    id="q89",
+    title="An incremental fact pipeline that survives late data",
+    level="Expert",
+    pattern="Synthesis: incremental loading",
+    prompt="""
+In one run: load new sales lines since the watermark (some are late, for days already published), work out which days changed, recompute only those days of `gold_sales_daily`, reconcile the recomputed days against the source, and advance the watermark. The run must be safe to repeat.
+""",
+    setup="""
+CREATE TABLE src_sales (order_id VARCHAR, line_no INT, sale_date DATE, net_amount DECIMAL(10,2), _loaded_at TIMESTAMP);
+INSERT INTO src_sales VALUES
+    ('SO-1', 1, DATE '2025-03-01', 50.00, TIMESTAMP '2025-03-01 20:00'),
+    ('SO-2', 1, DATE '2025-03-02', 30.00, TIMESTAMP '2025-03-02 20:00');
+CREATE TABLE fact_sales (order_id VARCHAR, line_no INT, sale_date DATE, net_amount DECIMAL(10,2));
+INSERT INTO fact_sales SELECT order_id, line_no, sale_date, net_amount FROM src_sales;
+CREATE TABLE gold_sales_daily AS SELECT sale_date, SUM(net_amount) AS revenue, COUNT(*) AS lines FROM fact_sales GROUP BY 1;
+CREATE TABLE etl_control (table_name VARCHAR, watermark_ts TIMESTAMP);
+INSERT INTO etl_control VALUES ('fact_sales', TIMESTAMP '2025-03-02 20:00');
+
+-- today's arrivals: a new day, a late line for 1 March, and a redelivery of SO-2
+INSERT INTO src_sales VALUES
+    ('SO-3', 1, DATE '2025-03-03', 40.00, TIMESTAMP '2025-03-03 20:00'),
+    ('SO-0', 1, DATE '2025-03-01', 15.00, TIMESTAMP '2025-03-03 20:05'),
+    ('SO-2', 1, DATE '2025-03-02', 30.00, TIMESTAMP '2025-03-03 20:06');
+""",
+    show=["src_sales", "gold_sales_daily", "etl_control"],
+    answer="""
+-- 1. Freeze the window and take the batch (deduplicated within itself)
+CREATE OR REPLACE TEMP TABLE batch AS
+SELECT order_id, line_no, sale_date, net_amount, _loaded_at
+FROM src_sales
+WHERE _loaded_at >  (SELECT watermark_ts FROM etl_control WHERE table_name = 'fact_sales')
+  AND _loaded_at <= (SELECT MAX(_loaded_at) FROM src_sales)
+QUALIFY ROW_NUMBER() OVER (PARTITION BY order_id, line_no ORDER BY _loaded_at DESC) = 1;
+
+-- 2. Upsert into the fact on its grain (absorbs redeliveries across batches)
+MERGE INTO fact_sales t
+USING batch s ON t.order_id = s.order_id AND t.line_no = s.line_no
+WHEN MATCHED THEN UPDATE SET sale_date = s.sale_date, net_amount = s.net_amount
+WHEN NOT MATCHED THEN INSERT VALUES (s.order_id, s.line_no, s.sale_date, s.net_amount);
+
+-- 3. Recompute only the days this batch touched
+DELETE FROM gold_sales_daily WHERE sale_date IN (SELECT DISTINCT sale_date FROM batch);
+INSERT INTO gold_sales_daily
+SELECT sale_date, SUM(net_amount), COUNT(*)
+FROM fact_sales
+WHERE sale_date IN (SELECT DISTINCT sale_date FROM batch)
+GROUP BY sale_date;
+
+-- 4. Reconcile the recomputed days against the source (must return no rows)
+CREATE OR REPLACE TEMP TABLE recon AS
+SELECT g.sale_date, g.revenue, x.src_revenue
+FROM gold_sales_daily g
+JOIN (SELECT sale_date, SUM(net_amount) AS src_revenue
+      FROM (SELECT DISTINCT order_id, line_no, sale_date, net_amount FROM src_sales) GROUP BY 1) x USING (sale_date)
+WHERE g.sale_date IN (SELECT DISTINCT sale_date FROM batch)
+  AND ABS(g.revenue - x.src_revenue) > 0.01;
+
+-- 5. Advance the watermark only if reconciliation passed
+UPDATE etl_control
+SET watermark_ts = COALESCE((SELECT MAX(_loaded_at) FROM batch), watermark_ts)
+WHERE table_name = 'fact_sales'
+  AND NOT EXISTS (SELECT 1 FROM recon);
+""",
+    result="SELECT g.*, (SELECT watermark_ts FROM etl_control) AS watermark_ts FROM gold_sales_daily g ORDER BY sale_date",
+    rerun=True,
+    hint="Five stages, each with a guard: a frozen window, a merge on the grain, a recompute scoped to touched days, a reconciliation, and a watermark that moves only when everything passed.",
+    explain="""
+The run chains the series' incremental patterns, each with its guard:
+
+1. **Frozen window, deduplicated** (post 02, Q27): rows in `(watermark, upper]`, one per grain key.
+2. **`MERGE` on the grain**: the redelivered SO-2 matches its existing row and changes nothing; a plain insert would have doubled 2 March.
+3. **Touched days, recomputed whole** (post 03, Q43 and Q45): the batch touched 1, 2 and 3 March, so exactly those days are deleted and rebuilt from the fact. 1 March now includes the late SO-0, which brings it to 65.
+4. **Reconciliation before commit** (post 02, Q36): the recomputed days must match the source. `recon` is empty here; if not, the pipeline would stop.
+5. **The watermark moves only when the reconciliation passed.** A failed run leaves it in place, so the next run reprocesses the same window, which is safe because every step above is idempotent.
+
+**Re-run:** the second run's window is empty, so nothing is merged, deleted or inserted, and the watermark stays. The build verified it.
+""",
+    check="Grain: fact at order line, Gold at day. Run twice: verified unchanged. NULL: an empty batch gives NULL `MAX(_loaded_at)`, absorbed by `COALESCE`; a line with a NULL `sale_date` would survive every day's delete, so reject it upstream.",
+)
+
+# ------------------------------------------------------------------ Q90
+
+q90 = Q(
+    id="q90",
+    title="From a change stream to 'what did we know at time T?'",
+    level="Expert",
+    pattern="Synthesis: temporal data",
+    prompt="""
+From a raw CDC feed (with a redelivered event), build account history and answer: what was the state of every account **as of 2025-03-01 13:00**, and as of **2025-03-03 12:00**? An account deleted before T must not appear; an account not yet created must not appear either.
+""",
+    setup="""
+CREATE TABLE bronze_cdc (op VARCHAR, account_id VARCHAR, balance DECIMAL(12,2), status VARCHAR, source_ts TIMESTAMP, seq_no INT, _ingested_at TIMESTAMP);
+INSERT INTO bronze_cdc VALUES
+    ('I', 'ACC-1', 100.00, 'OPEN',   TIMESTAMP '2025-03-01 09:00', 101, TIMESTAMP '2025-03-01 09:01'),
+    ('U', 'ACC-1', 100.00, 'FROZEN', TIMESTAMP '2025-03-01 12:00', 102, TIMESTAMP '2025-03-01 12:01'),
+    ('U', 'ACC-1', 100.00, 'FROZEN', TIMESTAMP '2025-03-01 12:00', 102, TIMESTAMP '2025-03-01 12:09'),
+    ('U', 'ACC-1',  80.00, 'OPEN',   TIMESTAMP '2025-03-02 08:00', 103, TIMESTAMP '2025-03-02 08:01'),
+    ('I', 'ACC-2', 500.00, 'OPEN',   TIMESTAMP '2025-03-01 10:00', 201, TIMESTAMP '2025-03-01 10:01'),
+    ('D', 'ACC-2',   NULL, NULL,     TIMESTAMP '2025-03-03 09:00', 202, TIMESTAMP '2025-03-03 09:01'),
+    ('I', 'ACC-3', 900.00, 'OPEN',   TIMESTAMP '2025-03-02 15:00', 301, TIMESTAMP '2025-03-02 15:01');
+""",
+    show=["bronze_cdc"],
+    answer="""
+-- 1 + 2. Dedup redeliveries, then build history from EVERY change (post 03, Q39 and Q42)
+CREATE OR REPLACE TABLE account_history AS
+WITH changes AS (
+    SELECT * FROM bronze_cdc
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY account_id, seq_no ORDER BY _ingested_at DESC) = 1
+),
+ordered AS (
+    SELECT *, LEAD(source_ts) OVER (PARTITION BY account_id ORDER BY seq_no) AS next_ts
+    FROM changes
+)
+SELECT account_id, balance, status,
+       source_ts                                      AS valid_from,
+       COALESCE(next_ts, TIMESTAMP '9999-12-31 00:00') AS valid_to
+FROM ordered
+WHERE op IN ('I', 'U');
+
+-- 3. The state of every account at time T: a half-open window test
+SELECT T AS as_of, h.account_id, h.balance, h.status
+FROM (VALUES (TIMESTAMP '2025-03-01 13:00'), (TIMESTAMP '2025-03-03 12:00')) AS ts(T)
+JOIN account_history h
+  ON h.valid_from <= T AND T < h.valid_to
+ORDER BY as_of, account_id;
+""",
+    hint="If each version is valid on `[valid_from, valid_to)` and the windows of an account never overlap, how many versions can contain a given instant?",
+    explain="""
+- **Steps 1 and 2** are post 03's pattern: deduplicate by `(account_id, seq_no)`, then turn every insert and update into a version that lasts until the account's next change. A delete ends the last version and opens nothing.
+- **The as-of predicate `valid_from <= T AND T < valid_to`** is the whole point. Because the windows are contiguous, non-overlapping and half-open, exactly one version per account contains any instant, so the query needs no `ROW_NUMBER` or `MAX`.
+- **At 13:00 on 1 March:** ACC-1 is in its FROZEN version (12:00 to 08:00 the next day) and ACC-2 is open. ACC-3 doesn't exist yet: its first version starts on 2 March, so no window contains T.
+- **At noon on 3 March:** ACC-1 is open with 80, ACC-3 exists, and ACC-2 is gone, because its last version ended at the delete (09:00) and no version covers noon.
+- **Half-open matters.** With `<=` on both ends, an instant exactly on a boundary (12:00 on 1 March) would match two versions. With `<` on the end, it matches only the one that starts there.
+
+This query answers audits ("what did the system say at month end?") and lets you rerun a downstream report exactly as it would have run at T.
+""",
+    steps=[
+        Step("History", "Every version with its half-open validity window; ACC-1's FROZEN version survives.",
+             run="CREATE OR REPLACE TABLE account_history AS WITH changes AS (SELECT * FROM bronze_cdc QUALIFY ROW_NUMBER() OVER (PARTITION BY account_id, seq_no ORDER BY _ingested_at DESC) = 1), ordered AS (SELECT *, LEAD(source_ts) OVER (PARTITION BY account_id ORDER BY seq_no) AS next_ts FROM changes) SELECT account_id, balance, status, source_ts AS valid_from, COALESCE(next_ts, TIMESTAMP '9999-12-31 00:00') AS valid_to FROM ordered WHERE op IN ('I', 'U')",
+             tables=[Show("account_history", "SELECT *, CASE WHEN valid_from <= TIMESTAMP '2025-03-01 13:00' AND TIMESTAMP '2025-03-01 13:00' < valid_to THEN 'hit' END AS _mark FROM account_history ORDER BY account_id, valid_from")]),
+        Step("As of T", "The versions whose window contains each T.",
+             tables=[Show("as of", "SELECT T AS as_of, h.account_id, h.balance, h.status, 'keep' AS _mark FROM (VALUES (TIMESTAMP '2025-03-01 13:00'), (TIMESTAMP '2025-03-03 12:00')) AS ts(T) JOIN account_history h ON h.valid_from <= T AND T < h.valid_to ORDER BY as_of, account_id")]),
+    ],
+    trace_alt="Two steps: the account history with the versions valid at 13:00 on 1 March highlighted; and the state as of each time, ACC-1 FROZEN and ACC-2 open on 1 March, and ACC-1 open with 80 and ACC-3 open on 3 March.",
+    check="Grain: one row per account per T. NULL: open versions end at a sentinel, never NULL, so the predicate needs no special case.",
+)
+
+# ------------------------------------------------------------------ Q91
+
+q91 = Q(
+    id="q91",
+    title="A metadata-driven quality framework",
+    level="Expert",
+    pattern="Synthesis: data quality",
+    prompt="""
+Design a small data-quality framework: a `dq_check` table that configures checks, and one SQL template per check type (uniqueness, not-null, referential, control total) that writes `(check_id, rows_failed, passed)` to `dq_results`. Run the four configured checks against `fact_sales` and decide whether the table may be published.
+""",
+    setup="""
+CREATE TABLE dim_product (product_sk INT);
+INSERT INTO dim_product VALUES (-1), (1), (2);
+CREATE TABLE fact_sales (order_id VARCHAR, line_no INT, product_sk INT, net_amount DECIMAL(10,2));
+INSERT INTO fact_sales VALUES ('SO-1', 1, 1, 50.00), ('SO-1', 2, 2, 300.00), ('SO-2', 1, 7, 20.00), ('SO-3', 1, 1, NULL);
+CREATE TABLE src_control (table_name VARCHAR, expected_total DECIMAL(12,2));
+INSERT INTO src_control VALUES ('fact_sales', 385.00);
+CREATE TABLE dq_check (check_id INT, table_name VARCHAR, check_type VARCHAR, target VARCHAR, params VARCHAR);
+INSERT INTO dq_check VALUES
+    (1, 'fact_sales', 'unique',        'order_id, line_no', NULL),
+    (2, 'fact_sales', 'not_null',      'net_amount',        NULL),
+    (3, 'fact_sales', 'referential',   'product_sk',        'dim_product.product_sk'),
+    (4, 'fact_sales', 'control_total', 'net_amount',        'tolerance=0.01');
+CREATE TABLE dq_results (check_id INT, run_id VARCHAR, rows_failed INT, passed BOOLEAN);
+""",
+    show=["fact_sales", "dq_check"],
+    answer="""
+-- Each template is rendered from a dq_check row by the runner (dbt, Airflow, a stored procedure);
+-- shown here already rendered for fact_sales.
+
+-- unique: (check 1)
+INSERT INTO dq_results
+SELECT 1, 'run-42', COUNT(*), COUNT(*) = 0
+FROM (SELECT order_id, line_no FROM fact_sales GROUP BY ALL HAVING COUNT(*) > 1);
+
+-- not_null: (check 2)
+INSERT INTO dq_results
+SELECT 2, 'run-42', COUNT(*), COUNT(*) = 0 FROM fact_sales WHERE net_amount IS NULL;
+
+-- referential: (check 3)
+INSERT INTO dq_results
+SELECT 3, 'run-42', COUNT(*), COUNT(*) = 0
+FROM fact_sales f WHERE NOT EXISTS (SELECT 1 FROM dim_product d WHERE d.product_sk = f.product_sk);
+
+-- control_total: (check 4) compares with a total the source system reported
+INSERT INTO dq_results
+SELECT 4, 'run-42',
+       CASE WHEN ABS(COALESCE(SUM(f.net_amount), 0) - c.expected_total) > 0.01 THEN 1 ELSE 0 END,
+       ABS(COALESCE(SUM(f.net_amount), 0) - c.expected_total) <= 0.01
+FROM fact_sales f, src_control c WHERE c.table_name = 'fact_sales'
+GROUP BY c.expected_total;
+
+-- The publish gate: every check for this run must have passed
+SELECT r.check_id, c.check_type, r.rows_failed, r.passed,
+       BOOL_AND(r.passed) OVER () AS may_publish
+FROM dq_results r JOIN dq_check c USING (check_id)
+WHERE r.run_id = 'run-42'
+ORDER BY r.check_id;
+""",
+    hint="Every template has the same shape: a query that counts the rows breaking the rule, and `passed = (count = 0)`. The gate is an `AND` over the results.",
+    explain="""
+- **Configuration, not code:** adding a check is an `INSERT` into `dq_check`. The runner renders the template for its `check_type` with the row's table, columns and parameters. This is how dbt tests and tools such as Great Expectations and Soda are organised underneath.
+- **One result contract:** every template returns a failing-row count and `passed = (rows_failed = 0)`, so heterogeneous checks report the same way and one query can gate on all of them.
+- **The four results here:** the grain is unique; one row has a NULL amount; one row points at product 7, which doesn't exist; and the total is 370 against the source's 385, because the NULL-amount row is missing from the sum. Three checks fail, so `may_publish` is FALSE.
+- **Checks catch each other's causes:** the control total fails *because* of the NULL amount. Reporting all failures together, rather than stopping at the first, makes the root cause easier to see.
+- **The gate:** `BOOL_AND(passed)` over the run's results. The pipeline publishes (swaps the staging table in) only when it is TRUE.
+""",
+    check="Grain: one result row per check per run. Run twice: inserting results again duplicates them for the same `run_id`; key `dq_results` on `(check_id, run_id)` and `MERGE` if runs can retry. NULL: the not-null check exists because `SUM` would otherwise skip NULLs silently, as the control total shows.",
+)
+
+# ------------------------------------------------------------------ Q92
+
+Q92_SETUP = """
+CREATE TABLE users (user_id VARCHAR, signup_ts TIMESTAMP);
+INSERT INTO users VALUES ('u1', TIMESTAMP '2025-03-03 09:00'), ('u2', TIMESTAMP '2025-03-04 09:00'), ('u3', TIMESTAMP '2025-03-10 09:00');
+CREATE TABLE raw_events (event_id VARCHAR, user_id VARCHAR, event_name VARCHAR, event_ts TIMESTAMP);
+INSERT INTO raw_events VALUES
+    ('e1', 'u1', 'view_item', TIMESTAMP '2025-03-03 09:05'), ('e2', 'u1', 'purchase', TIMESTAMP '2025-03-03 09:20'),
+    ('e2', 'u1', 'purchase', TIMESTAMP '2025-03-03 09:20'),
+    ('e3', 'u2', 'view_item', TIMESTAMP '2025-03-04 09:05'),
+    ('e4', 'u1', 'view_item', TIMESTAMP '2025-03-11 10:00'), ('e5', 'u1', 'view_item', TIMESTAMP '2025-03-11 13:00'),
+    ('e6', 'u3', 'view_item', TIMESTAMP '2025-03-10 09:05'), ('e7', 'u3', 'purchase', TIMESTAMP '2025-03-10 09:15'),
+    ('e8', 'u2', 'view_item', TIMESTAMP '2025-03-12 18:00');
+"""
+
+Q92_MODELS = """
+WITH events AS (                                             -- 1. dedup
+    SELECT * FROM raw_events
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY event_ts) = 1
+),
+flagged AS (                                                 -- 2. sessionize
+    SELECT *,
+           CASE WHEN event_ts - LAG(event_ts) OVER (PARTITION BY user_id ORDER BY event_ts, event_id)
+                     <= INTERVAL 30 MINUTE THEN 0 ELSE 1 END AS new_session
+    FROM events
+),
+sessions AS (
+    SELECT user_id,
+           SUM(new_session) OVER (PARTITION BY user_id ORDER BY event_ts, event_id
+                                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS session_no,
+           event_name, event_ts
+    FROM flagged
+),
+session_facts AS (                                           -- 3. one row per session
+    SELECT user_id, session_no,
+           CAST(date_trunc('week', MIN(event_ts)) AS DATE) AS week,
+           BOOL_OR(event_name = 'purchase')               AS purchased
+    FROM sessions GROUP BY user_id, session_no
+),
+weekly AS (                                                  -- 4. activity per week
+    SELECT week,
+           COUNT(DISTINCT user_id)                                   AS active_users,
+           COUNT(*)                                                  AS sessions,
+           ROUND(1.0 * COUNT(*) / COUNT(DISTINCT user_id), 2)        AS sessions_per_user,
+           ROUND(100.0 * AVG(CASE WHEN purchased THEN 1 ELSE 0 END), 1) AS purchase_session_pct
+    FROM session_facts GROUP BY week
+),
+cohorts AS (                                                 -- 5. week-1 retention per signup week
+    SELECT CAST(date_trunc('week', u.signup_ts) AS DATE) AS week,
+           COUNT(DISTINCT u.user_id) AS new_users,
+           COUNT(DISTINCT CASE WHEN f.week = CAST(date_trunc('week', u.signup_ts) AS DATE) + 7
+                               THEN u.user_id END) AS retained_wk1
+    FROM users u LEFT JOIN session_facts f USING (user_id)
+    GROUP BY 1
+)
+"""
+
+q92 = Q(
+    id="q92",
+    title="An executive growth mart, at the right grain",
+    level="Expert",
+    pattern="Synthesis: product analytics",
+    prompt="""
+From raw, at-least-once events, build `mart_growth` with **one row per week**: active users, sessions per user, the share of sessions with a purchase, new users and their week-1 retention. Every metric must belong to its own week. Show how the tempting version, metrics computed once and joined onto every week, goes wrong.
+""",
+    setup=Q92_SETUP,
+    show=["raw_events", "users"],
+    answer=Q92_MODELS.strip() + """
+SELECT w.week, w.active_users, w.sessions_per_user, w.purchase_session_pct,
+       COALESCE(c.new_users, 0)                                         AS new_users,
+       ROUND(100.0 * c.retained_wk1 / NULLIF(c.new_users, 0), 0)        AS wk1_retention_pct
+FROM weekly w
+LEFT JOIN cohorts c USING (week)                                        -- 6. join at the same grain
+ORDER BY w.week;
+""",
+    hint="Build the layers in order (dedup, sessions, sessions per week, cohorts per week), and make sure every input to the final join is already one row per week.",
+    explain="""
+The models form a small DAG, the same shape as a dbt project's staging, intermediate and mart layers:
+
+1. **Dedup** by `event_id` (post 04, Q56): every count downstream is safe from redelivery, which is where idempotency lives.
+2. **Sessionize** with a 30-minute gap (post 04, Q57).
+3. **One row per session**, with its week and whether it contained a purchase.
+4. **Weekly activity**: users, sessions per user and purchase share, grouped by the session's week.
+5. **Cohorts**: new users per signup week and how many had a session the following week (post 04, Q60).
+6. **Join at the same grain:** both inputs are one row per week, so the join can't fan out.
+
+**The bug this replaces:** the tempting version computes sessions per user and the purchase share **once, over all data**, and joins that single row onto every week (step 2). Both weeks then show 2.0 sessions per user and a 33.3% purchase share. In fact the week of 3 March had 1.0 sessions per user and half its sessions ended in a purchase, while the week of 10 March had 1.33 and a quarter. The global numbers describe neither week, and they would never move however either week changed. A mart row is only as meaningful as the grain of every value on it.
+
+The week of 10 March has no cohort week 1 yet in this data, so its retention is 0 out of 1; a real dashboard would blank cells that aren't observable yet.
+""",
+    steps=[
+        Step("Sessions", "Deduplicated events grouped into sessions, one row per session, with its week.",
+             tables=[Show("session_facts", Q92_MODELS + " SELECT *, CASE WHEN purchased THEN 'hit' END AS _mark FROM session_facts ORDER BY week, user_id, session_no")]),
+        Step("Global metrics (wrong)", "Sessions per user and purchase share computed once, then joined onto every week: every week shows the same values.",
+             tables=[Show("global metrics on every week", Q92_MODELS + ", global_metrics AS (SELECT ROUND(1.0 * COUNT(*) / COUNT(DISTINCT user_id), 2) AS sessions_per_user, ROUND(100.0 * AVG(CASE WHEN purchased THEN 1 ELSE 0 END), 1) AS purchase_session_pct FROM session_facts) SELECT w.week, w.active_users, g.sessions_per_user, g.purchase_session_pct, 'bad' AS _mark FROM weekly w CROSS JOIN global_metrics g ORDER BY w.week")]),
+        Step("Per week (right)", "Every metric computed within its own week.",
+             tables=[Show("mart_growth", Q92_MODELS + " SELECT w.week, w.active_users, w.sessions_per_user, w.purchase_session_pct, COALESCE(c.new_users, 0) AS new_users, ROUND(100.0 * c.retained_wk1 / NULLIF(c.new_users, 0), 0) AS wk1_retention_pct, 'keep' AS _mark FROM weekly w LEFT JOIN cohorts c USING (week) ORDER BY w.week")]),
+    ],
+    trace_alt="Three steps: the sessions with their weeks and purchases; the global-metrics version that repeats the same sessions per user and purchase share on every week; and the per-week mart with different values for each week.",
+    check="Grain: one row per week, and every column computed at that grain. Run twice: the models are pure queries over deduplicated input. NULL: a week with active users but no signups has no cohort row, so `new_users` is `COALESCE`d to 0 and retention is NULL, not 0%.",
+)
+
+
+INTRO = f"""
+The earlier posts drilled one pattern per question. These six capstones put them together, the way a real pipeline does: a warehouse loaded in dependency order, an SCD2 loader that handles every kind of change, an incremental pipeline that survives late data and retries, a temporal history you can query at any instant, a quality framework that gates publishing, and an executive mart whose every number sits at the right grain. Each runs end to end on its sample data.
+
+{series_callout(SLUG)}
+
+The capstones:
+
+- Q87: load a three-fact warehouse in the right order
+- Q88: one SCD2 loader for new, changed, unchanged, departed and returning customers
+- Q89: an incremental fact pipeline that survives late data
+- Q90: from a change stream to "what did we know at time T?"
+- Q91: a metadata-driven quality framework with a publish gate
+- Q92: an executive growth mart at the right grain
+
+## How to use this post
+
+{HOW_TO_READ.strip()} Try each capstone as a whiteboard exercise first: list the stages and the guard each stage needs before writing any SQL. Every answer ends with an **Engineer check**. The [first post](/blog/de-sql-foundations#how-the-answers-are-checked) explains how the answers were run and checked.
+
+![The six capstones arranged as one platform: raw feeds load conformed dimensions before facts (Q87); dimensions keep history with an SCD2 loader (Q88); facts load incrementally with a frozen window, a merge on the grain, touched-day recomputes and a reconciliation before the watermark moves (Q89); change streams become a temporal history queried with a half-open window (Q90); a quality framework gates every publish (Q91); and the executive mart joins per-week models at one grain (Q92)](/images/data-engineering/de-sql/de-sql-capstones/platform.svg)
+"""
+
+OUTRO = """
+## Summary
+
+The capstones share one idea: a pipeline is a chain of promises, and each stage carries the guard that keeps its promise under retries, late data and bad input. Dimensions load before facts, so keys resolve. An SCD2 loader asks two precise questions, which current rows are no longer exactly right and which customers have no current row, and those two cover every kind of change. An incremental run freezes its window, merges on the grain, recomputes only the days it touched, reconciles before committing, and moves the watermark last. History built from every change, with half-open windows, answers "what did we know at T?" with a single predicate. A quality framework is configuration plus templates that share one result shape, gated by an `AND`. And a mart is trustworthy only if every column on a row was computed at that row's grain.
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Load order** | Dimensions, Unknown member, transaction facts, snapshots | Every fact resolves its keys |
+| **Grain proof** | `COUNT(*) − COUNT(DISTINCT grain)` = 0, plus orphan and Unknown counts | The load's promises in one result |
+| **Two-question SCD2** | Close rows no longer exactly right; open rows for customers without a current one | Five cases, two statements, safe to re-run |
+| **Full-snapshot guard** | Check the snapshot is complete before closing missing rows | An incremental extract would close everyone |
+| **Commit last** | The watermark moves only after reconciliation passes | A failed run is retried, not skipped |
+| **Half-open as-of** | `valid_from <= T AND T < valid_to` | Exactly one version per entity at any instant |
+| **Quality as configuration** | One template per check type, one result contract | New checks without new code; one gate |
+| **Same-grain joins** | Every mart input is one row per output row | No metric is copied onto rows it doesn't describe |
+
+### Test yourself
+
+<details>
+<summary>Why must the Unknown member exist before any fact loads?</summary>
+
+A fact whose key doesn't resolve needs somewhere to point. Without the `-1` row, it either drops out of an inner join or carries a NULL key, and its revenue disappears from reports.
+
+</details>
+
+<details>
+<summary>An SCD2 loader closes every current row missing from the staging data. What goes wrong if the staging data is an incremental extract?</summary>
+
+Every customer who didn't change today is missing from it, so the loader closes their current versions. Closing missing rows is only valid for a complete snapshot; check completeness first.
+
+</details>
+
+<details>
+<summary>Why does Q89 move the watermark only after the reconciliation passes?</summary>
+
+If the reconciliation fails, the watermark stays put and the next run reprocesses the same window. That is safe because every step is idempotent, and it means a bad batch is retried instead of being skipped forever.
+
+</details>
+
+<details>
+<summary>Why is the as-of predicate `valid_from <= T AND T < valid_to` rather than `BETWEEN`?</summary>
+
+`BETWEEN` includes both ends, so an instant exactly on a boundary matches the version that ends there and the one that starts there. The half-open window matches exactly one.
+
+</details>
+
+<details>
+<summary>A mart computes one purchase rate over all data and joins it onto every week. What does the dashboard show?</summary>
+
+The same purchase rate on every week, whatever happened in it. Compute each metric per week and join inputs that are already at the week grain.
+
+</details>
+
+## Where to go from here
+
+The series covered the SQL. The next step is the same work at scale and on a schedule: dbt models and tests for the DAG and the quality templates, an orchestrator for the dependencies and retries, and Snowflake streams, tasks and dynamic tables for incremental work without hand-written watermarks. The patterns don't change; the tools take over the bookkeeping.
+
+## Sources
+
+- Kimball Group: [dimensional modeling techniques](https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/)
+- dbt: [incremental models](https://docs.getdbt.com/docs/build/incremental-models), [data tests](https://docs.getdbt.com/docs/build/data-tests), [snapshots](https://docs.getdbt.com/docs/build/snapshots)
+- Snowflake: [MERGE](https://docs.snowflake.com/en/sql-reference/sql/merge), [streams and tasks](https://docs.snowflake.com/en/user-guide/data-pipelines-intro), [dynamic tables](https://docs.snowflake.com/en/user-guide/dynamic-tables-about)
+- DuckDB: [MERGE INTO](https://duckdb.org/docs/current/sql/statements/merge_into)
+"""
+
+POST = Post(
+    slug=SLUG,
+    title="SQL for Data Engineers: Capstones, Whole Pipelines in SQL",
+    description="Part 6 of a data engineering SQL practice bank: six end-to-end capstones, from loading a warehouse in dependency order and a universal SCD2 loader to a late-data-safe incremental pipeline, point-in-time history, a metadata-driven quality gate and a growth mart at the right grain. Every answer is run on real sample data.",
+    order=6,
+    tags=["Data Engineering", "SQL", "Practice"],
+    intro=INTRO,
+    groups=[
+        Group("The capstones", "", [q87, q88, q89, q90, q91, q92]),
+    ],
+    outro=OUTRO,
+)
