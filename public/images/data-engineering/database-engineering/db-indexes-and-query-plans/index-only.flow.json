@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "index",
+      "to": "visibility map",
+      "type": "request"
+    },
+    {
+      "from": "visibility map",
+      "to": "answer from the index",
+      "type": "data"
+    },
+    {
+      "from": "visibility map",
+      "to": "visit the heap",
+      "type": "metadata"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "requests",
+      "to": "queue",
+      "type": "request"
+    },
+    {
+      "from": "queue",
+      "to": "pool",
+      "type": "request"
+    },
+    {
+      "from": "pool",
+      "to": "database",
+      "type": "data"
+    }
+  ]
+}

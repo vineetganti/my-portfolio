@@ -1,0 +1,269 @@
+---
+title: "Partitioning: One Logical Table, Many Physical Ones"
+description: "How partitioning splits a big table behind a single name, what pruning really buys you, why the course's demo didn't get faster, and the jobs where partitions win easily: cheap scans and instant deletes. Run on real Postgres, with a pruning simulator."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 6
+tags: ["Databases", "PostgreSQL", "Partitioning"]
+---
+
+The course has a line I like: the quickest way to query a billion rows is to avoid querying a billion rows. [Post 4](/blog/db-bloom-filters-and-uuids#working-with-a-billion-row-table) put partitioning on the ladder for very large tables. This post builds it on real Postgres, and tests when it helps.
+
+The honest result matches the course's own experience. For a query that an index already answers, partitioning changed nothing. Its real wins are elsewhere, and they're large.
+
+<Callout type="note" title="TL;DR">
+
+- **Partitioning** splits one table into smaller tables behind one name. The parent holds no rows, and the database routes queries and inserts for you.
+- Split **horizontally** by rows (range, list or hash) or **vertically** by columns.
+- **Pruning** skips partitions that can't match. Check it in `EXPLAIN`. With `enable_partition_pruning` off, or with a filter that isn't on the partition key, every partition is scanned.
+- With a good index, partitioning didn't reduce the pages a query read here: 46 either way. Without one, a range query read 4,420 pages instead of 22,124.
+- Removing old data is where it shines: dropping a partition took 46 ms, against 407 ms to delete the same rows, with nothing left to vacuum.
+- Partition bounds have an exclusive upper end, and a `NULL` key needs a default partition.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. **06 · Partitioning** (this post): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## What partitioning is
+
+Take a million-row `customers` table, and split it into five tables of 200,000 rows. A query for `id = 700001` checks the partition bounds, goes to the one partition that can hold that id, and works with a fifth of the data and a fifth of the index.
+
+![A million-row customers table split into five partitions of 200,000 rows each. The parent table holds no data. A query for id 700001 reads the metadata, goes straight to the partition from 600,000 to 800,000, and works with 200,000 rows and that partition's own index.](/images/data-engineering/database-engineering/db-partitioning/one-table-many.svg)
+
+The parent table holds no rows itself: it's a name and a set of rules. Clients don't change at all.
+
+### Horizontal or vertical
+
+![Two ways to split a table. Horizontal partitioning splits by rows, so each piece has the same columns and fewer rows. Vertical partitioning splits by columns, so a large rarely-used blob column moves to its own storage while the small hot columns stay compact.](/images/data-engineering/database-engineering/db-partitioning/horizontal-vertical.svg)
+
+Horizontal is what people usually mean. Vertical matters for wide tables: a big, rarely read column moves out, so that more of the hot columns fit in each page. Postgres does a version of this automatically with [TOAST](/blog/db-how-data-sits-on-disk#how-wide-can-a-row-be).
+
+### Three ways to choose a partition
+
+![Three ways to choose a partition. By range, for example dates or ids. By list, for example a state or a country. By hash, where a hash of the key picks the partition and spreads rows evenly.](/images/data-engineering/database-engineering/db-partitioning/three-kinds.svg)
+
+### Partitioning isn't sharding
+
+![Partitioning against sharding. Partitions are tables inside one database on one server, so the client sends one query and the database routes it, and joins and transactions still work. Shards are the same table on different servers, so the client or a proxy must pick the server, and joins and transactions across them stop working.](/images/data-engineering/database-engineering/db-partitioning/partition-vs-shard.svg)
+
+## Building it
+
+The course's demo, on real Postgres, with five million rows where it used ten. First the plain table and its baseline:
+
+<Ran src="partitioning/baseline" title="the unpartitioned table" />
+
+Now the partitioned version: a parent with `PARTITION BY RANGE (g)`, and four partitions attached to it. Insert through the parent and each row is routed automatically:
+
+```sql
+CREATE TABLE grades_parts (id serial NOT NULL, g int NOT NULL) PARTITION BY RANGE (g);
+CREATE TABLE g0035 (LIKE grades_parts INCLUDING INDEXES);
+ALTER TABLE grades_parts ATTACH PARTITION g0035 FOR VALUES FROM (0) TO (35);
+-- and the same for 35 to 60, 60 to 80, 80 to 100
+```
+
+<Ran src="partitioning/routing" />
+
+Look at the `max` column: the partition `FROM (0) TO (35)` tops out at 34. The [docs](https://www.postgresql.org/docs/current/ddl-partitioning.html) say range bounds are inclusive at the lower end and exclusive at the upper, and the course says it learned that the hard way.
+
+Since Postgres 11 you create an index once, on the parent, and it appears on every partition:
+
+<Ran src="partitioning/index-on-parent" />
+
+The first partition's index is 12 MB, against 33 MB for the whole table's.
+
+Try it yourself, on a smaller table:
+
+<PartitionPruner />
+
+<PgPlayground src="partitioning/parts" />
+
+## Does it make queries faster?
+
+Here's the same query on the partitioned table, then with pruning turned off:
+
+<Ran src="partitioning/pruning" />
+
+With pruning on, the plan touches only `g0035`. With it off, there's an `Append` over all four partitions. Always check this in `EXPLAIN`: without pruning, partitioning only adds work.
+
+Now compare with the baseline. The plain table read **46 pages** for this query, and so did the partitioned one. Timing differences here are just caching. An index already narrows the search to the same rows, so splitting the table doesn't reduce them further.
+
+The course hit the same wall, and its explanation is that the benefit shows up when a big index no longer fits in memory, which small per-partition indexes avoid. That makes sense given [post 4's cliff](/blog/db-bloom-filters-and-uuids#the-race), though I didn't run a test big enough to show it.
+
+Where I could see a clear win was a query with no useful index. The same range, with no index anywhere:
+
+<Ran src="partitioning/no-index-win" />
+
+22,124 pages against 4,420, and 180 ms against 56 ms. The partition is a smaller table, so a sequential scan over it just reads less. That's also the course's point about the planner: choosing between index and table scan gets simpler when the table is small.
+
+## The easy wins
+
+### Removing old data
+
+Time-partitioned tables often only ever need to drop their oldest range. This is the case where partitioning has no real competition:
+
+<Ran src="partitioning/drop-old" title="removing a year of data" />
+
+The `DELETE` took 407 ms and left half a million dead rows for vacuum to clean up. Detaching and dropping took 46 ms and left nothing: a file was removed. The gap grows with the data, because `DELETE` works row by row.
+
+### Loading and archiving
+
+- **Bulk loading.** Load into a standalone table, then `ATTACH` it, so the load doesn't touch the live table.
+- **Archiving.** Move cold partitions to a cheap tablespace, and keep hot ones on fast disks.
+
+## What it costs
+
+**Queries that don't filter on the key.** If the database can't rule anything out, it searches every partition:
+
+<Ran src="partitioning/bad-query" />
+
+Partition by what your queries filter on, or you've made them slower.
+
+**Rows that change partition.** An update to the partition key moves the row. It's a delete and an insert into another table:
+
+<Ran src="partitioning/row-move" />
+
+The row moved from `g_low` to `g_high`, automatically. The course warns these updates are slow. In this test, moving 100,000 rows took 145 ms, against 129 ms for updating them in place, so the extra cost was small on a table with no indexes. Postgres writes a new row version for any update anyway. With indexes it would be higher. Either way, choose a key that rarely changes.
+
+**Schema changes** need the database to support them across partitions, and more objects mean more to manage.
+
+**A `NULL` key.** My notes say partition columns must be `NOT NULL`, but that's the course's demo rather than a rule:
+
+<Ran src="partitioning/null-key" />
+
+A `NULL` doesn't fall in any range, so the insert fails, unless you add a `DEFAULT` partition to catch it. That partition also catches anything else outside the ranges, which can hide bad data.
+
+## Automating partitions
+
+A billion customers at 10 million per partition is 100 partitions, which is too many to write by hand. The course uses a Node script. Any language works, including Postgres's own:
+
+<Ran src="partitioning/automation" />
+
+The planner still prunes to one of the hundred partitions.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes say a 4-byte integer supports about 4 billion values. Postgres's `int` is signed, so its limit is about 2.1 billion. The error is easy to meet, on an id column that's growing:
+
+</Callout>
+
+<Ran src="partitioning/int-limit" />
+
+## Things that can trip you up
+
+- **Forgetting to check pruning.** A query can look fine and scan every partition. Read the plan.
+- **A non-constant filter.** Pruning needs a value it can match against bounds. A function on the key can defeat it.
+- **Too many partitions.** Planning takes longer as partitions grow, as the planning buffers above suggest.
+- **Unique constraints must include the partition key.** Each partition enforces its own, so global uniqueness on another column isn't possible.
+- **Inclusive and exclusive bounds.** `FROM (0) TO (35)` excludes 35.
+- **A `DEFAULT` partition slows attaching.** A new partition has to be checked against it.
+- **Partitioning isn't a substitute for an index.** Each partition still needs one.
+
+## Reproduce this yourself
+
+1. ✅ In any Postgres 18:
+   ```sql
+   CREATE TABLE grades_org (id serial NOT NULL, g int NOT NULL);
+   INSERT INTO grades_org (g) SELECT floor(random() * 100) FROM generate_series(1, 5000000);
+   ```
+   Load before creating indexes, as the course advises: it's much faster.
+2. ✅ Create the parent and partitions as shown, then `INSERT INTO grades_parts SELECT * FROM grades_org;`.
+3. ✅ Check where rows went with `SELECT tableoid::regclass, count(*) FROM grades_parts GROUP BY 1;`.
+4. ✅ Compare `EXPLAIN (ANALYZE, BUFFERS)` on both tables, and with `SET enable_partition_pruning = off;`.
+5. 📘 For MySQL's take, including the CSV engine trick the course mentions, see its [partitioning chapter](https://dev.mysql.com/doc/refman/8.4/en/partitioning.html). I didn't run it.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Partition** | One physical table behind a partitioned parent |
+| **Partition key** | The column that decides where a row goes |
+| **Horizontal, vertical** | Splitting by rows, or by columns |
+| **Range, list, hash** | Three ways of mapping keys to partitions |
+| **Pruning** | Skipping partitions that can't match |
+| **Default partition** | Catches rows that fit no other partition |
+| **Attach, detach** | Adding an existing table as a partition, or removing one |
+
+## Summary
+
+Partitioning puts many smaller tables behind one name, and the database routes rows and queries, so clients don't change. Pruning is what makes it pay, and only filters on the partition key can prune. Here, with a good index, it read the same pages as a plain table. It clearly helped scans with no index, and it turned deleting a year of data into dropping a file. It costs you on queries off the key, on rows that change partition, and in more objects to manage.
+
+![A map of this post in three columns. What it is: one logical table split into smaller ones, by range, list or hash, routed by the database. When it helps: pruning, a sequential scan over less data, dropping old data fast. What it costs: queries off the key scan everything, updates can move rows, and more objects to manage.](/images/data-engineering/database-engineering/db-partitioning/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Parent table** | Holds rules, not rows | Clients keep using one name |
+| **Automatic routing** | Inserts go to the right partition | No application changes |
+| **Exclusive upper bound** | `TO (35)` stops at 34 | A classic off-by-one |
+| **Index on the parent** | Creates one per partition | One statement, not many |
+| **Pruning** | Rules partitions out at planning | Without it, partitioning hurts |
+| **Off-key query** | Scans every partition | Pick the key by your queries |
+| **Drop a partition** | Removes a file, not rows | Near-instant data retention |
+| **Row movement** | Key updates delete and insert | Pick a stable key |
+
+### Test yourself
+
+<details>
+<summary>A query with a good index read the same pages on a partitioned table as on a plain one. Why, and when would partitioning still help?</summary>
+
+The index already narrowed the search to the same rows, so the smaller partition gave nothing extra. It helps when there's no selective index, since a scan covers less, when a whole index no longer fits in memory, and when dropping old data.
+
+</details>
+
+<details>
+<summary>A table is partitioned by grade. Why is SELECT * FROM t WHERE id = 7 a problem?</summary>
+
+The filter isn't on the partition key, so pruning can't exclude anything, and every partition has to be searched. That can be slower than one table.
+
+</details>
+
+<details>
+<summary>Why is dropping a partition so much faster than DELETE?</summary>
+
+`DELETE` marks each row dead one by one, and leaves them for vacuum. Dropping a partition removes its whole file, regardless of how many rows it held.
+
+</details>
+
+<details>
+<summary>An insert into a range-partitioned table fails with "no partition found for row". What are two causes?</summary>
+
+The value is outside every range, for example 100 when the last range ends at `TO (100)`, or it's `NULL`. A `DEFAULT` partition would catch both.
+
+</details>
+
+## Open questions and gaps
+
+- I didn't reproduce the course's main claim about memory: small per-partition indexes winning when one big index can't fit. That needs a larger table or a memory-limited server.
+- The row-move test used a table without indexes, so it understates the cost.
+- 📘 Vertical partitioning, MySQL's partitioning and the CSV storage engine are described, not run.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- PostgreSQL docs: [Table Partitioning](https://www.postgresql.org/docs/current/ddl-partitioning.html)
+- MySQL 8.4 docs: [Partitioning](https://dev.mysql.com/doc/refman/8.4/en/partitioning.html)

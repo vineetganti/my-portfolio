@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "from": "clients",
+      "to": "load balancer",
+      "type": "request"
+    },
+    {
+      "from": "load balancer",
+      "to": "server 1",
+      "type": "request"
+    },
+    {
+      "from": "server 1",
+      "to": "queue",
+      "type": "data"
+    },
+    {
+      "from": "queue",
+      "to": "database",
+      "type": "data"
+    }
+  ]
+}

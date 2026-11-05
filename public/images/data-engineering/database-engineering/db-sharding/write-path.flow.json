@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {
+      "from": "client",
+      "to": "server",
+      "type": "request"
+    },
+    {
+      "from": "server",
+      "to": "hash ring",
+      "type": "metadata"
+    },
+    {
+      "from": "hash ring",
+      "to": "shard 2",
+      "label": "INSERT",
+      "type": "data"
+    }
+  ]
+}

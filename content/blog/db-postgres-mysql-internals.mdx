@@ -1,0 +1,352 @@
+---
+title: "Inside Postgres and MySQL: Processes, WAL, MVCC and Why Uber Moved"
+description: "The last post of the series opens up the servers: a process per connection, what really happens at a crash, how heap-only tuples save index writes, why one update can touch every index, the NULL traps, what SELECT * costs, and two-phase commit."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 14
+tags: ["Databases", "PostgreSQL", "MySQL", "Internals", "WAL"]
+---
+
+This last post gathers what the rest of the series has been pointing at. It covers how the two servers are built, what a log is really for, and the design choice behind one of the most discussed database migrations ever: Uber's move from Postgres to MySQL.
+
+The course's final section is a set of articles and talks, so this post is a mix. Most of it I could run. By the end, one update measured here wrote nearly four times as much log just because the table had five more indexes.
+
+<Callout type="note" title="TL;DR">
+
+- Postgres uses **a process per connection** with shared memory, plus background processes. MySQL uses **threads** in one process.
+- The **WAL** makes commits durable, and **checkpoints** bound how much must be replayed. The first write to a page after a checkpoint logs the whole page: the same update wrote 5,758 kB just after a checkpoint and 231 kB the next time.
+- **Redo** replays changes, and **undo** reverses them. InnoDB has both. Postgres has no undo log, because old versions stay in the table, so `VACUUM` is the price.
+- Every Postgres index points at a physical row, so an update can touch all of them. **HOT** avoids that when no indexed column changed and the page has room. With five indexes, 50,000 updates wrote 59 MB of WAL rather than 15 MB.
+- That's the root of **Uber's** complaint, along with replication volume and upgrades. It's a real trade-off, not a flaw.
+- `NOT IN` with a `NULL` in the list returns nothing. `SELECT *` took 297 ms and 47 MB where naming the column took 5 ms.
+- **Two-phase commit** makes commits atomic across databases, and a prepared transaction survives a crash, still holding its locks.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. **14 · Inside Postgres and MySQL** (this post): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## Processes or threads
+
+A database server has to serve many clients at once. The two engines answer this differently.
+
+![Postgres's process model. The postmaster listens and forks one backend process per client connection. All backends share memory, including shared buffers and the WAL buffers. Background processes write pages, write the log, checkpoint and vacuum.](/images/data-engineering/database-engineering/db-postgres-mysql-internals/process-model.svg)
+
+Here's what's actually running:
+
+<Ran src="internals/processes" />
+
+- The **postmaster** listens for connections, and forks a **backend** for each.
+- **Shared buffers** hold pages and are shared by all backends, as are the WAL buffers.
+- The **background writer** trickles dirty pages out, so backends rarely have to.
+- The **WAL writer** flushes the log.
+- The **checkpointer** forces pages to disk and marks a safe point.
+- The **autovacuum launcher** starts workers to clean up.
+- **I/O workers** are new in Postgres 18, as `io_method = worker` shows.
+
+The course's article gives the reasoning for processes: isolation, and Postgres's long history. A crash in one process doesn't scribble on another's memory, though a backend crash does restart the others, to protect shared memory. The cost is that a process is heavier than a thread, which is why [connection pools](/blog/db-locks-and-connection-pools#connection-pooling) matter so much on Postgres. Note also that settings such as `work_mem` apply **per process**, so they multiply with connections.
+
+MySQL's output above shows the alternative: one `mysqld` process, with dozens of threads.
+
+## The log, in detail
+
+[Post 1](/blog/db-acid-transactions#durability-committed-means-safe) introduced the write-ahead log. Here it is at the record level, using `pg_walinspect`:
+
+<Ran src="internals/wal-records" />
+
+An insert, an update and a commit are three small records, 164 bytes in all, and the commit record is what makes the transaction count. That's also exactly what [replication](/blog/db-replication-and-cap) ships to a standby. Read your own:
+
+<PgPlayground src="internals/wal" />
+
+### Crash recovery
+
+Here's a working model. Change pages, commit, checkpoint, and crash at any moment. Try crashing with an uncommitted change, then again just after `COMMIT`:
+
+<WalLab />
+
+Two things to see. A commit changes the log and leaves the data files alone. And after a crash, recovery replays everything since the last checkpoint, including uncommitted work, which then stays invisible because no commit record exists. That's the design: no undo is needed in Postgres, only redo.
+
+### Checkpoints, and why they spike
+
+A **checkpoint** writes all dirty pages to the data files and records a position in the log. Recovery can start there, so checkpoints bound recovery time. The course notes that they're I/O heavy, and can hit at awkward times.
+
+There's a hidden cost as well. A page half-written at the moment of a crash can't be repaired from a small log record. So the first change to each page after a checkpoint logs the **whole page**. That's [`full_page_writes`](https://www.postgresql.org/docs/current/runtime-config-wal.html):
+
+<Ran src="internals/full-page-writes" />
+
+The same update wrote 5,758 kB right after a checkpoint, and 231 kB the second time, which is 25 times less. Frequent checkpoints mean more full pages, and that's a direct trade against recovery time.
+
+### Redo and undo
+
+![Redo and undo. Redo records describe how to reapply a change, and rebuild committed work after a crash. Undo records describe how to reverse a change, and provide old versions for readers and rollback. InnoDB has both. Postgres has only redo, because old row versions stay in the table itself.](/images/data-engineering/database-engineering/db-postgres-mysql-internals/redo-undo.svg)
+
+InnoDB updates a row in place, and writes the old value to an **undo log**, kept in undo tablespaces:
+
+<Ran src="internals/innodb-undo" />
+
+A reader with an old snapshot follows undo records back to the version it needs, as the [docs](https://dev.mysql.com/doc/refman/8.4/en/innodb-multi-versioning.html) describe. The latest version is always in the table, and the history is elsewhere. Postgres does the reverse: new versions go in the table, and old ones stay there. So in Postgres a rollback is instant, and `VACUUM` is the bill.
+
+The course mentions a real InnoDB cost here: a long transaction forces readers to walk further through undo records, which is why `history list length` is worth monitoring.
+
+## MVCC's bill
+
+Every Postgres update leaves a dead version behind. Here's what that does to a table:
+
+<Ran src="internals/bloat" />
+
+Three updates took the table from 3.5 MB to 14 MB. Plain `VACUUM` made the space reusable, and didn't shrink the file, as [post 3](/blog/db-indexes-and-query-plans#why-isnt-my-index-being-used) said. Only `VACUUM FULL` did, with an exclusive lock.
+
+And vacuum can only remove what no snapshot needs. One open transaction stops all of it:
+
+<TxnTheater src="internals/long-transaction" />
+
+That's why a forgotten transaction, or `idle in transaction`, is such a problem on a busy Postgres.
+
+## One update, every index
+
+This is where the design differences become a story. Recall [what the leaves hold](/blog/db-btrees-and-bplus-trees#what-the-leaves-point-to): Postgres indexes hold a physical address, and InnoDB's secondary indexes hold the primary key.
+
+![Why updates cost Postgres more in Uber's account. In Postgres an update writes a new row version at a new address, so every index needs a new entry, unless the update is heap-only. In InnoDB secondary indexes hold the primary key, so an update to a column they don't cover touches only the primary key tree.](/images/data-engineering/database-engineering/db-postgres-mysql-internals/uber-update.svg)
+
+A new row version has a new address. Taken at face value, every index on the table then needs a new entry, even for columns that didn't change. Postgres has an optimisation for that: **heap-only tuples**.
+
+### HOT
+
+If an update [changes no indexed column, and the new version fits on the same page](https://www.postgresql.org/docs/current/storage-hot.html), the indexes aren't touched. The old version just links to the new one, inside the page. Here it is on real pages, for one row and its primary key entry:
+
+<HotView src="internals/hot-steps" />
+
+In the HOT steps the index keeps its single entry, still pointing at line pointer 1, and the chain grows inside the page. As soon as an indexed column changes, the primary key index gets a second entry, although `id` never changed. That's the behaviour Uber objected to.
+
+Here's the size of the effect. I updated 50,000 rows, then added indexes one at a time:
+
+<LabChart src="internals/write-amp" />
+
+Updating an unindexed column stayed at 15 MB, however many indexes there were. Updating an indexed one grew with **every** index on the table, reaching 59 MB, because each index needed a new entry. That's **write amplification**: one logical change, many physical writes.
+
+HOT also needs room on the page, which is what `fillfactor` reserves:
+
+<Ran src="internals/hot-counters" />
+
+Of 10,000 updates to an unindexed column, only 4,368 were HOT. A bulk update quickly fills the free space in a page, and then rows have to move. Try it:
+
+<PgPlayground src="internals/hot" />
+
+### Why Uber moved
+
+In 2016 Uber [wrote about leaving Postgres](https://www.uber.com/blog/postgres-to-mysql-migration/), and the course goes through it point by point. Their complaints, as the course presents them:
+
+| Complaint | The mechanism |
+| --- | --- |
+| Inefficient writes | Updates touch all indexes, as above |
+| Inefficient replication | Physical WAL carries every one of those changes across data centres |
+| Table corruption | A bug they hit during a version upgrade |
+| Poor replica MVCC | Long reads on a replica conflict with replay |
+| Difficult upgrades | Physical replication tied replicas to a major version |
+
+InnoDB avoids the first two, because its secondary indexes don't care where a row lives, and its logical replication ships smaller changes.
+
+The course's take is measured, and I agree with it: that's a trade-off for one workload, not a verdict. Uber had many indexes and heavy updates to indexed columns. Reads go the other way, since a Postgres index reaches the row directly, and InnoDB needs a second tree walk. The course also criticises part of the original post, where a long transaction caused by application code was blamed on the database, and it points out that replication and upgrades have changed a lot since: logical replication arrived in Postgres 10.
+
+📘 I couldn't fetch Uber's post from this machine, so that table follows the course's walkthrough, not the post itself.
+
+### Write amplification all the way down
+
+The course's talk on this follows a single update through every layer. One API call becomes a row version, index entries and WAL records. A database page write becomes file system blocks. On an SSD, an update marks old pages stale and writes new ones, and garbage collection later moves live pages to free a block, which is more writing that nobody asked for. Each layer multiplies the one above, which is why [log-structured designs](/blog/db-engines-and-cursors#lsm-trees) exist.
+
+## NULLs
+
+`NULL` means "no value", and the database has to store that fact somewhere. Postgres uses a **null bitmap** in the row header, and only when the row has a null:
+
+<Ran src="internals/nulls-size" />
+
+The row with eight nulls is 36 bytes against 60: nulls take no space in the data. The header grew from 24 to 32 bytes to fit the bitmap, so a row with nulls has a small fixed cost that the saved columns repay.
+
+The trouble is the logic. `NULL` isn't a value, it's unknown, so comparing with it gives unknown:
+
+<Ran src="internals/nulls-logic" />
+
+- `count(column)` skips nulls, and `count(*)` doesn't.
+- `= NULL` matches nothing. Use `IS NULL`.
+- **`NOT IN` with a `NULL` in the list returns no rows at all**, because "is 2 unequal to unknown?" is unknown. It's the classic trap, and it silently returns nothing.
+
+Predict these:
+
+<PgPlayground src="internals/nulls" />
+
+Indexes are a design choice too. Postgres stores nulls in B-tree indexes. If you never search for them and most rows are null, a partial index can be far smaller:
+
+<Ran src="internals/nulls-index" />
+
+6,944 kB against 240 kB, for an index on a column that's 99% null. The planner still chose a scan for the first query, because almost every row matches.
+
+## What SELECT * costs
+
+The course's article on `SELECT *` starts from a real incident, and lists the costs: no index-only scan, reading out-of-line columns, serialising everything, sending it over the network, and decoding it at the client. I built a table with a wide column and measured:
+
+<Ran src="internals/select-star" />
+
+4.6 ms against 296.5 ms for the same rows, with 17 pages read against 753. The plan changed from an index-only scan to a bitmap scan, and the large values had to be [fetched from TOAST](/blog/db-how-data-sits-on-disk#how-wide-can-a-row-be) and sent across. If your table has a few small columns, the difference is small, as the article says. The danger is that a table can gain a big column later, and every `SELECT *` silently gets slower.
+
+## Distributed transactions
+
+[Post 7](/blog/db-sharding#transactions) lost 100 by committing on two shards with nothing connecting them. The course's talk on this starts with a monolith, where one transaction handles an order and a payment. Split those into services, and that guarantee is gone. There are three kinds of answer.
+
+**Two-phase commit** adds a coordinator:
+
+![Two-phase commit across two databases. In phase one the coordinator asks each to prepare, and each writes its changes durably and votes yes. In phase two the coordinator tells both to commit. If the coordinator dies between the phases, the participants hold their locks until it returns.](/images/data-engineering/database-engineering/db-postgres-mysql-internals/two-phase-commit.svg)
+
+Postgres exposes the first phase as `PREPARE TRANSACTION`. It has to be enabled with `max_prepared_transactions`:
+
+<Ran src="internals/two-phase" title="a prepared transaction through a crash" />
+
+The promise is strong: the prepared transaction survived `SIGKILL`, ready to commit. So is the cost: it kept its lock through the crash, and it'll keep it until someone decides. The [docs](https://www.postgresql.org/docs/current/sql-prepare-transaction.html) warn that this isn't for applications, only for a real transaction manager, because a forgotten prepared transaction blocks vacuum and holds its locks forever.
+
+**Sagas** give up atomicity. Each service commits locally, and a failure triggers compensating actions, such as a refund. Events usually travel through a broker like Kafka. That brings eventual consistency, and a lot of failure cases to design.
+
+**The third answer** is the course's favourite, and it's a good one to end on: go back to one database, if you can. Much of this difficulty is self-inflicted by splitting things up too soon.
+
+## Should databases use QUIC?
+
+🎓 One talk asks whether database protocols should move to QUIC. Today a client opens many TCP connections, one query at a time on each, because responses can't be interleaved. HTTP/2 solved this for the web with streams over one connection, and it suffers head-of-line blocking from TCP, which QUIC removes with independent streams. In principle a database could run many concurrent queries over one connection, and a lost packet would delay just one of them. It's an idea rather than something shipping, so I've nothing to run. The course's conclusion is that the case is interesting, and pools work well enough today.
+
+## Things that can trip you up
+
+- **`work_mem` is per operation, per process.** It multiplies with connections.
+- **Checkpoints too often** mean more full-page writes. Too rarely means longer recovery.
+- **`idle in transaction` stops vacuum** and lets tables bloat.
+- **An index on a frequently updated column** defeats HOT for that table's updates.
+- **`fillfactor = 100`** leaves no room for HOT.
+- **`NOT IN` with a nullable subquery.** Use `NOT EXISTS`.
+- **`SELECT *` in application code** gets slower when someone adds a column.
+- **Prepared transactions left behind.** Check `pg_prepared_xacts`.
+
+## Reproduce this yourself
+
+1. ✅ See the processes with `SELECT backend_type, count(*) FROM pg_stat_activity GROUP BY 1;`.
+2. ✅ Read WAL records: `CREATE EXTENSION pg_walinspect;`, note `pg_current_wal_insert_lsn()`, run something, then query `pg_get_wal_records_info` between the two positions.
+3. ✅ For write amplification, compare the WAL position before and after an `UPDATE`, as you add indexes, with a `CHECKPOINT` first.
+4. ✅ Count HOT updates with `n_tup_hot_upd` in `pg_stat_user_tables`. `SELECT pg_stat_force_next_flush();` makes the numbers appear at once.
+5. ✅ For two-phase commit, start Postgres with `-c max_prepared_transactions=10`, then follow the output above.
+6. 📘 For InnoDB's undo history, look at `trx_rseg_history_len` in `information_schema.innodb_metrics` during a long transaction. I read the metric, but didn't run a long transaction against it.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Postmaster** | The Postgres process that accepts connections and starts backends |
+| **Backend** | The process serving one connection |
+| **Shared buffers** | Pages in shared memory |
+| **Checkpoint** | Flushing dirty pages and recording a safe point in the log |
+| **Full-page write** | Logging a whole page on its first change after a checkpoint |
+| **Redo, undo** | Records to repeat a change, or reverse one |
+| **Bloat** | Space taken by dead row versions |
+| **HOT** | An update that stays on its page and touches no index |
+| **Fillfactor** | How full to pack pages, leaving room for updates |
+| **Write amplification** | One logical change causing many physical writes |
+| **Null bitmap** | Bits in a row header marking which columns are null |
+| **Two-phase commit** | Prepare everywhere, then commit everywhere |
+| **Saga** | Local commits with compensating actions on failure |
+
+## Summary
+
+Postgres gives each connection a process, and shares pages through memory, with background processes handling the log, checkpoints and cleanup. The log is what makes a crash survivable, and its cost shows up in full-page writes after a checkpoint. Keeping old versions in the table makes rollback free and gives `VACUUM` real work, and pointing indexes at physical rows makes reads direct and updates wide, which HOT softens and Uber's workload hit head on. InnoDB makes the opposite choices at each point. NULLs and `SELECT *` are everyday costs of the same machinery. Across databases, two-phase commit keeps atomicity at the price of held locks, and the simplest fix may be not splitting the data in the first place.
+
+![A map of this post in four columns. Processes: a process per connection, shared memory, background workers. Durability: WAL, checkpoints, redo and undo. MVCC: row versions, HOT, vacuum and bloat. Everyday costs: NULLs, SELECT star, and transactions across databases.](/images/data-engineering/database-engineering/db-postgres-mysql-internals/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Process per connection** | Isolation, at a memory cost | Why pools matter |
+| **Checkpoint** | Bounds recovery, causes I/O | A tunable trade-off |
+| **Full-page writes** | Protect against torn pages | Why WAL spikes after a checkpoint |
+| **No undo log** | Old versions stay in the table | Free rollback, and bloat |
+| **Vacuum horizon** | The oldest snapshot limits cleanup | One long transaction hurts everyone |
+| **HOT** | Same page, no index change | The main defence against write amplification |
+| **Write amplification** | Each index adds writes | The heart of Uber's complaint |
+| **`NOT IN` and `NULL`** | Unknown poisons the result | Returns no rows, silently |
+| **`SELECT *`** | Reads and sends everything | Loses index-only scans |
+| **Prepared transaction** | Survives a crash, keeps its locks | Why 2PC needs a real coordinator |
+
+### Test yourself
+
+<details>
+<summary>The same UPDATE wrote 5,758 kB of WAL right after a checkpoint, and 231 kB when repeated. Why?</summary>
+
+After a checkpoint the first change to each page logs the whole page, to protect against torn pages. The second run touched pages already logged, so it only wrote small records.
+
+</details>
+
+<details>
+<summary>After a crash, Postgres replays uncommitted changes too. Why doesn't that show wrong data?</summary>
+
+Replay only rebuilds pages. Those row versions belong to a transaction with no commit record, so they stay invisible to everyone. That's how Postgres manages without undo.
+
+</details>
+
+<details>
+<summary>Why did updating an indexed column write more log with every index on the table, even indexes on other columns?</summary>
+
+The new row version has a new address, and every Postgres index points at addresses, so each needs a new entry. HOT can't apply when an indexed column changes.
+
+</details>
+
+<details>
+<summary>What two conditions does a HOT update need?</summary>
+
+It must not change any indexed column, and the new version must fit on the same page. That's what `fillfactor` leaves room for.
+
+</details>
+
+<details>
+<summary>SELECT id FROM t WHERE id NOT IN (SELECT parent FROM t) returns no rows, though you expected two. Why?</summary>
+
+`parent` contains a `NULL`. Comparing with `NULL` gives unknown, so every `NOT IN` test is unknown or false, and no row qualifies. Filter the nulls out, or use `NOT EXISTS`.
+
+</details>
+
+<details>
+<summary>A prepared transaction survives a crash. Why is that a risk as well as a feature?</summary>
+
+It keeps its locks until someone commits or rolls it back, and it blocks vacuum. If the coordinator is gone, nobody may ever decide. That's why the docs say not to use it from applications.
+
+</details>
+
+## Open questions and gaps
+
+- I couldn't fetch Uber's post here, so its five points follow the course's reading of it.
+- I ran these on one laptop, so the size of write amplification depends on my row sizes and index choices.
+- I didn't measure InnoDB's update path for a direct comparison. The claims about it come from the docs and the course.
+- 🎓 The QUIC discussion and the saga patterns are reported from the course, with nothing run.
+- The course's talk on SSD write amplification sits below anything I can observe from a database.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/), including his articles on Postgres processes and `SELECT *`
+- PostgreSQL docs: [Heap-Only Tuples](https://www.postgresql.org/docs/current/storage-hot.html), [Write-Ahead Log settings](https://www.postgresql.org/docs/current/runtime-config-wal.html), [Routine Vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html), [PREPARE TRANSACTION](https://www.postgresql.org/docs/current/sql-prepare-transaction.html), [pg_walinspect](https://www.postgresql.org/docs/current/pgwalinspect.html)
+- MySQL 8.4 docs: [InnoDB Multi-Versioning](https://dev.mysql.com/doc/refman/8.4/en/innodb-multi-versioning.html)
+- Uber Engineering, [Why Uber Engineering Switched from Postgres to MySQL](https://www.uber.com/blog/postgres-to-mysql-migration/) (2016)

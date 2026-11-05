@@ -1,0 +1,290 @@
+---
+title: "Inside MongoDB, Memcached and Redis"
+description: "The same storage ideas in three NoSQL systems, all run for real: how MongoDB finds a document and why clustered collections remove a tree walk, Memcached's slab allocator and client-side hashing, and what Redis really loses when it crashes."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 12
+tags: ["Databases", "MongoDB", "Redis", "Memcached", "NoSQL"]
+---
+
+The course's view of NoSQL is a useful antidote to marketing: under the API it's the same fundamentals. Pages, B-trees, memory, logs. If you've read [post 2](/blog/db-how-data-sits-on-disk) and [post 5](/blog/db-btrees-and-bplus-trees), you already know most of what follows.
+
+This post covers MongoDB's storage evolution, Memcached's memory allocator, and Redis's durability options. I ran all three for real, including killing Redis four times to see what each persistence setting really loses.
+
+<Callout type="note" title="TL;DR">
+
+- **MongoDB** stores BSON documents, and uses WiredTiger, a B-tree engine with document-level concurrency. A normal lookup walks the `_id` index and then a hidden tree. A **clustered collection** stores documents in the `_id` tree, so it's one walk.
+- WiredTiger's real page sizes here were 4 KB for internal pages and **32 KB for leaves**.
+- **Memcached** is a pure cache. Memory is split into slab classes of fixed-size chunks, so an item wastes the rest of its chunk. Servers never talk to each other: the client's hash picks one.
+- **Redis** runs commands on one thread, in memory. Pipelining took it from about 69,000 to over a million requests a second.
+- Killed mid-write, Redis with no persistence lost all 5,230 keys, RDB lost 235, and AOF lost none. `appendfsync always` was about 9 times slower.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. **12 · Inside MongoDB, Memcached and Redis** (this post): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## MongoDB
+
+Mongo stores **documents** in **collections**. A document is BSON, a binary form of JSON, and every document has an `_id`, by default a 12-byte `ObjectId`. Here's what a real server reports:
+
+<Ran src="nosql/mongo-basics" />
+
+The `ObjectId` carries a timestamp, so it's time-ordered, and for the reasons in [post 4](/blog/db-bloom-filters-and-uuids#why-random-keys-hurt) that's good for a B-tree.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture puts WiredTiger's page size at 4 KB. The last line above comes from the collection's own creation settings: 4 KB is right for internal pages, and leaf pages go up to 32 KB. It's worth checking your own version, as these are configurable per collection.
+
+</Callout>
+
+### Three eras of finding a document
+
+The course's article traces how the path to a document changed.
+
+![Three ways MongoDB has found a document. With MMAPv1 the _id index held a direct file location, one index walk. With WiredTiger the _id index holds a record id, and a second tree maps that to the document, two walks. A clustered collection stores documents in the _id tree itself, one walk.](/images/data-engineering/database-engineering/db-mongo-memcached-redis/mongo-eras.svg)
+
+**MMAPv1** indexes pointed at a `DiskLoc`, a file number and an offset. One index walk, then a direct read. Its weakness was concurrency: a global write lock at first, then a lock per collection. And a document that grew might have to move, changing its location. [MongoDB 4.2 removed it](https://www.mongodb.com/docs/v4.4/release-notes/4.2-compatibility/).
+
+**WiredTiger**, acquired in 2014, brought [document-level concurrency](https://www.mongodb.com/docs/manual/core/wiredtiger/), compression and MVCC. Documents live in a hidden tree keyed by a 64-bit `recordId`, and every index, including `_id`, points at the `recordId`. So a lookup by `_id` is **two** tree walks. Keeping that value small keeps indexes small.
+
+**Clustered collections** arrived in 5.3. The `_id` tree holds the documents in its leaves, which is the same design as InnoDB. One walk, and secondary indexes hold `_id`, so a long `_id` costs what a long InnoDB primary key costs ([post 5](/blog/db-btrees-and-bplus-trees#what-the-leaves-point-to)).
+
+<Callout type="warn" title="Correcting the lecture">
+
+The article says a moved document in MMAPv1 throws off every `DiskLoc` after it. Only the moved document's location changes. MMAPv1 padded records to make moves rarer, and each index entry for that document then needed updating.
+
+</Callout>
+
+Here are the plans for a normal collection:
+
+<Ran src="nosql/mongo-plans" />
+
+The stages read like Postgres plans. `FETCH` on top of `IXSCAN` is an index scan with a heap visit. With a projection that only needs `name`, `totalDocsExamined` is 0, which is a covered query, an index-only scan under another name. No index on `age` gives `COLLSCAN`, a table scan. The first line is new in 8.0: an `EXPRESS` path for simple lookups by `_id`.
+
+Now a clustered collection with the same data:
+
+<Ran src="nosql/mongo-clustered" />
+
+`EXPRESS_CLUSTERED_IXSCAN`, and no `_id_` index at all: it's gone, because the collection is the index. The whole collection plus indexes came to 2.96 MB, against 3.66 MB. The [docs](https://www.mongodb.com/docs/manual/core/clustered-collections/) add the limits: it's chosen at creation, and the key must be `_id`.
+
+Mongo can't run in a browser, but Postgres's `jsonb` is a close cousin, a binary document format with a real index:
+
+<PgPlayground src="nosql/documents" />
+
+## Memcached
+
+Memcached does one thing: a key-value cache in memory. No persistence, no replication, no query language. Keys are limited to 250 characters and values to 1 MB by default. It's usually placed beside the database:
+
+![The usual way to use a cache. The application asks the cache first. On a hit it's done. On a miss it reads the database, stores the result in the cache, and returns it.](/images/data-engineering/database-engineering/db-mongo-memcached-redis/cache-aside.svg)
+
+The protocol is plain text, and you could use it over telnet:
+
+<Ran src="nosql/memcached-basics" />
+
+The course quotes a view that a cache is often a last resort: it papers over a slow query, and adds a second copy that can go stale.
+
+### Slabs
+
+The interesting part is memory. Allocating and freeing items of all sizes fragments memory over time, so Memcached doesn't. It [splits memory into 1 MB pages](https://github.com/memcached/memcached/wiki/UserInternals), assigns each page to a **slab class**, and cuts it into equal chunks. Each class's chunks are 1.25 times larger than the last. An item goes in the smallest chunk that fits:
+
+<SlabLab />
+
+Here's the real thing with three sizes of value, and the limits tested:
+
+<Ran src="nosql/memcached-slabs" />
+
+A 100-byte value took a 192-byte chunk, since each item carries a key and a header too. The last block shows the cache behaving as a cache: past its 64 MB limit, it evicted 6,776 items, the oldest first. Eviction is **per slab class**, which has a catch the course points out: a class can be starved while another has spare pages.
+
+🎓 The course also traces how LRU locking evolved, from a global lock to a lock per class, then to the 2018 segmented design. Each item used to be moved to the front of the list on read, and that needs a lock, so reads are now batched, updating at most once a minute. I didn't test that.
+
+### Servers that don't know each other
+
+Memcached servers never talk. A client holds a list of servers, and hashes each key to pick one, the same idea as [post 7](/blog/db-sharding#from-modulo-to-a-ring). That makes it trivially scalable, and it means that losing a server only loses its keys:
+
+<Ran src="nosql/memcached-pool" />
+
+A real client should use a ring, or adding a server moves most keys. There's also no authentication by default, so never expose it to a network. The course notes that UDP was turned off by default in 2018 after it was used in huge reflection attacks.
+
+## Redis
+
+Redis is also in memory, and goes much further: strings, lists, sets, hashes, streams, pub/sub, replication and clustering. Its creator's bet is that memory is the primary store, with disk as a backup.
+
+### One thread
+
+Redis runs commands on a single thread, which makes every command atomic with no locks. The course discusses this as a basic trade-off. The numbers show the effect of removing round trips:
+
+<Ran src="nosql/redis-bench" />
+
+About 69,000 requests a second with 50 clients, and over a million with pipelining, which sends many commands without waiting for each reply. That's a 15-fold gain from the same thread: most of the time was going on network round trips. Newer versions can use I/O threads for the network work, off by default here, while commands still run one at a time.
+
+### The wire
+
+The protocol, [RESP](https://redis.io/docs/latest/develop/reference/protocol-spec/), is simple enough to read by eye:
+
+<Ran src="nosql/redis-wire" />
+
+### Expiry and pub/sub
+
+The features the course's demo covers, over real connections:
+
+<Ran src="nosql/redis-expiry" />
+
+<Ran src="nosql/redis-pubsub" />
+
+Pub/sub is fire and forget. A subscriber that isn't listening misses the message, because nothing is stored. Use streams if that matters.
+
+### What survives a crash?
+
+[Post 1](/blog/db-acid-transactions#killing-the-server-for-real) killed Postgres with `SIGKILL`. Here's the same test on Redis, with each persistence option:
+
+![Redis durability options. A write lands in memory. RDB saves a snapshot of everything from time to time, so a crash loses what came after the last snapshot. AOF appends every command to a log, flushed every second or on each write, so a crash loses at most a moment or nothing, at more cost.](/images/data-engineering/database-engineering/db-mongo-memcached-redis/redis-durability.svg)
+
+<Ran src="nosql/redis-durability" title="four settings, four kills" />
+
+| Setting | Lost | Cost |
+| --- | --- | --- |
+| No persistence | Everything | None |
+| RDB snapshots | What came after the last snapshot | Almost none |
+| AOF, `everysec` | Nothing here, up to a second on a power cut | Almost none |
+| AOF, `always` | Nothing | About 9 times slower |
+
+This has the same caveat as post 1: a process kill leaves the operating system's cache alive, which is why `everysec` lost nothing. Redis had already handed its writes to the OS. A real power cut could cost up to the last second, as the [docs](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/) say. Note the `always` row: 167 writes a second, which is the true price of `fsync`, the same trade Postgres makes with `synchronous_commit`.
+
+The course's Q&A on persistence makes the distinction well: durability is about what happens **after** you're told the write succeeded. With Redis that's a setting you choose.
+
+## Choosing between them
+
+![Three tools compared. MongoDB is a durable document database on disk. Memcached is a volatile key-value cache in memory, with no persistence and no server-to-server traffic. Redis is an in-memory data structure server with optional persistence, replication and clustering.](/images/data-engineering/database-engineering/db-mongo-memcached-redis/three-tools.svg)
+
+They aren't competitors in most designs. Mongo is a primary store, Memcached is a cache, and Redis can be a cache or a small primary store, if you've thought through its durability.
+
+## Things that can trip you up
+
+- **Assuming NoSQL means different physics.** It's still pages, trees and logs.
+- **A long `_id` in a clustered collection.** Every secondary index carries it.
+- **Reading a Mongo plan as magic.** `FETCH` over `IXSCAN` means an index scan plus a document read.
+- **Treating a cache as storage.** Memcached can evict anything at any moment.
+- **Slab imbalance.** Items of a new size can get evicted while other classes hold spare memory.
+- **Open Memcached or Redis ports.** Neither should face the internet.
+- **`KEYS *` on a busy Redis.** One thread means one slow command stalls everyone.
+- **Assuming Redis is durable by default.** Check what your deployment is set to.
+- **Pub/sub as a queue.** Messages aren't stored.
+
+## Reproduce this yourself
+
+1. ✅ MongoDB: `docker run --name mg -d mongo:8.0`, then `docker exec -it mg mongosh`, and the commands above.
+2. ✅ Memcached: `docker run --name mem1 -p 11211:11211 -d memcached:1.6 -m 64`, then `telnet localhost 11211`. `stats slabs` shows the classes.
+3. ✅ Redis: `docker run --name rdb -d redis:8.0`, and `docker exec -it rdb redis-cli`.
+4. ✅ For the crash test, start Redis with the flags you want, such as `redis-server --appendonly yes --appendfsync everysec`, write in a loop, count the acknowledgements, run `docker kill -s KILL`, restart, and compare with `DBSIZE`.
+5. ✅ For the benchmark, `docker exec rdb redis-benchmark -q -t set,get -n 100000 -c 50`, then add `-P 16`.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **BSON** | The binary document format MongoDB stores |
+| **`_id`, ObjectId** | A document's key, by default 12 bytes with a timestamp |
+| **WiredTiger** | MongoDB's B-tree storage engine |
+| **recordId** | A hidden 64-bit key for a document |
+| **Clustered collection** | Documents stored in the `_id` tree |
+| **Slab class** | A set of equal-sized chunks in Memcached |
+| **Cache aside** | Check the cache, read the database on a miss, then fill the cache |
+| **RDB** | A Redis point-in-time snapshot file |
+| **AOF** | A Redis append-only log of writes |
+| **RESP** | The Redis wire protocol |
+| **Pipelining** | Sending many commands without waiting for each reply |
+
+## Summary
+
+MongoDB's history is the B-tree story again: direct locations, then a hidden record tree that keeps indexes small, then clustered collections that remove a walk, with InnoDB's trade-offs. Memcached is proudly simple, with slabs to avoid fragmentation, and clients doing all the routing. Redis keeps everything in memory, on one thread, and lets you choose how much you're prepared to lose, and killing it shows exactly what each choice means.
+
+![A map of this post in three columns. MongoDB: BSON documents, WiredTiger pages, clustered collections remove a tree walk. Memcached: slabs, LRU, and client-side hashing. Redis: single-threaded commands, RESP, RDB and AOF, with measured data loss.](/images/data-engineering/database-engineering/db-mongo-memcached-redis/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **`recordId`** | Indexes point at a hidden key | Small indexes, two walks |
+| **Clustered collection** | Documents live in the `_id` tree | One walk, wide keys cost more |
+| **`FETCH` over `IXSCAN`** | Index, then document | Mongo plans read like SQL plans |
+| **Slab classes** | Fixed chunks in growing sizes | No fragmentation, some waste |
+| **Per-class LRU** | Eviction within a class | One class can starve |
+| **Client-side hashing** | Servers never talk | Simple scaling, simple failure |
+| **Single thread** | Commands run one at a time | Atomic, and one slow command stalls all |
+| **Pipelining** | Skip the wait for each reply | Round trips were the real cost |
+| **RDB and AOF** | Snapshot or log | Choose what a crash can lose |
+
+### Test yourself
+
+<details>
+<summary>Why does a normal MongoDB lookup by _id take two tree walks, and how does a clustered collection avoid that?</summary>
+
+The `_id` index maps the key to a `recordId`, and a hidden tree maps that to the document. A clustered collection stores documents in the `_id` tree's leaves, so one walk finds the document. Secondary indexes then hold `_id`.
+
+</details>
+
+<details>
+<summary>totalDocsExamined is 0 for a Mongo query. What does that mean, and what's the SQL equivalent?</summary>
+
+The index alone answered it, so no document was read. That's a covered query, the same idea as an index-only scan.
+
+</details>
+
+<details>
+<summary>A 100-byte value lands in a 192-byte chunk. Why?</summary>
+
+The item also has a key and a header, so it needs more than 100 bytes, and it goes in the smallest class that fits. The unused part of the chunk is wasted, which is the price of avoiding fragmentation.
+
+</details>
+
+<details>
+<summary>Memcached server 2 dies. What happens to keys on servers 1 and 3?</summary>
+
+Nothing. The servers never talk, so they don't notice. Only server 2's keys become misses, and clients fall back to the database for those.
+
+</details>
+
+<details>
+<summary>Why did AOF with everysec lose nothing when Redis was killed, and when could it lose data?</summary>
+
+Redis had already handed the writes to the operating system, which survives a process kill. A power cut or OS crash could lose up to the last second, because those writes might not have reached the disk.
+
+</details>
+
+## Open questions and gaps
+
+- 🎓 Memcached's LRU history and MongoDB's MMAPv1 details are from the course. MMAPv1 is gone, so it can't be re-run.
+- I didn't test Redis replication or clustering, or Memcached's UDP history.
+- I didn't test power loss, so the `everysec` limit rests on the docs.
+- The Mongo size comparison is on 100,000 small documents, and won't scale in a simple way.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/), including his MongoDB and Memcached articles
+- MongoDB docs: [Clustered Collections](https://www.mongodb.com/docs/manual/core/clustered-collections/), [WiredTiger Storage Engine](https://www.mongodb.com/docs/manual/core/wiredtiger/), [4.2 Compatibility Changes](https://www.mongodb.com/docs/v4.4/release-notes/4.2-compatibility/)
+- Memcached wiki: [User Internals](https://github.com/memcached/memcached/wiki/UserInternals)
+- Redis docs: [Persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/), [RESP](https://redis.io/docs/latest/develop/reference/protocol-spec/), [Benchmarks](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/)

@@ -1,0 +1,308 @@
+---
+title: "Bloom Filters, Billion-Row Tables and the Keys That Hurt"
+description: "Three ideas about working at scale: a Bloom filter that skips needless lookups, a ladder for dealing with a billion rows, and a real insert race that shows why a random primary key made InnoDB 70 times slower."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 4
+tags: ["Databases", "PostgreSQL", "MySQL", "Performance", "UUID"]
+---
+
+This post covers three ideas from the course that don't look related, but share one theme: the cheapest work is the work you never do. A Bloom filter avoids a database lookup. A good schema avoids a billion-row table. An ordered key avoids rewriting pages all over an index.
+
+The last one surprised me. The course explains why random UUIDs hurt, and I wanted to see it for myself, so I raced three kinds of key on both engines. On MySQL the result wasn't subtle: inserts with random keys fell from over 120,000 rows a second to about 3,500.
+
+<Callout type="note" title="TL;DR">
+
+- A **Bloom filter** is a small bit array that answers "definitely not" or "maybe". It never gives a false negative, so a "no" saves a database query.
+- A **billion-row table** has a ladder of fixes. In order: redesign to avoid it, index, partition, shard, and only then brute force.
+- The course's redesign, a JSON list of followers on the profile row, moves the cost to writes. At a million followers each new follower took 375 ms and wrote 3.6 MB of log, against 3 ms for a row in a `follows` table.
+- **Random keys** (UUIDv4) scatter inserts across an index. On InnoDB, where the table is the index, the rate fell about 70 times once the table outgrew memory. **Time-ordered keys** (UUIDv7, ULID) stayed fast.
+- An **idempotency key** makes a retry safe: a unique key means the second attempt inserts nothing.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. **04 · Bloom filters, billion-row tables and UUIDs** (this post): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## Bloom filters
+
+### The problem: a query that usually finds nothing
+
+A signup page checks whether a username is taken, maybe on every keystroke. Each check is a query, and the feature is very popular. Most checks come back empty, and an empty answer is expensive for what it tells you.
+
+You could cache every username in Redis. Now you have two copies that can drift apart, and you've doubled your memory just to answer yes or no. A Bloom filter does the same job in a tiny fraction of the memory.
+
+![Checking whether a username exists. The request reaches the server, which looks in a small in-memory Bloom filter. A clear bit means the name is definitely free, so the server answers without touching the database. A set bit means maybe, so the server asks the database for the real answer.](/images/data-engineering/database-engineering/db-bloom-filters-and-uuids/username-check.svg)
+
+### How it works
+
+A Bloom filter is an array of bits. To add a name, hash it, turn the hash into a position, and set that bit. To check a name, hash it the same way and look at the bit:
+
+- **The bit is 0**: the name was never added. This answer is always right.
+- **The bit is 1**: the name **may** have been added, or another name may have landed on the same bit. Ask the database.
+
+That asymmetry is the whole idea. There are no false negatives, and false positives only cost you the query you would have made anyway.
+
+Here's a working one, starting from the course's demo: a 64-bit filter holding Jack, Paul, Tim and Ali, with one hash. Check some names, add 20 more, and watch the measured false-positive rate:
+
+<BloomLab />
+
+Things to try:
+
+1. Keep adding names until nearly every bit is 1. Every answer becomes "maybe", so the filter saves nothing. That's **saturation**. It isn't harmful, just useless.
+2. Raise the bits. False positives fall, at the cost of memory.
+3. Raise the hash functions. Each name now sets several bits, and a "maybe" needs them **all** set. That helps up to a point, then hurts, since the filter fills faster.
+
+Real filters use a large array and several hashes. For `n` items and a chosen false-positive rate, the size can be worked out in advance. Redis does exactly that, and Redis 8 includes Bloom filters in the core server:
+
+<Ran src="keys/redis-bloom" />
+
+Asking for a 1% error rate on 1,000 items took 1,480 bytes, about 12 bits per item. Storing 1,000 usernames themselves would take far more.
+
+📘 The same idea sits inside many engines. [Cassandra](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/bloom_filters.html) keeps a Bloom filter per SSTable so a read can skip files that can't hold a key, and [post 11](/blog/db-engines-and-cursors) shows why LSM trees need that. Postgres even has a [`bloom` index type](https://www.postgresql.org/docs/current/bloom.html), which stores a small signature for each row. Try it here:
+
+<PgPlayground src="keys/bloom-index" />
+
+Notice `Rows Removed by Index Recheck` in the plan. Those are the false positives, caught when the row was read.
+
+## Working with a billion-row table
+
+Ask this when you design a table: how big will it be in three years? The course's example is a Twitter-style follow feature with a table of `(follower, followee)` pairs. At one row per follow, that heads for billions of rows.
+
+There's a ladder of options. The order matters more than any one rung.
+
+![A ladder of options for a billion-row table, in the order to try them. First avoid it with a better design. Then index the columns you search. Then partition the table within one server. Then shard across servers. Last, brute-force it in parallel, which only suits analytical work.](/images/data-engineering/database-engineering/db-bloom-filters-and-uuids/billion-row-ladder.svg)
+
+| Rung | The idea | The catch |
+| --- | --- | --- |
+| **Avoid it** | Rethink why the table exists | The cost moves somewhere else |
+| **Index** | Search a small structure | Costs writes and memory ([post 3](/blog/db-indexes-and-query-plans)) |
+| **Partition** | Smaller tables behind one name, on one server | Queries must include the key ([post 6](/blog/db-partitioning)) |
+| **Shard** | Partitions on different servers | Clients must know, and transactions stop working across shards ([post 7](/blog/db-sharding)) |
+| **Brute force** | Split the table and scan in parallel, like MapReduce | Only for analytics: on a live table the rows change while you scan |
+
+The course calls this a design question first. If you can avoid the table, nothing below that rung is needed.
+
+### Testing the redesign
+
+The course's redesign drops the `follows` table, and instead keeps a `followers_count` and a JSON list of follower ids on the profile row. Reading a profile becomes one row. The course's own warning is that writes get more expensive, and that a queue could smooth them out.
+
+I wanted to see how much more expensive, since `follows` rows are cheap to insert. So I measured one new follower both ways, for accounts of different sizes:
+
+<LabChart src="keys/follower-cost" />
+
+The `follows` table stayed at about 3 ms whatever the account's size. The JSON list grew with the list: 375 ms at a million followers, for one follow.
+
+The reason is MVCC, from [post 2](/blog/db-how-data-sits-on-disk). An `UPDATE` writes a whole new row version, so appending one id rewrites the entire list. The write-ahead log confirms it: each follow at a million followers wrote about **3.6 MB** of WAL. A popular account gets many follows a second, all fighting for one row's lock.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes present the JSON list as a cheap read with a modest write cost. For popular accounts it's a serious problem: the cost per write grows with the list, and writes to that row can't run in parallel. A queue hides the latency and not the work. The redesign is fine for small lists, and a separate counter on the profile row gets most of the read benefit without the JSON.
+
+</Callout>
+
+## Why random keys hurt
+
+### UUIDs are numbers, and indexes sort them
+
+A UUID is a 128-bit number. Sorted indexes need each new key in its right place, so the question is where each new key lands.
+
+![The bit layout of three kinds of identifier. UUIDv4 is 122 random bits, so consecutive values have no order. UUIDv7 starts with a 48-bit timestamp in milliseconds followed by random bits. ULID also starts with a 48-bit timestamp, followed by 80 random bits. Time-first identifiers sort in creation order.](/images/data-engineering/database-engineering/db-bloom-filters-and-uuids/uuid-anatomy.svg)
+
+Postgres 18 can generate both kinds. Look at the start of each value:
+
+<Ran src="keys/uuid-shapes" />
+
+The UUIDv4 values have nothing in common. The UUIDv7 values share their first 13 characters, because that's the timestamp ([RFC 9562](https://www.rfc-editor.org/rfc/rfc9562.html) defines the layout). Try sorting them:
+
+<PgPlayground src="keys/uuids" />
+
+### Page splits
+
+Indexes keep each page sorted. When a new key belongs in a full page, that page must **split**: a new page is allocated, half the keys move across, the neighbours are re-linked, and the parent gets a new entry. It's the most expensive thing an insert can do.
+
+The course's demo uses tiny pages of two keys. Here it is on real trees, with the same keys in both orders:
+
+<InsertOrderLab />
+
+In random order, inserts land anywhere and pages split in the middle, leaving them half full. In sorted order, inserts only touch the right edge. The database, as the course puts it, can't ask for a better workload.
+
+### The race
+
+The demo shows the mechanism. To see the cost, I inserted millions of rows with three kinds of primary key.
+
+<LabChart src="keys/race-postgres" />
+
+<Ran src="keys/race-postgres" title="the index afterwards" />
+
+On Postgres the effect is real and moderate. UUIDv4 inserts ran about 40% slower by the end. The index pages tell the story: with random keys they ended **69% full**, from all those mid-page splits, where ordered keys left them **90% full**. The UUIDv4 index was 118 MB against UUIDv7's 90 MB, for the same data, and it wrote 110 MB more WAL.
+
+Now the same race on InnoDB, where the table itself is the primary key's tree:
+
+<LabChart src="keys/race-mysql" />
+
+This is the course's warning made real. Ordered keys held about 250,000 rows a second. Random keys began at 120,000, and then, somewhere past 800,000 rows, **collapsed to around 3,500**. That's the table outgrowing the 128 MB buffer pool:
+
+![Why random keys thrash the buffer pool. With ordered keys, inserts keep hitting the same few pages at the tail of the index, and those stay in memory. With random keys, each insert needs a different page anywhere in the index, so a page has to be read in and another written out, again and again.](/images/data-engineering/database-engineering/db-bloom-filters-and-uuids/thrashing.svg)
+
+While the whole tree fits in memory, random inserts are just somewhat wasteful. Once it doesn't, nearly every insert needs a page that isn't there, and must evict one to make room. Each row then costs a disk read and a later write. Ordered keys don't care about table size, because they only touch the last page.
+
+Postgres escaped this for two reasons. Its table is a heap, where rows just go at the end, so only the index was affected. And that index stayed smaller than memory in my test. A larger index would hit the same wall.
+
+<Callout type="note" title="About this comparison">
+
+The two charts aren't a Postgres against MySQL contest. The row sizes, memory settings and row counts differ, and I'd expect a Postgres index larger than memory to suffer too. I used 16 random bytes on MySQL rather than a text UUID, so this is the kind version: a 36-character string key would be worse. The ordered key there is an 8-byte counter plus 8 random bytes, standing in for a UUIDv7.
+
+</Callout>
+
+### What the course adds
+
+- 🎓 **Secondary indexes pay too in InnoDB.** Every secondary index stores the primary key, as [post 2](/blog/db-how-data-sits-on-disk#two-ways-to-reach-a-row) showed, so a wide random key is copied into all of them. [Post 5](/blog/db-btrees-and-bplus-trees) measures that.
+- 🎓 **Reads depend on your access pattern.** Shopify's idempotency keys are usually looked up seconds after they're written, so ordered keys keep those lookups in hot pages. A URL shortener's reads are random whatever the key, so ordered keys only help its writes.
+- 🎓 **A hot tail page has its own cost.** With every insert aimed at the last page, threads compete for that one page's latch. The course raises this as something Shopify's post doesn't mention. I didn't reproduce it: my runs used one writer.
+- **Sequences need a central source.** That's the main reason people choose UUIDs in the first place: any client can generate one with no coordination. UUIDv7 and ULID keep that property, and the order.
+
+## Idempotency keys
+
+The reason Shopify's story appears in the course is a payment problem. A client sends a payment, the network drops the reply, and the client retries. [Post 1](/blog/db-acid-transactions#killing-the-server-for-real) ended on exactly this: one crash test had a row in the table that the client never got an acknowledgement for. Did the payment happen?
+
+An **idempotency key** answers that. The client generates a key per logical attempt and sends it with every retry. A unique constraint does the rest:
+
+<TxnTheater src="keys/idempotency" />
+
+The retry waited for the first attempt's outcome and then inserted nothing, so the customer was charged once, and the table holds one row of 100.
+
+[Shopify's post](https://shopify.engineering/building-resilient-payment-systems) says they prefer ULIDs for these keys, and saw a 50% fall in `INSERT` duration in one high-throughput system after moving from UUIDv4. Keys only need to live for the retry window, typically 24 hours or less.
+
+## Things that can trip you up
+
+- **A Bloom filter can't delete.** Clearing a bit might erase another name that shares it. Rebuild it, or use a counting variant.
+- **A Bloom filter must see every write.** If some writes skip it, it can say "definitely not" about something that exists, and the guarantee is gone.
+- **"Random keys are slow" depends on memory.** While the index fits in memory, the effect is mild. Test with a data size like production's.
+- **A JSON column isn't free to append to.** Every change rewrites the whole value, and on MVCC engines the whole row.
+- **Storing a UUID as text** takes 36 bytes, or more. Use a `uuid` column in Postgres and `BINARY(16)` in MySQL.
+- **UUIDv7 leaks its creation time.** Anyone with the key can read when it was made, as the `uuid_extract_timestamp` preset shows. That can matter for a public id.
+- **Idempotency keys need a scope and a lifetime.** Reusing a key for a different request must be treated as a bug.
+
+## Reproduce this yourself
+
+1. ✅ For Redis Bloom filters: `docker run --name rd -d redis:8.0`, then `docker exec -it rd redis-cli` and the commands above.
+2. ✅ For the race, on Postgres 18:
+   ```sql
+   CREATE TABLE t (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), pad text);
+   INSERT INTO t (pad) SELECT repeat('p', 60) FROM generate_series(1, 250000);
+   ```
+   Repeat the insert and time each batch, then try `DEFAULT uuidv7()`.
+3. ✅ Read the index with `CREATE EXTENSION pgstattuple;` and `SELECT leaf_pages, avg_leaf_density FROM pgstatindex('t_pkey');`.
+4. ✅ On MySQL 8.4 with the default 128 MB buffer pool, use a `BINARY(16)` primary key and insert `unhex(md5(concat(rand(), n)))` in batches of 200,000. The slowdown appeared after about 800,000 rows, with 60 bytes of padding per row.
+5. 🎓 Shopify's numbers come from their post. I didn't and can't reproduce those.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Bloom filter** | A bit array that says "definitely not" or "maybe" |
+| **False positive** | A "maybe" for something that isn't there |
+| **Saturation** | So many bits set that every answer is "maybe" |
+| **UUIDv4** | A 128-bit identifier that's almost entirely random |
+| **UUIDv7, ULID** | 128-bit identifiers starting with a timestamp, so they sort by creation time |
+| **Page split** | Moving half a full page's keys to a new page to make room |
+| **Leaf density** | How full an index's leaf pages are |
+| **Thrashing** | Evicting pages that are needed again almost at once |
+| **Idempotency key** | A client-chosen key that makes retries of one request safe |
+
+## Summary
+
+A Bloom filter turns a popular "does this exist?" check into a few memory reads, and only asks the database when the answer might be yes. A billion-row table has a ladder of options, starting with not having one, though the course's redesign moved more cost to writes than I expected. Random keys scatter writes across an index, leaving pages emptier everywhere and, on InnoDB, collapsing insert speed once the table outgrew memory. Time-ordered keys keep the benefits of UUIDs without that cost, and idempotency keys make retries safe.
+
+![A map of this post in three columns. Bloom filters: a definite no or a maybe, bits and hashes, they saturate. Billion rows: avoid, index, partition, shard, brute force, and a JSON list moves the cost to writes. Keys: random keys scatter inserts, ordered keys append, idempotency keys make retries safe.](/images/data-engineering/database-engineering/db-bloom-filters-and-uuids/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Bloom filter** | Bits that say no for certain | Skips lookups that would find nothing |
+| **False positives** | The price of a tiny structure | They cost one wasted query, never a wrong answer |
+| **Scaling ladder** | Avoid, index, partition, shard, brute force | Each rung adds complexity |
+| **Rewriting a big row** | MVCC copies the row on every update | Why lists in a row get expensive |
+| **Random key** | New keys land anywhere | More splits, emptier pages, more memory needed |
+| **Ordered key** | New keys land at the end | One hot page, no mid-tree splits |
+| **Buffer pool cliff** | Fine until the index outgrows memory | Why tests on small data mislead |
+| **Idempotency key** | One key per logical request | Makes retries safe |
+
+### Test yourself
+
+<details>
+<summary>A Bloom filter says a username is "definitely not" taken. Can you skip the database? What if it says "maybe"?</summary>
+
+Yes to the first: a clear bit proves the value was never added, as long as every write updates the filter. A "maybe" must go to the database, because other values may have set the same bits.
+
+</details>
+
+<details>
+<summary>Why does adding more hash functions eventually make a Bloom filter worse?</summary>
+
+Each hash sets another bit per item, so the array fills faster. A few hashes cut false positives, because a "maybe" needs all bits set. Too many saturate the filter, and then nearly everything is "maybe".
+
+</details>
+
+<details>
+<summary>Why did each new follower get slower with the JSON list, but not with the follows table?</summary>
+
+Updating a row writes a whole new version of it, so appending one id rewrites the whole list, and the cost grows with the list. A `follows` insert adds one small row and one index entry, whatever the account's size.
+
+</details>
+
+<details>
+<summary>Random keys slowed Postgres moderately and collapsed InnoDB. What's different?</summary>
+
+InnoDB stores the whole table inside the primary key's tree, so random keys scatter full rows, and the tree outgrew the buffer pool quickly. Each insert then needed a disk read. Postgres's rows go at the end of a heap, so only the smaller index was scattered, and it fit in memory in my test.
+
+</details>
+
+<details>
+<summary>A client retries a payment after a timeout. How does an idempotency key prevent a double charge?</summary>
+
+The key is the same on the retry, and it has a unique constraint. If the first attempt committed, the retry's insert finds a conflict and does nothing. If it's still in progress, the retry waits for its outcome.
+
+</details>
+
+## Open questions and gaps
+
+- I raced one writer at a time. The course's point about contention on a hot tail page needs many concurrent writers, and I didn't test it.
+- I didn't run the race with a Postgres index larger than memory, so the claim that it would also suffer is an expectation, not a measurement.
+- The Shopify figures are theirs, and the course's description of them is second-hand. I checked it against Shopify's post.
+- 🎓 The course's demo of a brute-force scan with MapReduce isn't reproduced. It's only described there too.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- PostgreSQL docs: [bloom](https://www.postgresql.org/docs/current/bloom.html), [pgstattuple](https://www.postgresql.org/docs/current/pgstattuple.html), [UUID functions](https://www.postgresql.org/docs/current/functions-uuid.html)
+- [RFC 9562: Universally Unique IDentifiers](https://www.rfc-editor.org/rfc/rfc9562.html)
+- [ULID specification](https://github.com/ulid/spec)
+- Redis docs: [Bloom filter](https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/)
+- Apache Cassandra docs: [Bloom filters](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/bloom_filters.html)
+- Shopify Engineering, [Building Resilient Payment Systems](https://shopify.engineering/building-resilient-payment-systems)

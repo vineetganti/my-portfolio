@@ -1,0 +1,224 @@
+{
+ "theaters": {},
+ "runs": {
+  "baseline": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, SUMMARY ON) SELECT count(*) FROM grades_org WHERE g = 30;",
+     "out": "                                               QUERY PLAN                                                \n---------------------------------------------------------------------------------------------------------\n Aggregate (actual time=7.210..7.211 rows=1.00 loops=1)\n   Buffers: shared hit=1 read=45\n   ->  Index Only Scan using grades_org_g on grades_org (actual time=0.782..5.702 rows=49847.00 loops=1)\n         Index Cond: (g = 30)\n         Heap Fetches: 0\n         Index Searches: 1\n         Buffers: shared hit=1 read=45\n Planning:\n   Buffers: shared hit=70\n Planning Time: 0.599 ms\n Execution Time: 7.408 ms\n(11 rows)"
+    }
+   ]
+  },
+  "routing": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "INSERT INTO grades_parts SELECT * FROM grades_org;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT tableoid::regclass AS partition, count(*), min(g), max(g) FROM grades_parts GROUP BY 1 ORDER BY 3;",
+     "out": " partition |  count  | min | max \n-----------+---------+-----+-----\n g0035     | 1748097 |   0 |  34\n g3560     | 1250407 |  35 |  59\n g6080     | 1002141 |  60 |  79\n g80100    |  999355 |  80 |  99\n(4 rows)"
+    }
+   ]
+  },
+  "index-on-parent": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE INDEX grades_parts_g ON grades_parts (g);",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT tablename, indexname FROM pg_indexes WHERE tablename ~ '^g[0-9]|grades_parts' ORDER BY 1;",
+     "out": "  tablename   |   indexname    \n--------------+----------------\n g0035        | g0035_g_idx\n g3560        | g3560_g_idx\n g6080        | g6080_g_idx\n g80100       | g80100_g_idx\n grades_parts | grades_parts_g\n(5 rows)"
+    },
+    {
+     "cmd": "SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size FROM pg_class WHERE relname IN ('grades_org', 'grades_org_g', 'g0035', 'g0035_g_idx') ORDER BY pg_relation_size(oid) DESC;",
+     "out": "   relname    |  size  \n--------------+--------\n grades_org   | 173 MB\n g0035        | 60 MB\n grades_org_g | 33 MB\n g0035_g_idx  | 12 MB\n(4 rows)"
+    }
+   ]
+  },
+  "pruning": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY ON) SELECT count(*) FROM grades_parts WHERE g = 30;",
+     "out": "                                          QUERY PLAN                                          \n----------------------------------------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=1 read=45\n   ->  Index Only Scan using g0035_g_idx on g0035 grades_parts (actual rows=49700.00 loops=1)\n         Index Cond: (g = 30)\n         Heap Fetches: 0\n         Index Searches: 1\n         Buffers: shared hit=1 read=45\n Planning:\n   Buffers: shared hit=120 read=21\n Planning Time: 1.202 ms\n Execution Time: 2.614 ms\n(11 rows)"
+    },
+    {
+     "cmd": "SHOW enable_partition_pruning;",
+     "out": " enable_partition_pruning \n--------------------------\n on\n(1 row)"
+    },
+    {
+     "cmd": "SET enable_partition_pruning = off;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (COSTS OFF) SELECT count(*) FROM grades_parts WHERE g = 30;",
+     "out": "                               QUERY PLAN                                \n-------------------------------------------------------------------------\n Aggregate\n   ->  Append\n         ->  Index Only Scan using g0035_g_idx on g0035 grades_parts_1\n               Index Cond: (g = 30)\n         ->  Index Only Scan using g3560_g_idx on g3560 grades_parts_2\n               Index Cond: (g = 30)\n         ->  Index Only Scan using g6080_g_idx on g6080 grades_parts_3\n               Index Cond: (g = 30)\n         ->  Index Only Scan using g80100_g_idx on g80100 grades_parts_4\n               Index Cond: (g = 30)\n(10 rows)"
+    }
+   ]
+  },
+  "no-index-win": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SET max_parallel_workers_per_gather = 0;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF) SELECT count(*) FROM grades_org WHERE g BETWEEN 85 AND 90;",
+     "out": "                          QUERY PLAN                          \n--------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=10432 read=11692\n   ->  Seq Scan on grades_org (actual rows=299399.00 loops=1)\n         Filter: ((g >= 85) AND (g <= 90))\n         Rows Removed by Filter: 4700601\n         Buffers: shared hit=10432 read=11692\n Planning:\n   Buffers: shared hit=20 read=6\n Planning Time: 0.455 ms\n Execution Time: 180.533 ms\n(10 rows)"
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF) SELECT count(*) FROM grades_parts WHERE g BETWEEN 85 AND 90;",
+     "out": "                              QUERY PLAN                               \n-----------------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=4420\n   ->  Seq Scan on g80100 grades_parts (actual rows=299399.00 loops=1)\n         Filter: ((g >= 85) AND (g <= 90))\n         Rows Removed by Filter: 699498\n         Buffers: shared hit=4420\n Planning:\n   Buffers: shared hit=82 read=19\n Planning Time: 1.290 ms\n Execution Time: 56.241 ms\n(10 rows)"
+    }
+   ]
+  },
+  "bad-query": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (COSTS OFF) SELECT * FROM grades_parts WHERE id = 7;",
+     "out": "                       QUERY PLAN                       \n--------------------------------------------------------\n Gather\n   Workers Planned: 2\n   ->  Parallel Append\n         ->  Parallel Seq Scan on g0035 grades_parts_1\n               Filter: (id = 7)\n         ->  Parallel Seq Scan on g3560 grades_parts_2\n               Filter: (id = 7)\n         ->  Parallel Seq Scan on g6080 grades_parts_3\n               Filter: (id = 7)\n         ->  Parallel Seq Scan on g80100 grades_parts_4\n               Filter: (id = 7)\n(11 rows)"
+    }
+   ]
+  },
+  "row-move": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT tableoid::regclass, id, g FROM grades_parts WHERE id = 1;",
+     "out": " tableoid | id | g  \n----------+----+----\n g_low    |  1 | 10\n(1 row)\n\nTime: 10.410 ms"
+    },
+    {
+     "cmd": "UPDATE grades_parts SET g = 90 WHERE id = 1;",
+     "out": "Time: 8.991 ms"
+    },
+    {
+     "cmd": "SELECT tableoid::regclass, id, g FROM grades_parts WHERE id = 1;",
+     "out": " tableoid | id | g  \n----------+----+----\n g_high   |  1 | 90\n(1 row)\n\nTime: 5.904 ms"
+    },
+    {
+     "cmd": "UPDATE grades_parts SET g = 20 WHERE id <= 100000 AND id > 1;",
+     "out": "Time: 128.929 ms"
+    },
+    {
+     "cmd": "UPDATE grades_parts SET g = 80 WHERE id <= 100000 AND id > 1;",
+     "out": "Time: 144.868 ms"
+    }
+   ]
+  },
+  "null-key": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "INSERT INTO grades_parts (g) VALUES (NULL);",
+     "out": "ERROR:  no partition of relation \"grades_parts\" found for row\nDETAIL:  Partition key of the failing row contains (g) = (null)."
+    },
+    {
+     "cmd": "CREATE TABLE g_default PARTITION OF grades_parts DEFAULT;",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO grades_parts (g) VALUES (NULL);",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT tableoid::regclass, id, g FROM grades_parts;",
+     "out": " tableoid  | id | g \n-----------+----+---\n g_default |  2 |  \n(1 row)"
+    }
+   ]
+  },
+  "drop-old": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- remove a year of data from a 2,000,000-row table\nDELETE FROM events WHERE at < '2024-01-01';",
+     "out": "DELETE 500049\nTime: 407.2 ms"
+    },
+    {
+     "cmd": "ALTER TABLE events_p DETACH PARTITION events_2023;\nDROP TABLE events_2023;",
+     "out": "Time: 46.3 ms"
+    }
+   ]
+  },
+  "int-limit": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT 2147483647 AS largest_int;",
+     "out": " largest_int \n-------------\n  2147483647\n(1 row)"
+    },
+    {
+     "cmd": "SELECT 2147483647 + 1;",
+     "out": "ERROR:  integer out of range"
+    },
+    {
+     "cmd": "SELECT 2147483647::bigint + 1 AS as_bigint;",
+     "out": " as_bigint  \n------------\n 2147483648\n(1 row)"
+    }
+   ]
+  },
+  "automation": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE TABLE customers (id int NOT NULL, name text) PARTITION BY RANGE (id);",
+     "out": ""
+    },
+    {
+     "cmd": "DO $$\nBEGIN\n  FOR i IN 0..99 LOOP\n    EXECUTE format('CREATE TABLE customers_%s PARTITION OF customers FOR VALUES FROM (%s) TO (%s)', i, i * 10000000, (i + 1) * 10000000);\n  END LOOP;\nEND $$;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT count(*) AS partitions FROM pg_inherits WHERE inhparent = 'customers'::regclass;",
+     "out": " partitions \n------------\n        100\n(1 row)"
+    },
+    {
+     "cmd": "INSERT INTO customers VALUES (123456789, 'Ana');",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT tableoid::regclass, id, name FROM customers WHERE id = 123456789;",
+     "out": "   tableoid   |    id     | name \n--------------+-----------+------\n customers_12 | 123456789 | Ana\n(1 row)"
+    },
+    {
+     "cmd": "EXPLAIN (COSTS OFF) SELECT * FROM customers WHERE id = 123456789;",
+     "out": "             QUERY PLAN             \n------------------------------------\n Seq Scan on customers_12 customers\n   Filter: (id = 123456789)\n(2 rows)"
+    }
+   ]
+  }
+ },
+ "charts": {},
+ "data": {},
+ "playgrounds": {
+  "parts": {
+   "title": "Partitions you can poke",
+   "hint": "A table of 100,000 grades split into four ranges. Each preset shows one idea from this post. Upper bounds are exclusive.",
+   "setup": "CREATE TABLE grades (id serial NOT NULL, g int NOT NULL) PARTITION BY RANGE (g);\nCREATE TABLE g0035 PARTITION OF grades FOR VALUES FROM (0) TO (35);\nCREATE TABLE g3560 PARTITION OF grades FOR VALUES FROM (35) TO (60);\nCREATE TABLE g6080 PARTITION OF grades FOR VALUES FROM (60) TO (80);\nCREATE TABLE g80100 PARTITION OF grades FOR VALUES FROM (80) TO (100);\nINSERT INTO grades (g) SELECT floor(random() * 100) FROM generate_series(1, 100000);\nCREATE INDEX ON grades (g);\nANALYZE grades;",
+   "query": "SELECT tableoid::regclass AS partition, count(*), min(g), max(g)\nFROM grades GROUP BY 1 ORDER BY 3;",
+   "presets": [
+    {
+     "label": "Pruned to one",
+     "sql": "EXPLAIN (COSTS OFF) SELECT count(*) FROM grades WHERE g = 30;"
+    },
+    {
+     "label": "Not on the key",
+     "sql": "EXPLAIN (COSTS OFF) SELECT * FROM grades WHERE id = 7;"
+    },
+    {
+     "label": "A row moves",
+     "sql": "SELECT tableoid::regclass, id, g FROM grades WHERE id = 1;\nUPDATE grades SET g = (g + 50) % 100 WHERE id = 1;\nSELECT tableoid::regclass, id, g FROM grades WHERE id = 1;"
+    },
+    {
+     "label": "Outside every range",
+     "sql": "INSERT INTO grades (g) VALUES (100);"
+    }
+   ]
+  }
+ }
+}

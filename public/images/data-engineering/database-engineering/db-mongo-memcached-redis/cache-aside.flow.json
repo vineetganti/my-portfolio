@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {
+      "from": "application",
+      "to": "Memcached",
+      "label": "1. get",
+      "type": "request"
+    },
+    {
+      "from": "Memcached",
+      "to": "application",
+      "type": "metadata"
+    },
+    {
+      "from": "application",
+      "to": "database",
+      "label": "2. on a miss",
+      "type": "request"
+    }
+  ]
+}

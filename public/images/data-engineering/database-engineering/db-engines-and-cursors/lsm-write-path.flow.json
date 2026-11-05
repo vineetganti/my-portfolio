@@ -1,0 +1,26 @@
+{
+  "steps": [
+    {
+      "from": "write",
+      "to": "log",
+      "type": "data"
+    },
+    {
+      "from": "write",
+      "to": "memtable",
+      "type": "data"
+    },
+    {
+      "from": "memtable",
+      "to": "level 0",
+      "label": "flush",
+      "type": "data"
+    },
+    {
+      "from": "level 0",
+      "to": "level 1",
+      "label": "compact",
+      "type": "metadata"
+    }
+  ]
+}

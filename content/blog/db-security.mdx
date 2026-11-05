@@ -1,0 +1,283 @@
+---
+title: "Database Security: TLS, the Wire Protocol, Least Privilege and Computing on Encrypted Data"
+description: "Turning on TLS for Postgres and watching it fail in useful ways, reading a real conversation on the wire, permissions that surprise you, the largest query I could send, and adding numbers that stay encrypted, live in your browser."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 13
+tags: ["Databases", "PostgreSQL", "Security", "TLS", "Encryption"]
+---
+
+Most of this series has been about making databases fast and correct. This post is about who gets to talk to them, and what an attacker on the wire can see.
+
+The course's lectures here are hands-on: enabling TLS, reading packet captures, building a to-do app with minimal permissions, and trying homomorphic encryption. I re-ran them on real servers, captured a real conversation through a logging proxy, and built a working homomorphic demo that runs in your browser. Several of the failures turned out to be the most useful part.
+
+<Callout type="note" title="TL;DR">
+
+- `ssl = on` makes TLS **available**, not required. A `hostssl` line in `pg_hba.conf` is what enforces it, and a client must also verify the certificate.
+- Postgres refuses to start if its private key is readable by others. That's what `chmod 600` is for.
+- Without TLS, query text and results cross the wire in plain sight. **SCRAM** keeps the password itself off the wire, even so.
+- Giving each route a role with minimal rights limits what a SQL injection can do. The surprises: `INSERT` on a `serial` column needs `USAGE` on the sequence, `RETURNING` needs `SELECT`, and `DELETE ... WHERE` needs `SELECT` too.
+- A query built from a million `OR` clauses was 14 MB of text and took 54 seconds. The same ids as an array parameter took under a second.
+- **Homomorphic encryption** computes on data the server can't read. It's real and it works, and it's very expensive.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. **13 · Database security** (this post): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## Encrypting the connection
+
+### Turning on TLS
+
+The course's demo starts with a client insisting on TLS, against a fresh Postgres, and fails. I repeated it, including the mistakes:
+
+<Ran src="security/tls" title="TLS, step by step" />
+
+Reading that from the top:
+
+1. **A new container has TLS off.** The client got `The server does not support SSL connections`.
+2. **With a key left world-readable, the server wouldn't start at all.** `private key file has group or world access`, and the container exited. That protection is on purpose: the [docs](https://www.postgresql.org/docs/current/ssl-tcp.html) require it.
+3. **After `chmod 600`, TLS works.** TLS 1.3 here.
+4. **A plain connection still works.** This is the part to remember. TLS is now possible, and clients can still choose not to use it.
+5. **Verifying the certificate fails**, because it's self-signed. A client that doesn't verify is protected from eavesdropping, but not from an impostor.
+6. **`hostssl` in `pg_hba.conf` finally refuses plain connections.**
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture says `chmod 600` is there "so we allow execution". It does the opposite of anything to do with execution: it means only the owner can read and write the key. It also says a 2048-bit RSA key can be broken very easily. That isn't true of any known attack. 4096 is a fine choice, and 2048 isn't broken.
+
+</Callout>
+
+### A connection, byte by byte
+
+The course reads Postgres and MongoDB packets in Wireshark. I put a small logging TCP proxy between a real client and a real server, so every byte passed through it, and decoded the messages. Compare the two tabs:
+
+<WireTrace src="security/wire" />
+
+Here's the shape of that conversation:
+
+![How a Postgres connection starts. The TCP handshake comes first. The client may ask for TLS. Then it sends a startup message with its user and database, the server asks for authentication, they exchange SCRAM messages, and the server sends its settings and says it's ready for queries.](/images/data-engineering/database-engineering/db-security/startup-flow.svg)
+
+Without TLS, anyone on the path reads the user, the database, the query and the result. The password is a different story: the [SCRAM exchange](https://www.postgresql.org/docs/current/sasl-authentication.html) proves knowledge of it without sending it. With TLS, after a one-byte `S` to accept, everything is opaque, and a search for the query text finds nothing.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture's capture shows `AuthenticationMD5Password`, from a Postgres 11 server. Since [version 14](https://www.postgresql.org/docs/release/14.0/) the default is `scram-sha-256`, which is what my capture shows.
+
+</Callout>
+
+### What the server tells a stranger
+
+The course dislikes how much an error can reveal. Here's what a failed login gets back, field by field:
+
+<Ran src="security/login-errors" />
+
+Two things are worth noticing. A wrong password and an unknown user get the same message, which is good, because it hides which accounts exist. But the error carries a source file and line number, and an unknown database gets a distinct reply, so a stranger can tell which databases exist. In your own API, log the detail and send the client something vague.
+
+### MongoDB's wire
+
+The course's other capture is MongoDB Atlas: a TLS 1.3 handshake, then a `hello` that returns the cluster's topology, then SCRAM. Drivers are lazy, so nothing is sent until the first real query. On a local server without TLS, I built the `hello` by hand to see the format:
+
+<Ran src="security/mongo-wire" title="OP_MSG, by hand" />
+
+`dd 07` is 2013 in little-endian bytes: the `OP_MSG` opcode. The reply tells a client the server's limits, and with a replica set it would list the hosts, so that the client can find the primary.
+
+## Least privilege
+
+The course's to-do app question begins with an innocent idea: should an app run `CREATE TABLE IF NOT EXISTS` at startup? The answer leads to a bigger one: an app's database user shouldn't be able to do that, or anything else it doesn't need.
+
+![Three pools for three roles. The read route uses a pool logged in as a role that can only select. The create route uses a role that can only insert, and the delete route a role that can only delete. A SQL injection in the read route can't drop or change anything.](/images/data-engineering/database-engineering/db-security/least-privilege.svg)
+
+The design is three connection pools, one per role, with each route using the role it needs. Building it was full of surprises for the course, and for me:
+
+<Ran src="security/least-privilege" title="three roles, tested" />
+
+| What failed | Why | The fix |
+| --- | --- | --- |
+| `INSERT` | A `serial` column reads a sequence | `GRANT USAGE ON SEQUENCE` |
+| `INSERT ... RETURNING id` | `RETURNING` reads the row back | `GRANT SELECT`, or don't use it |
+| `DELETE ... WHERE id = 1` | The `WHERE` reads the column | `GRANT SELECT` |
+| `CREATE TABLE` | Since [Postgres 15](https://www.postgresql.org/docs/release/15.0/) `public` isn't writable by all | Run migrations as a separate owner |
+
+The `RETURNING` failure wasn't in the course. I hit it because the first version of my test used it. Each of these looks like a bug until you see the reason, so test every role against every query it will run. Try them here:
+
+<PgPlayground src="security/roles" />
+
+### What this buys you
+
+Here's a SQL injection, with the string the attacker would supply, first as the table's owner, then as the read-only role:
+
+<Ran src="security/injection" />
+
+As the owner, the injected `UNION` read every password. As `dbread`, the same attack fails on `users`, and `DROP TABLE` fails too. Parameterised queries are what stop injection. Roles are what limit the damage if one gets through. The course's other habits: put credentials in environment variables, keep errors vague, and put a limit on every query.
+
+## The largest query
+
+The course asks how big a query can get. It builds `WHERE id = 1 OR id = 2 OR ...` in Node and sends it to a free hosted Postgres, which handled 100,000 ids and crashed at a million. I ran the same test on a local server:
+
+<Ran src="security/big-query" title="one query, growing" />
+
+A million ids is 14 MB of SQL and about 10,000 TCP segments, and it worked here, in 54 seconds. So the course's crash came from that small hosted server's memory limit rather than from a protocol limit. Most of the time goes on parsing and planning a huge expression. The fix is to send the data as data:
+
+<LabChart src="security/big-query" />
+
+The same million ids as one array parameter took under a second. It's also safe from injection, for free.
+
+## Encrypting data in use
+
+![Data in three states. In transit, TLS protects it on the wire. At rest, disk or file encryption protects it in storage. In use, the database must normally decrypt it to compute, and that's the gap homomorphic encryption tries to close.](/images/data-engineering/database-engineering/db-security/encryption-states.svg)
+
+TLS protects data on the wire, and disk encryption protects it at rest. But to run a query, the server must see the data in the clear. Queries, indexes and analytics all need that. So does a layer 7 proxy that terminates TLS, as [post 10](/blog/db-system-design#load-balancing) noted.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture says nobody encrypts data in a database. Encryption at rest is common, including Transparent Data Encryption in several products. The accurate point is narrower: data is decrypted to be used.
+
+</Callout>
+
+**Homomorphic encryption** computes on ciphertext directly. Encrypt 7 and 3, hand them to a server, and it can produce the encryption of 10 without learning any of them. Here it is for real, in your browser, with 512-bit Paillier keys. Paillier can only add, and that's enough to see the idea:
+
+<HomomorphicLab />
+
+Adding became multiplying ciphertexts, and the server never held a key. Note the size: a number that fits in 16 bits became a ciphertext of over a thousand. Each encryption of the same value also comes out different, which matters: otherwise you could spot equal salaries.
+
+The course goes further, with IBM's toolkit for **fully** homomorphic encryption, which handles any computation. Its demo looks up a capital city in an encrypted table of 48 countries, without the server learning the query.
+
+🎓 On a 2015 MacBook, the lecture's single lookup took about two minutes. Its point stands, whatever the hardware: this works, it's slow, and today it suits batch analytics on sensitive data more than ordinary queries. I didn't re-run the toolkit, which dates from 2020.
+
+## Things that can trip you up
+
+- **`ssl = on` doesn't require TLS.** Check `pg_hba.conf`.
+- **`sslmode=require` doesn't verify the server.** `verify-full` does.
+- **Key file permissions.** Too open, and the server won't start.
+- **`GRANT INSERT` isn't enough for `serial` columns.** Grant the sequence as well.
+- **`DELETE ... WHERE` and `RETURNING` need `SELECT`.**
+- **Using the owner role in the app.** One injection then reaches everything.
+- **Sending error details to clients.** Log them instead.
+- **Huge `IN` or `OR` lists built as text.** Pass an array.
+- **Trusting a query log.** It can hold the values you were trying to protect.
+
+## Reproduce this yourself
+
+1. ✅ Generate a key and certificate in the data directory, as the course does:
+   ```bash
+   openssl req -x509 -newkey rsa:4096 -nodes -keyout private.pem -out cert.pem -days 30 -subj /CN=localhost
+   chown postgres private.pem cert.pem
+   chmod 600 private.pem
+   ```
+2. ✅ In `postgresql.conf`: `ssl = on`, `ssl_cert_file = 'cert.pem'`, `ssl_key_file = 'private.pem'`, then restart. Check with `SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid();`.
+3. ✅ Change the last `host` line of `pg_hba.conf` to `hostssl`, and `SELECT pg_reload_conf();`.
+4. ✅ To watch the wire, point a client at a small TCP proxy that logs bytes. I wrote mine with Node's `net` module. 🎓 The course uses Wireshark, which works too.
+5. ✅ For roles, `CREATE ROLE`, `GRANT`, then `SET ROLE` to test each query.
+6. 📘 For the IBM toolkit, see the [fhe-toolkit-linux repository](https://github.com/IBM/fhe-toolkit-linux). I didn't run it.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **TLS** | Encryption and server identity for a connection |
+| **`hostssl`** | A `pg_hba.conf` entry matching only TLS connections |
+| **SCRAM** | A login exchange proving a password without sending it |
+| **Wire protocol** | The format of messages between client and server |
+| **OP_MSG** | MongoDB's message format |
+| **Least privilege** | Giving each role only the rights it needs |
+| **SQL injection** | Input that becomes part of a query |
+| **Parameterised query** | Query text and values sent separately |
+| **Encryption at rest** | Data encrypted in storage |
+| **Homomorphic encryption** | Computing on data while it stays encrypted |
+| **Paillier** | An encryption scheme where multiplying ciphertexts adds the plain values |
+
+## Summary
+
+TLS has to be enabled, enforced with `hostssl`, and verified by clients, and each of those is a separate step. Without it, queries and results are readable on the wire, even though SCRAM protects the password. Least privilege turns an injection from a disaster into a failed query, and getting it right takes testing, because sequences, `RETURNING` and `WHERE` all need rights you might not expect. Queries are data too: a huge query text is slow to parse, and an array parameter isn't. Homomorphic encryption closes the last gap, data in use, and works today, at a high cost.
+
+![A map of this post in four columns. Encryption: TLS needs a certificate, and hostssl to enforce it. The wire: SCRAM hides the password, but without TLS queries are plain text. Least privilege: separate roles, with sequence and select rights you might miss. Beyond: compute on encrypted data, at a high cost.](/images/data-engineering/database-engineering/db-security/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **`ssl = on`** | TLS is available | Not the same as required |
+| **`hostssl`** | Only TLS connections match | What enforces it |
+| **`chmod 600`** | Owner-only key file | Postgres refuses anything looser |
+| **Certificate verification** | Is this the right server? | Stops an impostor, not only eavesdroppers |
+| **SCRAM** | A proof, not a password | Default since Postgres 14 |
+| **A pool per role** | Each route gets minimal rights | Limits an injection's reach |
+| **Hidden grants** | Sequences, `RETURNING`, `WHERE` | Why roles need testing |
+| **Array parameters** | Send data as data | Fast, and safe from injection |
+| **Homomorphic encryption** | Compute without decrypting | Closes the "in use" gap, at a cost |
+
+### Test yourself
+
+<details>
+<summary>You set ssl = on and restart. A client connects without TLS and it works. What's missing?</summary>
+
+`ssl = on` only makes TLS available. To require it, change the entry in `pg_hba.conf` to `hostssl`, so that plain connections no longer match any rule.
+
+</details>
+
+<details>
+<summary>Someone captures an unencrypted Postgres session using SCRAM. What can they read, and what can't they?</summary>
+
+They can read the user, database, queries and results. They can't read the password, since SCRAM only proves knowledge of it. They'd still see enough to do a lot of harm.
+
+</details>
+
+<details>
+<summary>A role has INSERT on a table with a serial id, and the insert fails. Why, and what about RETURNING id?</summary>
+
+The default value reads a sequence, which needs `USAGE` on it. `RETURNING` reads the new row back, so it needs `SELECT` on the table.
+
+</details>
+
+<details>
+<summary>Why does a read-only role help against SQL injection, if parameterised queries already stop it?</summary>
+
+Parameters stop injection where they're used. A role limits the damage from any mistake elsewhere: an injected `DROP` or a read of another table fails, because the role doesn't have the right.
+
+</details>
+
+<details>
+<summary>In Paillier, how does a server add two numbers it can't read?</summary>
+
+It multiplies their ciphertexts. The scheme is built so that decrypting the product gives the sum, and the server needs no key to multiply.
+
+</details>
+
+## Open questions and gaps
+
+- 🎓 I didn't re-run IBM's fully homomorphic toolkit, so its two-minute figure is the lecture's. The Paillier demo is my own, and only adds.
+- The course's crash at a million ids came from a free hosted server, and my local server survived. I can't say exactly what limit that host hit.
+- 📘 I didn't test `verify-full`, or MongoDB with TLS and SCRAM: my MongoDB server was local, without TLS.
+- Transparent Data Encryption and disk encryption are described, not run.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- PostgreSQL docs: [Secure TCP/IP Connections with SSL](https://www.postgresql.org/docs/current/ssl-tcp.html), [pg_hba.conf](https://www.postgresql.org/docs/current/auth-pg-hba-conf.html), [SASL Authentication](https://www.postgresql.org/docs/current/sasl-authentication.html), [Message Flow](https://www.postgresql.org/docs/current/protocol-flow.html), Release notes for [14](https://www.postgresql.org/docs/release/14.0/) and [15](https://www.postgresql.org/docs/release/15.0/)
+- MongoDB docs: [Wire Protocol](https://www.mongodb.com/docs/manual/reference/mongodb-wire-protocol/), [hello](https://www.mongodb.com/docs/manual/reference/command/hello/)
+- Paillier, *Public-Key Cryptosystems Based on Composite Degree Residuosity Classes* (1999)
+- IBM, [fhe-toolkit-linux](https://github.com/IBM/fhe-toolkit-linux)

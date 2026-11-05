@@ -16,6 +16,25 @@ import PoissonArrivals from "@/components/charts/PoissonArrivals";
 import DecodeLatency from "@/components/charts/DecodeLatency";
 import DtypeMemory from "@/components/charts/DtypeMemory";
 import DataTrace from "@/components/sql/DataTrace";
+import PgPlayground from "@/components/db/PgPlayground";
+import Ran from "@/components/db/Ran";
+import TxnTheater from "@/components/db/TxnTheater";
+import LabChart from "@/components/db/LabChart";
+import SlabLab from "@/components/db/SlabLab";
+import HotView from "@/components/db/HotView";
+import WireTrace from "@/components/db/WireTrace";
+import WalLab from "@/components/db/WalLab";
+import HomomorphicLab from "@/components/db/HomomorphicLab";
+import LsmLab from "@/components/db/LsmLab";
+import ReplicationLab from "@/components/db/ReplicationLab";
+import HashRing from "@/components/db/HashRing";
+import PartitionPruner from "@/components/db/PartitionPruner";
+import BloomLab from "@/components/db/BloomLab";
+import InsertOrderLab from "@/components/db/InsertOrderLab";
+import BPlusTreeLab from "@/components/db/BPlusTreeLab";
+import PlanMatrix from "@/components/db/PlanMatrix";
+import RowColumnLab from "@/components/db/RowColumnLab";
+import PageExplorer from "@/components/db/PageExplorer";
 
 type HeadingProps = React.ComponentPropsWithoutRef<"h2">;
 
@@ -140,6 +159,25 @@ const components = {
   DecodeLatency,
   DtypeMemory,
   DataTrace,
+  PgPlayground,
+  Ran,
+  TxnTheater,
+  LabChart,
+  SlabLab,
+  HotView,
+  WireTrace,
+  WalLab,
+  HomomorphicLab,
+  LsmLab,
+  ReplicationLab,
+  HashRing,
+  PartitionPruner,
+  BloomLab,
+  InsertOrderLab,
+  BPlusTreeLab,
+  PlanMatrix,
+  RowColumnLab,
+  PageExplorer,
 };
 
 export default function MdxContent({ source }: { source: string }) {

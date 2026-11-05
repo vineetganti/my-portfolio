@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "from": "application",
+      "to": "primary",
+      "label": "writes",
+      "type": "request"
+    },
+    {
+      "from": "primary",
+      "to": "standby 1",
+      "label": "WAL stream",
+      "type": "data"
+    },
+    {
+      "from": "primary",
+      "to": "standby 2",
+      "label": "WAL stream",
+      "type": "data"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+ "theaters": {},
+ "runs": {
+  "basics": {
+   "blocks": [
+    {
+     "cmd": "-- on the primary\nSELECT application_name, state, sync_state FROM pg_stat_replication;",
+     "out": " connected | application_name |   state   | sync_state \n-----------+------------------+-----------+------------\n t         | walreceiver      | streaming | async\n(1 row)"
+    },
+    {
+     "cmd": "-- on the standby\nSELECT count(*) FROM t;\nSELECT pg_is_in_recovery();",
+     "out": " count \n-------\n 10000\n(1 row)\n\n pg_is_in_recovery \n-------------------\n t\n(1 row)"
+    },
+    {
+     "cmd": "-- writing to the standby\nCREATE TABLE nope (id int);\nINSERT INTO t (v) VALUES ('nope');",
+     "out": "ERROR:  cannot execute CREATE TABLE in a read-only transaction\nERROR:  cannot execute INSERT in a read-only transaction"
+    },
+    {
+     "cmd": "-- ALTER TABLE t ADD COLUMN extra int on the primary, then on the standby:\n\\d t",
+     "out": "                            Table \"public.t\"\n Column |  Type   | Collation | Nullable |            Default            \n--------+---------+-----------+----------+-------------------------------\n id     | integer |           | not null | nextval('t_id_seq'::regclass)\n v      | text    |           |          | \n extra  | integer |           |          | \nIndexes:\n    \"t_pkey\" PRIMARY KEY, btree (id)"
+    }
+   ],
+   "engine": "PostgreSQL 18.6, primary and standby"
+  },
+  "rates": {
+   "blocks": [
+    {
+     "cmd": "-- one client, single-row commits, for each setting",
+     "out": "synchronous_commit=local         552 commits/s   waits for the primary's own disk\nsynchronous_commit=remote_write  513 commits/s   waits for the standby to receive it\nsynchronous_commit=on            362 commits/s   waits for the standby's disk\nsynchronous_commit=remote_apply  351 commits/s   waits until a read there would see it"
+    }
+   ],
+   "engine": "PostgreSQL 18.6, primary and standby"
+  },
+  "cp": {
+   "blocks": [
+    {
+     "cmd": "-- synchronous replication on",
+     "out": " application_name | sync_state \n------------------+------------\n walreceiver      | sync\n(1 row)"
+    },
+    {
+     "cmd": "$ docker network disconnect dbe-net dbe-standby\nINSERT INTO t (v) VALUES ('during the partition');",
+     "out": "after 3.0 s the client is still waiting\npg_stat_activity: wait_event=SyncRep, query=\"INSERT INTO t (v) VALUES ('during the pa\""
+    },
+    {
+     "cmd": "SELECT pg_cancel_backend(pid);   -- give up on the wait",
+     "out": "WARNING: canceling wait for synchronous replication due to user request"
+    },
+    {
+     "cmd": "SELECT count(*) FROM t WHERE v = 'during the partition';",
+     "out": "1"
+    }
+   ],
+   "engine": "PostgreSQL 18.6, primary and standby"
+  },
+  "ap": {
+   "blocks": [
+    {
+     "cmd": "-- asynchronous, network still cut: 500 more rows on the primary",
+     "out": "primary: 10501 rows, and every write was accepted\nstandby: 10000 rows, still answering reads, now stale"
+    },
+    {
+     "cmd": "$ docker network connect dbe-net dbe-standby",
+     "out": "standby caught up to 10501 rows after 2.2 s"
+    }
+   ],
+   "engine": "PostgreSQL 18.6, primary and standby"
+  },
+  "your-writes": {
+   "blocks": [
+    {
+     "cmd": "-- recovery_min_apply_delay = '2s' on the standby\nUPDATE profile SET bio = 'new bio' WHERE id = 1;   -- on the primary\n-- then read both, every 250 ms",
+     "out": "    4 ms   primary: new bio   standby: old bio\n  529 ms   primary: new bio   standby: old bio\n 1057 ms   primary: new bio   standby: old bio\n 1587 ms   primary: new bio   standby: old bio\n 2116 ms   primary: new bio   standby: new bio\n 2643 ms   primary: new bio   standby: new bio\n 3164 ms   primary: new bio   standby: new bio"
+    }
+   ],
+   "engine": "PostgreSQL 18.6, primary and standby"
+  },
+  "failover": {
+   "blocks": [
+    {
+     "cmd": "-- asynchronous: the primary acknowledges 200 orders the standby never received, then dies\nSELECT pg_promote();",
+     "out": "promoted: t, pg_is_in_recovery: f\norders acknowledged to clients: 200\norders on the new primary:      0\nlost in the failover:           200"
+    }
+   ],
+   "engine": "PostgreSQL 18.6, primary and standby"
+  }
+ },
+ "charts": {},
+ "data": {},
+ "playgrounds": {
+  "lsn": {
+   "title": "The log that replication ships",
+   "hint": "A standby replays WAL, so this is what travels. Every write moves the position forward, and pg_walinspect shows the records themselves.",
+   "setup": "CREATE TABLE t (id int, v text);",
+   "query": "SELECT pg_current_wal_insert_lsn() AS before_write;\nINSERT INTO t SELECT g, 'row' FROM generate_series(1, 1000) g;\nSELECT pg_current_wal_insert_lsn() AS after_write;",
+   "presets": [
+    {
+     "label": "Bytes of WAL for 1,000 rows",
+     "sql": "CREATE TEMP TABLE IF NOT EXISTS mark (lsn pg_lsn);\nTRUNCATE mark;\nINSERT INTO mark SELECT pg_current_wal_insert_lsn();\nINSERT INTO t SELECT g, 'row' FROM generate_series(1, 1000) g;\nSELECT pg_size_pretty(pg_current_wal_insert_lsn() - lsn) AS wal_written FROM mark;"
+    },
+    {
+     "label": "Read the records",
+     "sql": "SELECT start_lsn, resource_manager, record_type, record_length\nFROM pg_get_wal_records_info(pg_current_wal_insert_lsn() - 2000, pg_current_wal_insert_lsn())\nLIMIT 8;"
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,394 @@
+---
+title: "How Data Sits on Disk: Pages, Heaps and Clustered Tables"
+description: "What a table really is on disk: fixed-size pages in a file, what's inside one byte by byte, why a read is never one row, how Postgres's heap differs from InnoDB's clustered tree, and why column stores win at analytics."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 2
+tags: ["Databases", "PostgreSQL", "MySQL", "Storage"]
+---
+
+A table looks like a spreadsheet: rows and columns, in a nice grid. On disk nothing looks like that. A table is a file, the file is a sequence of fixed-size **pages**, and every read and write the database does happens one page at a time.
+
+Almost every performance question in this series comes back to this picture. An index is a way to read fewer pages. A cache is a way to avoid reading them twice. A bad primary key is one that spreads rows over too many pages. So this post opens up a real page and reads it byte by byte.
+
+<Callout type="note" title="TL;DR">
+
+- Databases read and write **pages** (8 KB in Postgres, 16 KB in InnoDB), never single rows. Disks can't fetch a single byte anyway.
+- A page's address is arithmetic: **offset = page number × page size** in the table's file. Reading pages 2 to 9 is one read at offset 16,384.
+- Inside a Postgres page, **line pointers** grow from the front and rows grow from the back. An address like `(2,5)` means page 2, line pointer 5.
+- Postgres stores rows in an unordered **heap**, and every index points at a physical address. InnoDB stores the table **inside** the primary key's tree, and secondary indexes hold the primary key value.
+- **Row stores** suit transactions, **column stores** suit analytics. For one sum over 200,000 rows, a column-shaped table read 885 pages instead of 3,456.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. **02 · How data sits on disk** (this post): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## From rows to pages
+
+Start with the vocabulary, because every later post uses it.
+
+- **Table**: what you query. Rows and columns, with no physical meaning.
+- **Row id**: an internal identifier for each row. In InnoDB it's the primary key. In Postgres it's a physical address called the **ctid**.
+- **Page**: a fixed-size block of bytes holding many rows. It's the smallest unit the database reads or writes.
+- **I/O**: one read request to the disk. The aim of most tuning is to do fewer of them.
+- **Heap**: the collection of pages holding the table's actual data.
+- **Index**: a separate structure, also stored in pages, that says which heap page holds what you want.
+
+![A logical table of employee rows on the left, each with an internal row id. On the right the same rows packed into fixed-size pages, three rows to a page, so that 1,001 rows need 334 pages. The collection of pages is the heap.](/images/data-engineering/database-engineering/db-how-data-sits-on-disk/logical-to-physical.svg)
+
+Here are the real page sizes on the two engines:
+
+<Ran src="disk/page-size" />
+
+<Ran src="disk/page-size-mysql" />
+
+Every row in Postgres shows its address if you ask for the hidden `ctid` column. Try the presets:
+
+<PgPlayground src="disk/ctid" />
+
+The last preset is the one to watch: an `UPDATE` changes a row's address, because it writes a new copy. [Post 1](/blog/db-acid-transactions) explained why, and we're about to see the bytes.
+
+## Why a read is never one row
+
+If an index tells the database exactly where a row is, why fetch a whole page? A student asked this in the course's Q&A, and the answer has three layers.
+
+**Disks aren't byte addressable.** RAM lets you ask for one byte. A disk only serves whole blocks, so even a request for 4 bytes moves at least a block.
+
+**The database often doesn't know the exact byte.** Rows vary in size, so the only thing it can compute is which page a row is in. The position inside the page is stored in the page itself, and the page has to be in memory to read that.
+
+**Fetching neighbours is usually a good bet.** Rows that are read together tend to sit together, and a page brings them all for the same cost. This is why a query reading a range of an index is fast, and why packing related rows together pays off.
+
+The terms overlap, so here's how I keep them apart: a **page** is the database's unit, a **block** is the file system's or disk's unit, and one page usually spans several blocks.
+
+You can count pages directly. `EXPLAIN (ANALYZE, BUFFERS)` reports every page a query touched. This table holds 100,000 employees:
+
+<Ran src="disk/buffers" />
+
+The whole table is 934 pages. Finding one employee by primary key touched **3 pages**: index pages down to the row, then the heap page. Summing every salary touched all **934**. That ratio is the reason indexes exist, and [post 3](/blog/db-indexes-and-query-plans) takes it from there. (`hit` means the page was already in memory. Pages that came from outside the buffer pool are counted as `read`.)
+
+## How a page lives in a file
+
+A table is a file, and the file is an array of pages. To read page `X`, the database needs three things: the file, the offset `X × page size`, and the length of a page. No lookup is needed, because every page is the same size.
+
+To read pages 2 through 9 of a table with 8 KB pages:
+
+```text
+offset = 2 × 8192 = 16,384 bytes
+length = 8 × 8192 = 65,536 bytes
+```
+
+Here's that exact read against a real table's file. I ran `dd` inside the container, reading the file the way the database does:
+
+<Ran src="disk/file-offset" title="reading a table's file directly" />
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes had the offset as 16,484. That was a typo: 2 × 8192 is 16,384.
+
+</Callout>
+
+## Inside a Postgres page
+
+Here is the layout, read from a real page with the [`pageinspect`](https://www.postgresql.org/docs/current/pageinspect.html) extension after each step. Click the steps, then click a line pointer or a row:
+
+<PageExplorer src="disk/page-steps" />
+
+The [page layout docs](https://www.postgresql.org/docs/current/storage-page-layout.html) describe five parts:
+
+| Part | Size | What it holds |
+| --- | --- | --- |
+| Page header | 24 bytes | Free-space pointers (`lower`, `upper`), the checksum and more |
+| Line pointers | 4 bytes each | The offset and length of each row in this page |
+| Free space | The rest | The gap between pointers and rows |
+| Rows | Variable | The data, added from the end of the page backwards |
+| Special space | Variable | Empty for tables, used by index pages |
+
+Three things in that replay are worth stopping on.
+
+**The line pointer is a level of indirection.** Indexes point at `(page, line pointer)`, not at a byte offset. So a row can move inside its page, and only the pointer changes. After `VACUUM` repacked the rows, row 3 sat at a different offset and its ctid didn't change. Line pointer 2 even became a redirect to pointer 4, so an index entry for the old version still leads to the current row. That's the **Heap Only Tuple** trick, which [post 14](/blog/db-postgres-mysql-internals) covers.
+
+**Nothing is overwritten.** An `UPDATE` adds a version and a `DELETE` adds a mark. The space only comes back when `VACUUM` runs, which is what makes MVCC possible, and also what makes tables bloat.
+
+**Index pages use the special space.** A table page has none, so `special` equals the page size. A B-tree page keeps links to its neighbours there:
+
+<Ran src="disk/index-special" />
+
+<Callout type="warn" title="Correcting my notes">
+
+Two fixes from reading real pages. The Q&A says the database must read all the rows in a page to find yours. For Postgres that isn't so: the second number in a ctid indexes straight into the line pointer array, as the replay shows. My notes also repeat a criticism that with 1,000 items a page wastes half its space on pointers. An 8 KB heap page can't hold 1,000 rows: the smallest row I could make gave 226 per page, so pointers took about 11% of it. The "Special" line in my notes had a stray link where its description should be. The table above has the real answer.
+
+</Callout>
+
+Now the box version, on the same table shape. This is real `pageinspect` in your browser:
+
+<PgPlayground src="disk/inspect" />
+
+### How wide can a row be?
+
+The width of your rows decides how many fit in a page, and therefore how much each read brings back:
+
+<LabChart src="disk/rows-per-page" />
+
+This is why `SELECT` of a wide table is slower to scan than a narrow one with the same row count, and why the course keeps warning against wide rows.
+
+A row also can't be bigger than a page: the [Postgres docs](https://www.postgresql.org/docs/current/storage-toast.html) say tuples can't span pages. So what happens to a 1.7 MB text value? It's compressed, and moved out of line to a side table. That's **TOAST**, triggered once a row passes about 2 KB:
+
+<Ran src="disk/toast" />
+
+The main table stayed at a single page, and repeated text compressed from 1,758 kB to 20 kB. InnoDB does something similar with overflow pages.
+
+## Reading and writing through memory
+
+Pages don't go straight between disk and query. When the database needs a page it looks in its own **buffer pool** first, then asks the operating system, which checks its file cache before touching the disk:
+
+![The path of a read. The query asks the buffer pool for a page. If the page is there, no I/O happens. Otherwise the database asks the operating system for the file, offset and length. The OS checks its own file cache, and only on a miss does the read reach the disk. The page travels back up into the buffer pool.](/images/data-engineering/database-engineering/db-how-data-sits-on-disk/read-path.svg)
+
+So not every I/O reaches the disk. Hitting the OS cache is why a query can be slow the first time and fast the second, even after the database restarts.
+
+Writes work the other way round. The page is changed in memory, a small log record is forced to disk at commit, and the page itself goes back later, possibly after many more changes. That's the [write-ahead log from post 1](/blog/db-acid-transactions#durability-committed-means-safe), seen from the page's side:
+
+![The path of a write. The database reads the page into the buffer pool and changes the row in memory, which makes the page dirty. It also appends a small log record and forces that to disk, which is what makes the commit durable. The page itself stays in memory, can take many more writes, and is flushed to its file later.](/images/data-engineering/database-engineering/db-how-data-sits-on-disk/write-path.svg)
+
+## Heap tables and clustered tables
+
+There are two big ways to organise a table's pages. The difference shapes everything from insert speed to index size.
+
+### Postgres: a heap, and every index on the side
+
+In Postgres rows go wherever there's room, so the heap has no order. Insert ids 3, 1, 2 and that's how they stay:
+
+<Ran src="disk/heap-order" />
+
+The primary key is an ordinary index. All indexes are secondary, and each entry stores a physical address.
+
+### InnoDB: the table is the primary key's tree
+
+InnoDB builds the table as a B+Tree on the primary key, and the leaf pages hold whole rows. This is called a **clustered index**. The [MySQL docs](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html) say each InnoDB table has one, and if you don't define a primary key it creates a hidden one. Same inserts, different result:
+
+<Ran src="disk/clustered-order" />
+
+The rows came back in key order without any `ORDER BY`, because that's how they're stored. Don't rely on that, though: only `ORDER BY` guarantees an order.
+
+Oracle calls this an index-organized table, and in SQL Server it's a clustered index. Postgres has a `CLUSTER` command, but the [docs](https://www.postgresql.org/docs/current/sql-cluster.html) are clear it's a one-time reordering: later writes aren't kept in order.
+
+### Two ways to reach a row
+
+![Two ways to find a row by a secondary key. In Postgres every index is separate from the heap: the index entry holds the row's address, and one more step reads the row from the heap. In InnoDB the table is itself a tree ordered by primary key: a secondary index entry holds the primary key value, and a second tree walk finds the row inside the clustered index.](/images/data-engineering/database-engineering/db-how-data-sits-on-disk/heap-vs-clustered.svg)
+
+You can prove what a secondary index holds. Run the same query on both engines: an index on `email` only, asking for `id`.
+
+<Ran src="disk/secondary-pg" />
+
+<Ran src="disk/secondary-mysql" />
+
+Postgres has to visit the heap to get `id`. MySQL says `Using index`, meaning it never touched the table, even though `id` isn't in the index definition. The primary key is in every secondary index entry.
+
+| | Postgres heap | InnoDB clustered |
+| --- | --- | --- |
+| Row order | None | Primary key order |
+| Lookup by primary key | Index, then heap | One tree walk, the row is in the leaf |
+| Lookup by secondary key | Index, then heap | Secondary tree, then primary tree |
+| Range scan on primary key | Rows may be scattered | Rows are adjacent |
+| When a row moves | Indexes may need new entries | Only the primary key tree changes |
+| Cost of a wide primary key | Only that index | Every secondary index carries it |
+
+This table is the seed of [post 14's](/blog/db-postgres-mysql-internals) story about why Uber left Postgres. It also explains why random keys hurt a clustered table: inserts land all over the tree instead of at the end. [Post 4](/blog/db-bloom-filters-and-uuids) measures that.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes say "MySQL and Oracle: secondary indexes store the primary key". That's true for InnoDB and for Oracle's index-organized tables only. Oracle's default is a heap table, and its [indexes](https://docs.oracle.com/en/database/oracle/oracle-database/19/cncpt/indexes-and-index-organized-tables.html) store a rowid.
+
+</Callout>
+
+## Row stores and column stores
+
+Everything so far stored each row's columns together. There's another option: store each column's values together. The same table, and the same three queries from the course, with the pages counted for real:
+
+<RowColumnLab />
+
+The pattern is simple. A row store reads whole rows, so it's ideal when you want whole rows. A column store reads whole columns, so it's ideal when you want a few columns of many rows.
+
+I can show the effect on real Postgres by comparing a wide table with a table of just the one column a query needs, which is what a column store's file for that column amounts to:
+
+<Ran src="disk/column-proxy" title="a column store's advantage, approximated" />
+
+885 pages against 3,456, for the same sum. A real column store does far better, because Postgres still pays about 28 bytes of overhead per row in that narrow table. A real one packs bare values and compresses them. A column of salaries has few distinct values and long runs, and that compresses dramatically.
+
+| | Row store | Column store |
+| --- | --- | --- |
+| Best at | Reads and writes of whole rows | Reads of few columns over many rows |
+| Workload | OLTP: many small transactions | OLAP: few large analytical queries |
+| Writes | Fast: one row, one place | Slow: one row touches every column's file |
+| Compression | Modest, values are mixed | Excellent, similar values sit together |
+| Aggregates | Must read everything | Reads only what it needs |
+| Queries on many columns | Efficient | Must reassemble rows |
+| Examples | Postgres, MySQL, SQL Server | ClickHouse, Snowflake, BigQuery, DuckDB |
+
+Rows and columns aren't the only choices. The aim is always to pack a page so that one read is as useful as possible for the workload. Document databases store a compressed document the way a row store stores a row, as [post 12](/blog/db-mongo-memcached-redis) shows, and graph databases persist connections so that one page read helps a traversal.
+
+## Page size is a trade-off
+
+| | Small pages | Large pages |
+| --- | --- | --- |
+| Reading one row | Less data moved | More data moved |
+| Fit with the device | Closer to its block size | Spans many blocks |
+| Metadata overhead | Higher, more headers and pointers | Lower |
+| Page splits | More frequent | Less frequent |
+| A cold read or write | Faster | Slower |
+
+Postgres fixed its page at 8 KB and InnoDB at 16 KB, though both can be changed when the server is built or initialised.
+
+## What's under the page
+
+The course's video on storage covers the two kinds of disk, and they explain why the industry cares so much about write patterns.
+
+![Two kinds of disk. A hard disk reads and writes sectors, and moves a head to reach them, so random access is slow. An SSD has no moving parts, reads and writes pages inside erase blocks, can't overwrite a page in place, and remaps writes to fresh pages, wearing out cells slowly.](/images/data-engineering/database-engineering/db-how-data-sits-on-disk/disk-kinds.svg)
+
+🎓 On a hard disk, rewriting a block in place is fine, and the expensive thing is moving the head. On an SSD random reads are cheap, but a page can't be overwritten. A rewrite goes to a fresh page, and the old block is erased later. Each cell survives a limited number of erase cycles.
+
+This is the argument the course makes against B-trees on SSDs: an index insert can rewrite a page that was only slightly changed, while an append-only structure writes to new space. That thinking led to **LSM trees**, which [post 11](/blog/db-engines-and-cursors) builds.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The video says rewriting a block in place on an SSD kills it, and gives 500 to 700 writes as a typical limit. Both need care, and I couldn't verify that figure. The drive's controller never rewrites in place: it maps the logical block to a fresh physical page and spreads wear across the drive, so a hot page doesn't wear out one spot. Endurance varies widely by drive. The real issue is **write amplification**: one small logical change can cause far more physical writing. Post 14 measures it.
+
+</Callout>
+
+## Things that can trip you up
+
+- **`ctid` isn't a stable id.** It changes on `UPDATE` and on `VACUUM FULL`. Never store one.
+- **A `DELETE` doesn't shrink the file.** Space is reused by later rows in the table, and plain `VACUUM` rarely returns it to the operating system.
+- **`SELECT *` reads big columns you don't need.** Out-of-line TOAST values are only fetched if requested, so naming your columns can be much cheaper.
+- **Row order without `ORDER BY` is an accident.** Postgres gives insertion order until an update moves a row. InnoDB gives key order until the planner picks another index.
+- **A large InnoDB primary key taxes every index.** A 36-character UUID string is copied into each secondary index entry.
+- **`CLUSTER` is a one-off.** It also takes an exclusive lock while it rewrites the table.
+- **"Hit" doesn't mean cheap for every query.** `shared hit=934` is still 934 pages of work, just without a disk read.
+
+## Reproduce this yourself
+
+Commands assume the `pgacid` container from [post 1](/blog/db-acid-transactions#reproduce-this-yourself).
+
+1. ✅ Read a real page. Enable the extension and look at any table:
+   ```sql
+   CREATE EXTENSION pageinspect;
+   SELECT lower, upper, special FROM page_header(get_raw_page('employees', 0));
+   SELECT lp, lp_off, lp_len, t_xmin, t_xmax, t_ctid
+   FROM heap_page_items(get_raw_page('employees', 0)) LIMIT 5;
+   ```
+2. ✅ Find a table's file with `SELECT pg_relation_filepath('employees');` and run `dd` on it inside the container, as in the offset demo.
+3. ✅ Count pages with `EXPLAIN (ANALYZE, BUFFERS) <your query>`.
+4. ✅ For the InnoDB tests, start `mysql:8.4` as in post 1 and run the `people` and `users` examples.
+5. 📘 To change Postgres's page size you must build it yourself with `--with-blocksize`. InnoDB's is set with [`innodb_page_size`](https://dev.mysql.com/doc/refman/8.4/en/innodb-parameters.html#sysvar_innodb_page_size) before the data directory is created.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Page** | The fixed-size unit of every read and write |
+| **Block** | The file system's or disk's unit, often smaller than a page |
+| **Heap** | Table pages with no particular row order |
+| **ctid** | A row's physical address in Postgres: (page, line pointer) |
+| **Line pointer (ItemId)** | A 4-byte entry at the front of a page, giving a row's offset and length |
+| **Buffer pool** | The database's own cache of pages in memory |
+| **Dirty page** | A page changed in memory that isn't yet on disk |
+| **TOAST** | Postgres's way of compressing large values and moving them out of line |
+| **Clustered index** | A table stored inside the tree of one index, usually the primary key |
+| **Secondary index** | Any index that isn't the clustered one |
+| **OLTP, OLAP** | Workloads of many small transactions, or few big analytical queries |
+| **Write amplification** | Physical writes exceeding the logical change that caused them |
+
+## Summary
+
+A table is a file of fixed-size pages, and the page is the unit of all I/O. Its address is arithmetic, so a read is a file, an offset and a length. Inside a Postgres page, pointers at the front give each row an address that survives moves within the page, while updates add versions rather than overwrite. Postgres keeps rows in an unordered heap, and its indexes hold physical addresses. InnoDB stores rows in the primary key's tree, and its secondary indexes hold the key. Row stores and column stores make different bets about which values are read together.
+
+![A map of this post in four columns. Pages: fixed size, the unit of every read and write, and an address of file plus offset. Inside a page: header, line pointers, rows, special space. Tables: a heap with separate indexes in Postgres, a clustered tree in InnoDB. Layout: row stores for transactions, column stores for analytics.](/images/data-engineering/database-engineering/db-how-data-sits-on-disk/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Page** | Smallest unit of I/O | Query cost is mostly pages touched |
+| **Offset arithmetic** | Page × size gives the position in the file | No lookup needed to find a page |
+| **Line pointer** | Row's offset within its page | Rows can move without changing their address |
+| **`lower`, `upper`** | The two ends of the free space | Show how full a page is |
+| **Row versions** | Updates add, deletes mark | Why `VACUUM` exists |
+| **TOAST** | Big values leave the page | Rows can't span pages |
+| **Buffer pool** | Pages cached in database memory | Why a second run is faster |
+| **Heap table** | Rows in no order, indexes on the side | Postgres's model |
+| **Clustered table** | Rows live in the key's tree | InnoDB's model, fast key lookups and ranges |
+| **Secondary index contents** | An address or a primary key | Decides what a row move costs |
+| **Row vs column store** | What sits next to what in a page | Decides which queries read less |
+
+### Test yourself
+
+<details>
+<summary>A table has 100,000 rows in 934 pages. Why did finding one row by primary key touch only 3 pages, and why did a sum touch all 934?</summary>
+
+The index let the database walk down a couple of index pages to the row's address, then read one heap page. A sum needs every row, so it must read every page. Query cost tracks pages touched, not rows returned.
+
+</details>
+
+<details>
+<summary>What does the ctid (2,5) tell you, and why isn't it a byte offset?</summary>
+
+Page 2, line pointer 5. The page gives the file offset: 2 × 8192. The line pointer is an entry at the front of the page holding the row's offset and length. That indirection lets the row move inside the page without changing its address.
+
+</details>
+
+<details>
+<summary>You run UPDATE on one row in Postgres, and then look at the page. What has changed?</summary>
+
+A new row version was added with a new line pointer. The old version is still there, with `xmax` set to the updating transaction and its `t_ctid` pointing at the new version. The free space shrank. Nothing was overwritten, and only `VACUUM` reclaims the old version.
+
+</details>
+
+<details>
+<summary>In InnoDB, an index on email answers SELECT id FROM users WHERE email = ? without touching the table. Why can't Postgres do the same with the same index?</summary>
+
+InnoDB's secondary index entries contain the primary key, so `id` is already in the index. Postgres index entries contain the indexed column and a physical address, so `id` must be read from the heap. Adding `id` to the index, for example with `INCLUDE`, would allow an index-only scan.
+
+</details>
+
+<details>
+<summary>Why are column stores bad at updating one row?</summary>
+
+Each column lives in its own pages, so changing or inserting one row touches a page per column, and the data is usually compressed in blocks that must be rewritten. A row store writes the row in one place.
+
+</details>
+
+## Open questions and gaps
+
+- The column store demo is an approximation on Postgres, not a real column store. I didn't benchmark one, since the course only discusses the idea.
+- 🎓 The hard disk and SSD descriptions come from the course, except where the box corrects them. I couldn't verify the course's figures for block sizes and endurance, and I ran nothing at that layer.
+- I read InnoDB's layout from the docs and from behaviour. I didn't open an `.ibd` file byte by byte the way I did for Postgres.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- PostgreSQL docs: [Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html), [TOAST](https://www.postgresql.org/docs/current/storage-toast.html), [pageinspect](https://www.postgresql.org/docs/current/pageinspect.html), [CLUSTER](https://www.postgresql.org/docs/current/sql-cluster.html)
+- MySQL 8.4 docs: [Clustered and Secondary Indexes](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html), [innodb_page_size](https://dev.mysql.com/doc/refman/8.4/en/innodb-parameters.html#sysvar_innodb_page_size)
+- Oracle docs: [Indexes and Index-Organized Tables](https://docs.oracle.com/en/database/oracle/oracle-database/19/cncpt/indexes-and-index-organized-tables.html)

@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {
+      "from": "client",
+      "to": "server",
+      "label": "GET",
+      "type": "request"
+    },
+    {
+      "from": "server",
+      "to": "Bloom filter",
+      "type": "request"
+    },
+    {
+      "from": "Bloom filter",
+      "to": "database",
+      "label": "maybe: ask",
+      "type": "metadata"
+    }
+  ]
+}

@@ -1,0 +1,300 @@
+{
+ "theaters": {},
+ "runs": {
+  "mongo-basics": {
+   "engine": "MongoDB 8.0.34",
+   "blocks": [
+    {
+     "cmd": "db.serverStatus().storageEngine.name",
+     "out": "wiredTiger"
+    },
+    {
+     "cmd": "ObjectId().toString().length",
+     "out": "24"
+    },
+    {
+     "cmd": "ObjectId(\"65f1a2b3c4d5e6f708192a3b\").getTimestamp()",
+     "out": "ISODate('2024-03-13T12:57:23.000Z')"
+    },
+    {
+     "cmd": "db.t.insertOne({ name: \"a\" }).insertedId.constructor.name",
+     "out": "ObjectId"
+    },
+    {
+     "cmd": "db.t.stats().wiredTiger.creationString.match(/(internal_page_max|leaf_page_max)=\\w+/g)",
+     "out": "[\n  'internal_page_max=4KB',\n  'leaf_page_max=32KB'\n]"
+    }
+   ]
+  },
+  "mongo-plans": {
+   "engine": "MongoDB 8.0.34",
+   "blocks": [
+    {
+     "cmd": "db.users.insertMany(Array.from({ length: 100000 }, (_, i) => ({ _id: i, name: \"user\" + i, age: i % 80 }))).acknowledged",
+     "out": "true"
+    },
+    {
+     "cmd": "db.c_users.drop()",
+     "out": "true"
+    },
+    {
+     "cmd": "db.createCollection(\"c_users\", { clusteredIndex: { key: { _id: 1 }, unique: true } }).ok",
+     "out": "1"
+    },
+    {
+     "cmd": "db.c_users.insertMany(Array.from({ length: 100000 }, (_, i) => ({ _id: i, name: \"user\" + i, age: i % 80 }))).acknowledged",
+     "out": "true"
+    },
+    {
+     "cmd": "db.users.createIndex({ name: 1 })",
+     "out": "name_1"
+    },
+    {
+     "cmd": "db.c_users.createIndex({ name: 1 })",
+     "out": "name_1"
+    },
+    {
+     "cmd": "db.users.find({ _id: 500 }).explain(\"executionStats\").queryPlanner.winningPlan.stage",
+     "out": "EXPRESS_IXSCAN"
+    },
+    {
+     "cmd": "db.users.find({ name: \"user500\" }).explain(\"executionStats\").executionStats.totalDocsExamined",
+     "out": "1"
+    },
+    {
+     "cmd": "db.users.find({ name: \"user500\" }).explain().queryPlanner.winningPlan.stage",
+     "out": "FETCH"
+    },
+    {
+     "cmd": "db.users.find({ name: \"user500\" }).explain().queryPlanner.winningPlan.inputStage.stage",
+     "out": "IXSCAN"
+    },
+    {
+     "cmd": "db.users.find({ name: \"user500\" }, { _id: 0, name: 1 }).explain(\"executionStats\").executionStats.totalDocsExamined",
+     "out": "0"
+    },
+    {
+     "cmd": "db.users.find({ age: 7 }).explain(\"executionStats\").queryPlanner.winningPlan.stage",
+     "out": "COLLSCAN"
+    }
+   ]
+  },
+  "mongo-clustered": {
+   "engine": "MongoDB 8.0.34",
+   "blocks": [
+    {
+     "cmd": "db.users.insertMany(Array.from({ length: 100000 }, (_, i) => ({ _id: i, name: \"user\" + i, age: i % 80 }))).acknowledged",
+     "out": "true"
+    },
+    {
+     "cmd": "db.c_users.drop()",
+     "out": "true"
+    },
+    {
+     "cmd": "db.createCollection(\"c_users\", { clusteredIndex: { key: { _id: 1 }, unique: true } }).ok",
+     "out": "1"
+    },
+    {
+     "cmd": "db.c_users.insertMany(Array.from({ length: 100000 }, (_, i) => ({ _id: i, name: \"user\" + i, age: i % 80 }))).acknowledged",
+     "out": "true"
+    },
+    {
+     "cmd": "db.users.createIndex({ name: 1 })",
+     "out": "name_1"
+    },
+    {
+     "cmd": "db.c_users.createIndex({ name: 1 })",
+     "out": "name_1"
+    },
+    {
+     "cmd": "db.c_users.find({ _id: 500 }).explain(\"executionStats\").queryPlanner.winningPlan.stage",
+     "out": "EXPRESS_CLUSTERED_IXSCAN"
+    },
+    {
+     "cmd": "db.adminCommand({ fsync: 1 }).ok",
+     "out": "1"
+    },
+    {
+     "cmd": "db.users.stats().indexSizes",
+     "out": "{\n  _id_: 1093632,\n  name_1: 1200128\n}"
+    },
+    {
+     "cmd": "db.c_users.stats().indexSizes",
+     "out": "{\n  name_1: 1376256\n}"
+    },
+    {
+     "cmd": "db.users.stats().storageSize + db.users.stats().totalIndexSize",
+     "out": "3661824"
+    },
+    {
+     "cmd": "db.c_users.stats().storageSize + db.c_users.stats().totalIndexSize",
+     "out": "2957312"
+    }
+   ]
+  },
+  "memcached-basics": {
+   "engine": "Memcached 1.6.45",
+   "blocks": [
+    {
+     "cmd": "set name 0 3600 3\nana",
+     "out": "STORED"
+    },
+    {
+     "cmd": "get name",
+     "out": "VALUE name 0 3\nana\nEND"
+    },
+    {
+     "cmd": "set counter 0 0 1\n5",
+     "out": "STORED"
+    },
+    {
+     "cmd": "incr counter 3",
+     "out": "8"
+    },
+    {
+     "cmd": "delete name",
+     "out": "DELETED"
+    },
+    {
+     "cmd": "get name",
+     "out": "END"
+    }
+   ]
+  },
+  "memcached-slabs": {
+   "engine": "Memcached 1.6.45",
+   "blocks": [
+    {
+     "cmd": "-- 2,000 values each of 100, 500 and 5,000 bytes, then:\nstats slabs",
+     "out": "class  4  chunk   192 bytes   5461 chunks per 1 MB page  2000 in use\nclass  9  chunk   600 bytes   1747 chunks per 1 MB page  2000 in use\nclass 19  chunk  5680 bytes    184 chunks per 1 MB page  2000 in use"
+    },
+    {
+     "cmd": "get <a 251-character key>",
+     "out": "CLIENT_ERROR bad command line format"
+    },
+    {
+     "cmd": "set big 0 0 2000000   -- a 2 MB value",
+     "out": "SERVER_ERROR object too large for cache"
+    },
+    {
+     "cmd": "-- 16,000 more values of 5,000 bytes, about 80 MB, into a 64 MB cache",
+     "out": "evictions: 6776\nget fill-0: miss, evicted\nget fill-15999: hit"
+    }
+   ]
+  },
+  "memcached-pool": {
+   "engine": "Memcached 1.6.45",
+   "blocks": [
+    {
+     "cmd": "-- 3,000 keys, client-side hash over 3 servers",
+     "out": "server 1: 1000 items\nserver 2: 1000 items\nserver 3: 1000 items"
+    },
+    {
+     "cmd": "$ docker kill server2\n-- read all 3,000 keys again",
+     "out": "hits: 2000\nlost with server 2: 1000\nthe other servers never noticed"
+    }
+   ]
+  },
+  "redis-wire": {
+   "engine": "Redis 8.0.6",
+   "blocks": [
+    {
+     "cmd": "-- SET name ana, as it goes over TCP",
+     "out": "*3\\r\\n$3\\r\\nSET\\r\\n$4\\r\\nname\\r\\n$3\\r\\nana\\r\\n"
+    },
+    {
+     "cmd": "-- the reply",
+     "out": "+OK\\r\\n"
+    },
+    {
+     "cmd": "-- GET name, and its reply",
+     "out": "*2\\r\\n$3\\r\\nGET\\r\\n$4\\r\\nname\\r\\n\n$3\\r\\nana\\r\\n"
+    }
+   ]
+  },
+  "redis-expiry": {
+   "engine": "Redis 8.0.6",
+   "blocks": [
+    {
+     "cmd": "> SET session:1 ana EX 2",
+     "out": "+OK"
+    },
+    {
+     "cmd": "> TTL session:1",
+     "out": ":2"
+    },
+    {
+     "cmd": "> GET session:1",
+     "out": "ana"
+    },
+    {
+     "cmd": "-- 2.3 seconds later\n> GET session:1",
+     "out": "(nil)"
+    },
+    {
+     "cmd": "> EXISTS session:1",
+     "out": ":0"
+    }
+   ]
+  },
+  "redis-pubsub": {
+   "engine": "Redis 8.0.6",
+   "blocks": [
+    {
+     "cmd": "-- connection 1\n> SUBSCRIBE news\n-- connection 2\n> PUBLISH news hello",
+     "out": "subscribers reached: 1\nconnection 1 received: message news hello"
+    },
+    {
+     "cmd": "-- connection 3 subscribes after the message was sent",
+     "out": "received nothing: messages aren't stored"
+    }
+   ]
+  },
+  "redis-durability": {
+   "engine": "Redis 8.0.6",
+   "blocks": [
+    {
+     "cmd": "-- one client sets keys in a loop for about 3 seconds, the server is killed, then restarted",
+     "out": "no persistence              1411 writes/s   acknowledged   5230   survived      0   lost 5230\nRDB snapshot only           1499 writes/s   acknowledged   5633   survived   5398   lost 235\nAOF, fsync every second     1484 writes/s   acknowledged   5506   survived   5506   lost 0\nAOF, fsync always            167 writes/s   acknowledged    619   survived    619   lost 0"
+    }
+   ]
+  },
+  "redis-bench": {
+   "engine": "Redis 8.0.6",
+   "blocks": [
+    {
+     "cmd": "$ redis-benchmark -t set,get -n 100000 -c 50",
+     "out": "SET: 68775.79 requests per second,\nGET: 69252.08 requests per second,"
+    },
+    {
+     "cmd": "$ redis-benchmark -t set -n 100000 -c 50 -P 16   # pipelining 16 commands",
+     "out": "SET: 1020408.19 requests per second,"
+    },
+    {
+     "cmd": "$ redis-cli info server; redis-cli config get io-threads",
+     "out": "multiplexing_api:epoll\nio_threads_active:0\nio-threads\n1"
+    }
+   ]
+  }
+ },
+ "charts": {},
+ "data": {},
+ "playgrounds": {
+  "documents": {
+   "title": "Documents in a relational table",
+   "hint": "Mongo isn't available in the browser, but Postgres stores documents too. jsonb is binary, like BSON, and a GIN index can search inside it.",
+   "setup": "CREATE TABLE users (id serial PRIMARY KEY, doc jsonb);\nINSERT INTO users (doc) SELECT jsonb_build_object('name', 'user' || g, 'age', g % 80, 'tags', jsonb_build_array('a', 'b')) FROM generate_series(1, 50000) g;\nCREATE INDEX users_doc ON users USING gin (doc);\nANALYZE users;",
+   "query": "SELECT doc FROM users WHERE doc @> '{\"name\": \"user500\"}';",
+   "presets": [
+    {
+     "label": "Its plan",
+     "sql": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT doc FROM users WHERE doc @> '{\"name\": \"user500\"}';"
+    },
+    {
+     "label": "Reach into a field",
+     "sql": "SELECT doc->>'name' AS name, (doc->>'age')::int AS age FROM users LIMIT 3;"
+    }
+   ]
+  }
+ }
+}

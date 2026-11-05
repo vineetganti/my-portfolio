@@ -1,0 +1,285 @@
+---
+title: "Replication and CAP: Copies, Lag and What You Give Up"
+description: "A real primary and standby in two containers: reading your own writes from a lagging replica, what each level of synchronous commit costs, a write that hangs when the network is cut, and 200 acknowledged orders lost in a failover. CAP stops being abstract."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 9
+tags: ["Databases", "PostgreSQL", "Replication", "Distributed Systems", "CAP"]
+---
+
+Keeping a second copy of your data sounds simple. It gives you more read capacity, a server close to your users, and something to fail over to. The trouble is the gap between the copies. Everything hard about replication comes from that gap, and from what you do when the network between them breaks.
+
+The course sets up streaming replication between two Postgres containers, then discusses the CAP theorem. I joined the two up: I built a real primary and standby, and made the things CAP talks about really happen. I cut the network, watched a write hang, read stale data, and failed over and lost orders that clients had been told were saved.
+
+<Callout type="note" title="TL;DR">
+
+- **Replication** ships the primary's write-ahead log to standbys, which replay it. Standbys are read-only.
+- **Asynchronous** replication replies before the standby has the change. It's fast, reads can be stale, and a failover can lose acknowledged commits: **200 of 200** in my test.
+- **Synchronous** replication waits for the standby. Each stronger level was slower: 552 commits a second dropped to 351.
+- If a synchronous standby is unreachable, **writes hang**. That's the CAP trade made real.
+- **Read your own writes** fails on a lagging replica: with a 2 second delay, a user's own update was invisible for 2 seconds.
+- In **CAP**, C means reads see the latest write, which isn't ACID's C, and P means a network split, not table partitioning. During a split you choose between stale answers and no answers.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. **09 · Replication and CAP** (this post): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## What replication is
+
+One server takes all the writes, and copies follow it.
+
+![Primary and standby replication. All writes go to the primary, which streams its write-ahead log over TCP to the standbys, which replay it. Reads can go to the primary or to any standby.](/images/data-engineering/database-engineering/db-replication-and-cap/primary-standby.svg)
+
+The **primary** (or master) accepts writes. Each **standby** (or replica) connects over TCP, receives the [write-ahead log](/blog/db-acid-transactions#write-the-log-first), and replays it. That's why this is often called physical or streaming replication: the same bytes that protect the primary from a crash also build the copy.
+
+There's another model, **multi-primary**, where several servers accept writes. It brings conflicts that have to be resolved, and the course's advice is to avoid it unless you really need it.
+
+### Setting it up
+
+The course's demo copies a data directory by hand, edits `pg_hba.conf`, and adds `primary_conninfo` and a `standby.signal` file. `pg_basebackup -R` does that in one step, so that's what I used:
+
+```bash
+# on the primary: a role for replication, as the course says, not the superuser
+CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '...';
+# pg_hba.conf:  host replication replicator all scram-sha-256
+
+# for the standby: copy the data and write the connection settings
+pg_basebackup -h primary -U replicator -D "$PGDATA" -R -X stream -c fast
+```
+
+It works on the first try, and the standby behaves as promised:
+
+<Ran src="replication/basics" title="a real primary and standby" />
+
+Rows and schema changes both arrive, because both are in the log, and writes on the standby are refused.
+
+## Synchronous or asynchronous
+
+The key question is when the client gets its reply:
+
+![Two commit timelines. In asynchronous replication the primary replies to the client as soon as its own log is safe, and the standby receives the change later, so a read there can be stale. In synchronous replication the primary waits for the standby before replying, so every commit pays a network round trip.](/images/data-engineering/database-engineering/db-replication-and-cap/sync-vs-async.svg)
+
+Postgres has [several levels](https://www.postgresql.org/docs/current/runtime-config-wal.html) of this, set by `synchronous_commit` once `synchronous_standby_names` names a standby. Each waits for something more:
+
+<Ran src="replication/rates" title="the price of each level" />
+
+These two containers share a laptop, so the network is nearly free. Between regions, each synchronous commit would pay a real round trip, tens of milliseconds, which is what makes it such a hard choice. `FIRST 1 (...)` waits for one named standby, and `ANY 2 (...)` for any two, so a quorum is possible too.
+
+## Reading your own writes
+
+Here's the most common way replication bites an application. A user updates their profile, the page reloads, and the read goes to a replica that hasn't caught up. Their change seems to have vanished.
+
+I set the standby to apply changes two seconds late, updated a row on the primary, then read both every quarter of a second:
+
+<Ran src="replication/your-writes" title="the same row, two servers" />
+
+For two seconds, the two servers gave different answers, for a committed change. Play with it here. Write a value, then read it back from the replica straight away:
+
+<ReplicationLab />
+
+🎓 The course mentions an early YouTube bug like this, from 2006: profile updates seemed to disappear, because reads came from a replica.
+
+There are several ways round it:
+
+- Read from the primary for a short time after a user's own write.
+- Pin a user's session to one server.
+- Use `synchronous_commit = remote_apply`, so the commit waits until a read on the standby would see it.
+- Accept it, if the data allows.
+
+The course's example is that a like count of 3.2 million against 3.1 million doesn't matter, and a bank balance does.
+
+## CAP, made real
+
+The CAP theorem is usually stated as "pick two of three". It's easier to understand as a question about what your system does during a network failure.
+
+| Letter | Means here | Not to be confused with |
+| --- | --- | --- |
+| **C** Consistency | A read sees the latest write | The C in [ACID](/blog/db-acid-transactions#consistency-two-different-things), which is about rules |
+| **A** Availability | Every request gets an answer | Being fast |
+| **P** Partition tolerance | The system keeps working when the network between nodes fails | Table [partitioning](/blog/db-partitioning) |
+
+Networks do fail, so if you have more than one node, P isn't optional. The real choice is between C and A, and only during a partition.
+
+![The CAP choices for a primary with replicas during a network partition. Reply right away and the system stays available but stale reads are possible. Wait for the replica and the data stays consistent but writes hang or fail. A single server has no partition to tolerate, so it's both consistent and available until it fails.](/images/data-engineering/database-engineering/db-replication-and-cap/cap-choices.svg)
+
+### Choosing consistency
+
+With synchronous replication on, I cut the network between the two servers and tried a write:
+
+<Ran src="replication/cp" title="the network is cut, replication is synchronous" />
+
+The client just waits: the server shows `wait_event=SyncRep`. That's consistency over availability. No client can be told "saved" for something the standby doesn't have.
+
+Then something subtle. I cancelled the wait, and the warning says it plainly, but the last line is the part to look at: the row is there. The transaction had already committed locally. It was only the acknowledgement that was being held back. So a cancelled synchronous commit is not a rollback. An application that treats it as one will be wrong.
+
+### Choosing availability
+
+Now the same cut with asynchronous replication:
+
+<Ran src="replication/ap" title="the network is cut, replication is asynchronous" />
+
+Every write was accepted, and the standby kept answering reads, with data 501 rows behind. That's availability over consistency. When the network returned, it caught up by itself.
+
+### The price of availability
+
+Staleness is the mild cost. The severe one comes if the primary dies during the gap, and you promote a standby:
+
+<Ran src="replication/failover" title="failover under asynchronous replication" />
+
+All 200 orders had been acknowledged, and all were gone. The new primary has no idea they ever existed. That's what `async` really means, and it's a decision to make deliberately. Those orders are also a trap for later: if the old primary comes back, its history has diverged from the new one, and it can't simply rejoin.
+
+### The third option
+
+The course adds a useful twist: a single large server doesn't face the partition question, so it's consistent and available, until it fails. Where you apply CAP depends on where you draw the line. Zoom out and a system with a cache is available and not consistent. Zoom in and a single node inside it is both.
+
+The course also dislikes the word "eventual". Anything can be called eventually correct if you wait long enough. It quotes Brewer's later point that latency is really a form of unavailability: a system that answers after a minute might as well not have answered.
+
+## Pros and cons
+
+| Pros | Cons |
+| --- | --- |
+| Read capacity scales out | Reads can be stale |
+| Replicas near users, as in the course's "keep your app close, and the database closer" | Synchronous writes are slower |
+| A copy for failover | Failover can lose data, or need care |
+| Reporting can run off the primary | Multi-primary needs conflict handling |
+
+Note what replication doesn't scale: writes. Every standby replays every write, which is why write-heavy systems end up at [sharding](/blog/db-sharding).
+
+You can see what travels by watching the log move:
+
+<PgPlayground src="replication/lsn" />
+
+## Things that can trip you up
+
+- **Reading from a replica straight after a write.** It may not be there yet.
+- **Assuming a failover is lossless.** Under async it isn't.
+- **A cancelled synchronous commit isn't a rollback.** The warning says it's already committed locally.
+- **One synchronous standby is a single point of failure.** If it dies, writes stop, so use `ANY 1` over several.
+- **Using the superuser for replication.** Create a role with only `REPLICATION`.
+- **Long queries on a standby** can conflict with replay, and be cancelled.
+- **Old primaries.** Don't let one rejoin as if nothing happened. `pg_rewind` exists for this.
+- **Believing "CA" systems exist at scale.** With more than one node, partitions happen.
+
+## Reproduce this yourself
+
+1. ✅ Create a network and a primary:
+   ```bash
+   docker network create net1
+   docker run -d --name primary --network net1 -e POSTGRES_PASSWORD=postgres postgres:18
+   ```
+2. ✅ Create the `replicator` role, add the `pg_hba.conf` line, and run `SELECT pg_reload_conf();`.
+3. ✅ Run `pg_basebackup -R` into a volume, then start a second container on that volume. With `postgres:18` the data directory is `/var/lib/postgresql/18/docker`.
+4. ✅ Check with `SELECT * FROM pg_stat_replication;` on the primary.
+5. ✅ For synchronous mode: `ALTER SYSTEM SET synchronous_standby_names = 'first 1 (walreceiver)';` and reload.
+6. ✅ To cut the link: `docker network disconnect net1 standby`. Note that this also breaks its published port until a restart, so reach it with `docker exec`.
+7. ✅ For the delay, add `recovery_min_apply_delay = '2s'` on the standby and restart it.
+8. ✅ To fail over, run `SELECT pg_promote();` on the standby.
+9. 🎓 The course's manual setup, copying directories and writing `standby.signal` by hand, on Postgres 13, does the same thing.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Primary, standby** | The server taking writes, and a read-only copy |
+| **Streaming replication** | Shipping WAL to standbys over TCP |
+| **Synchronous, asynchronous** | Waiting for the standby before replying, or not |
+| **Replication lag** | How far behind a standby is |
+| **Read your own writes** | A user sees their own change straight away |
+| **Failover, promotion** | Turning a standby into the new primary |
+| **CAP theorem** | During a network partition, choose consistency or availability |
+| **Partition (network)** | Nodes that can't reach each other |
+| **Eventual consistency** | Copies agree if you wait |
+
+## Summary
+
+Replication ships the log to read-only copies, and that buys read capacity, locality and a spare. The cost is the gap between copies. Asynchronous replication keeps the gap and accepts stale reads, and lost commits on failover, which a real test confirmed. Synchronous replication closes the gap and makes writes slower, and when the network fails, it makes them wait. That's CAP in practice: not a choice of two letters out of three, but what your system does when a network splits.
+
+![A map of this post in three columns. Replication: a primary streams its log to standbys, which are read-only. Sync or async: wait for the copy or don't, and each has a measured price. CAP: during a partition choose between stale answers and no answers.](/images/data-engineering/database-engineering/db-replication-and-cap/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **WAL shipping** | Standbys replay the primary's log | Why schema changes replicate too |
+| **Read-only standby** | Writes are refused | Only reads scale out |
+| **`synchronous_commit`** | How much to wait for | A sliding scale of cost and safety |
+| **`remote_apply`** | Wait until a read would see it | Gives read-your-writes |
+| **Replication lag** | The gap between copies | Causes stale reads |
+| **Hung synchronous write** | Waits for an unreachable standby | Consistency over availability |
+| **Lost commits on failover** | Acknowledged, and never shipped | The real price of async |
+| **CAP's C** | Reads see the latest write | Not ACID's C |
+| **CAP's P** | A network split | Not table partitioning |
+
+### Test yourself
+
+<details>
+<summary>A user saves their profile, the page reloads, and the old value appears. The save succeeded. What happened, and what are two fixes?</summary>
+
+The read went to a replica that hadn't caught up. Fixes: read from the primary for a while after a user's own write, or commit with `remote_apply`, so that the change is visible on the standby before the reply.
+
+</details>
+
+<details>
+<summary>With synchronous replication on, the standby becomes unreachable. What happens to a client's commit?</summary>
+
+It waits, potentially forever, because the reply needs the standby's confirmation. If it's cancelled, the transaction has already committed locally, so the row stays, even though the client never got a success.
+
+</details>
+
+<details>
+<summary>The primary dies under asynchronous replication, and you promote a standby. What can be lost, and how much?</summary>
+
+Anything acknowledged that hadn't reached the standby. In the test that was all 200 orders written during a network cut. It depends on the lag at the moment of failure.
+
+</details>
+
+<details>
+<summary>What do C and P mean in CAP, and how do they differ from ACID's C and from table partitioning?</summary>
+
+C means a read sees the latest write, while ACID's C means the data obeys your rules. P means tolerating a network split between nodes, while table partitioning is splitting a table.
+
+</details>
+
+<details>
+<summary>Why doesn't adding replicas help a write-heavy system?</summary>
+
+Every standby replays every write, so writes aren't spread out. It helps reads. To spread writes, you need sharding.
+
+</details>
+
+## Open questions and gaps
+
+- Both servers ran on one laptop, so the commit rates show relative cost and not real network latency.
+- I didn't test `ANY` quorums, cascading replication, or `pg_rewind` on an old primary.
+- 🎓 The YouTube story and Brewer's remark are reported from the course. I didn't check primary sources.
+- The course doesn't go into logical replication, and neither does this post.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- PostgreSQL docs: [High Availability and Replication](https://www.postgresql.org/docs/current/high-availability.html), [Log-Shipping Standby Servers](https://www.postgresql.org/docs/current/warm-standby.html), [Write-Ahead Log settings](https://www.postgresql.org/docs/current/runtime-config-wal.html), [pg_basebackup](https://www.postgresql.org/docs/current/app-pgbasebackup.html), [pg_rewind](https://www.postgresql.org/docs/current/app-pgrewind.html)
+- Eric Brewer, [CAP Twelve Years Later](https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/)

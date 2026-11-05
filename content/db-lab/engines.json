@@ -1,0 +1,521 @@
+{
+ "theaters": {
+  "myisam-vs-innodb": {
+   "title": "The same transaction on two engines",
+   "alt": "A recorded run on MySQL with tabs for InnoDB and MyISAM. A session begins a transaction and inserts a row. On InnoDB another session can't see the row, and rollback removes it. On MyISAM the row is visible at once, and rollback does nothing, because MyISAM has no transactions.",
+   "engine": "MySQL 8.4.13",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "employees",
+   "variants": [
+    {
+     "label": "InnoDB",
+     "summary": "Isolation and rollback both worked. The row never existed for anyone else.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "START TRANSACTION",
+       "note": "The engine is InnoDB.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO employees (name) VALUES ('Ana')",
+       "note": "Inserted, and not committed.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "A",
+       "sql": "SELECT * FROM employees",
+       "note": "Session A sees its own row.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "id",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         "Ana"
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM employees",
+       "note": "Can another connection see it?",
+       "status": "ok",
+       "tag": "0 rows",
+       "cols": [
+        "id",
+        "name"
+       ],
+       "rows": []
+      },
+      {
+       "s": "A",
+       "sql": "ROLLBACK",
+       "note": "Session A changes its mind.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM employees",
+       "note": "Is it gone?",
+       "status": "ok",
+       "tag": "0 rows",
+       "cols": [
+        "id",
+        "name"
+       ],
+       "rows": []
+      }
+     ]
+    },
+    {
+     "label": "MyISAM",
+     "summary": "BEGIN and ROLLBACK were accepted and did nothing. The row was visible at once and is still there.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "START TRANSACTION",
+       "note": "The engine is MyISAM.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO employees (name) VALUES ('Ana')",
+       "note": "Inserted, and not committed.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "A",
+       "sql": "SELECT * FROM employees",
+       "note": "Session A sees its own row.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "id",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         "Ana"
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM employees",
+       "note": "Can another connection see it?",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "id",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         "Ana"
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "ROLLBACK",
+       "note": "Session A changes its mind.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM employees",
+       "note": "Is it gone?",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "id",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         "Ana"
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "table-lock": {
+   "title": "A MyISAM read holds up a write to any row",
+   "alt": "A recorded run on MySQL. Session A locks a MyISAM table for reading, as a long report does. Session B's update of an unrelated row waits for the whole table. On InnoDB the same update of a different row isn't blocked by a row lock held elsewhere.",
+   "engine": "MySQL 8.4.13",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "t",
+   "variants": [
+    {
+     "label": "MyISAM",
+     "summary": "Locks are per table: session B's row had nothing to do with session A, and it waited anyway.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "LOCK TABLES t READ",
+       "note": "A long report on a MyISAM table holds a table-level read lock. This statement makes that lock last long enough to see.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE t SET v = 2 WHERE id = 2",
+       "note": "Session B wants to change a single row. It waits for the whole table.",
+       "status": "blocked",
+       "resolvedAt": 2,
+       "resolved": {
+        "status": "ok",
+        "tag": "OK, 1 row affected"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UNLOCK TABLES",
+       "note": "Only when the report ends does the update go through.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      }
+     ]
+    },
+    {
+     "label": "InnoDB",
+     "summary": "Locks are per row: different rows don't get in each other's way.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "START TRANSACTION",
+       "note": "On InnoDB, session A works on row 1.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE t SET v = 2 WHERE id = 1",
+       "note": "That locks row 1 only.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE t SET v = 2 WHERE id = 2",
+       "note": "Row 2 is free, so this goes straight through.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "Done.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      }
+     ]
+    }
+   ]
+  },
+  "cursor-hold": {
+   "title": "An open cursor is a held-open transaction",
+   "alt": "A recorded run on PostgreSQL. Session A opens a cursor inside a transaction and fetches some rows. Session B's ALTER TABLE waits, because the cursor's transaction still holds a lock on the table, until session A commits.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "grades",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "A cursor lives inside a transaction.",
+       "status": "ok",
+       "tag": "BEGIN"
+      },
+      {
+       "s": "A",
+       "sql": "DECLARE c CURSOR FOR SELECT * FROM grades ORDER BY id",
+       "note": "The query is planned, and no rows are returned yet.",
+       "status": "ok",
+       "tag": "DECLARE"
+      },
+      {
+       "s": "A",
+       "sql": "FETCH 3 FROM c",
+       "note": "Three rows. The cursor remembers where it is.",
+       "status": "ok",
+       "tag": "FETCH",
+       "cols": [
+        "id",
+        "g"
+       ],
+       "rows": [
+        [
+         1,
+         1
+        ],
+        [
+         2,
+         2
+        ],
+        [
+         3,
+         3
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "ALTER TABLE grades ADD COLUMN note text",
+       "note": "A schema change needs an exclusive lock, and the open transaction is holding a lock. It waits. So does everything queued behind it.",
+       "status": "blocked",
+       "resolvedAt": 5,
+       "resolved": {
+        "status": "ok",
+        "tag": "ALTER"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "FETCH 2 FROM c",
+       "note": "The application is in no hurry: it's still paging through.",
+       "status": "ok",
+       "tag": "FETCH",
+       "cols": [
+        "id",
+        "g"
+       ],
+       "rows": [
+        [
+         4,
+         4
+        ],
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "Closing the transaction closes the cursor, and the ALTER goes through.",
+       "status": "ok",
+       "tag": "COMMIT"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": {
+  "show-engines": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "SELECT engine, support, transactions FROM information_schema.engines WHERE support <> 'NO' ORDER BY engine;",
+     "out": "+--------------------+---------+--------------+\n| engine             | support | transactions |\n+--------------------+---------+--------------+\n| ARCHIVE            | YES     | NO           |\n| BLACKHOLE          | YES     | NO           |\n| CSV                | YES     | NO           |\n| InnoDB             | DEFAULT | YES          |\n| MEMORY             | YES     | NO           |\n| MRG_MYISAM         | YES     | NO           |\n| MyISAM             | YES     | NO           |\n| PERFORMANCE_SCHEMA | YES     | NO           |\n+--------------------+---------+--------------+\n8 rows in set (0.01 sec)"
+    }
+   ]
+  },
+  "hidden-key": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "CREATE TABLE no_key (name varchar(20)) ENGINE = InnoDB;",
+     "out": "Query OK, 0 rows affected (0.02 sec)"
+    },
+    {
+     "cmd": "INSERT INTO no_key VALUES ('a');",
+     "out": "Query OK, 1 row affected (0.01 sec)"
+    },
+    {
+     "cmd": "SELECT i.name AS index_name, i.type FROM information_schema.innodb_indexes i JOIN information_schema.innodb_tables t USING (table_id) WHERE t.name LIKE '%/no_key';",
+     "out": "+-----------------+------+\n| index_name      | type |\n+-----------------+------+\n| GEN_CLUST_INDEX |    1 |\n+-----------------+------+\n1 row in set (0.04 sec)"
+    }
+   ]
+  },
+  "pg-access-methods": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT amname, CASE amtype WHEN 't' THEN 'table' ELSE 'index' END AS kind FROM pg_am ORDER BY amtype DESC, amname;",
+     "out": " amname | kind  \n--------+-------\n heap   | table\n brin   | index\n btree  | index\n gin    | index\n gist   | index\n hash   | index\n spgist | index\n(7 rows)"
+    }
+   ]
+  },
+  "myisam-crash": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "-- two clients insert into a MyISAM table and an InnoDB table, then\n$ docker kill -s KILL mysql",
+     "out": "(restart)"
+    },
+    {
+     "cmd": "CHECK TABLE m;   -- MyISAM",
+     "out": "test.m check warning: 1 client is using or hasn't closed the table properly\ntest.m check status: OK"
+    },
+    {
+     "cmd": "CHECK TABLE i;   -- InnoDB",
+     "out": "test.i check status: OK"
+    },
+    {
+     "cmd": "REPAIR TABLE m;",
+     "out": "test.m repair status: OK"
+    },
+    {
+     "cmd": "-- rows the InnoDB client saw committed, and rows that survived",
+     "out": "committed: 8960\nInnoDB table now: 8960\nMyISAM table now: 9504"
+    }
+   ]
+  },
+  "sqlite": {
+   "engine": "SQLite 3.53.4",
+   "blocks": [
+    {
+     "cmd": "-- connection A holds a write transaction\nBEGIN IMMEDIATE; INSERT INTO t ...;\n-- connection B tries to write a different row",
+     "out": "ERROR: database is locked"
+    },
+    {
+     "cmd": "-- connection B reads, in the default rollback-journal mode",
+     "out": "{\"n\":1}"
+    },
+    {
+     "cmd": "PRAGMA journal_mode = WAL;\n-- A writes again, B reads",
+     "out": "{\"n\":2}"
+    },
+    {
+     "cmd": "-- and B tries to write",
+     "out": "ERROR: database is locked"
+    }
+   ]
+  },
+  "leveldb": {
+   "engine": "LevelDB, through classic-level",
+   "blocks": [
+    {
+     "cmd": "-- 200,000 puts, about 120 bytes each",
+     "out": "232800 writes per second\n2.9 MB on disk, 99 table files, 1 log file"
+    },
+    {
+     "cmd": "leveldb.stats",
+     "out": "Compactions\nLevel  Files Size(MB) Time(sec) Read(MB) Write(MB)\n--------------------------------------------------\n  2       99        3         0        0         3"
+    },
+    {
+     "cmd": "-- delete every key",
+     "out": "0 keys left, and still 4.3 MB on disk, 128 table files, 1 log file"
+    },
+    {
+     "cmd": "db.compactRange(first, last)",
+     "out": "0.0 MB on disk, 0 table files, 1 log file"
+    }
+   ]
+  },
+  "cursors": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- client side: one query, every row comes back\nSELECT id, g, name FROM grades;",
+     "out": "2,000,000 rows in 1541.6 ms, about 365 MB of client memory"
+    },
+    {
+     "cmd": "-- server side: a cursor, 50 rows at a time\nDECLARE c CURSOR FOR SELECT id, g, name FROM grades;",
+     "out": "1.1 ms"
+    },
+    {
+     "cmd": "FETCH 50 FROM c;",
+     "out": "1.2 ms"
+    },
+    {
+     "cmd": "FETCH 50 FROM c;",
+     "out": "0.7 ms"
+    },
+    {
+     "cmd": "FETCH LAST FROM c;   -- the server has to work through everything",
+     "out": "36.9 ms"
+    }
+   ]
+  },
+  "cursor-sql": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "BEGIN;",
+     "out": ""
+    },
+    {
+     "cmd": "DECLARE c CURSOR FOR SELECT id FROM grades WHERE g BETWEEN 90 AND 100;",
+     "out": ""
+    },
+    {
+     "cmd": "FETCH 3 FROM c;",
+     "out": " id \n----\n 90\n 91\n 92\n(3 rows)"
+    },
+    {
+     "cmd": "FETCH 2 FROM c;",
+     "out": " id \n----\n 93\n 94\n(2 rows)"
+    },
+    {
+     "cmd": "CLOSE c;",
+     "out": ""
+    },
+    {
+     "cmd": "COMMIT;",
+     "out": ""
+    }
+   ]
+  }
+ },
+ "charts": {},
+ "data": {},
+ "playgrounds": {
+  "cursor": {
+   "title": "A server-side cursor",
+   "hint": "This box keeps its transaction open between runs, like a real client would. Run the presets in order. The status line says when a transaction is still open.",
+   "setup": "CREATE TABLE grades (id int, g int, name text);\nINSERT INTO grades SELECT g, g % 100, 'student ' || g FROM generate_series(1, 100000) g;",
+   "query": "BEGIN;\nDECLARE c CURSOR FOR SELECT id, g, name FROM grades WHERE g >= 90 ORDER BY id;\nFETCH 5 FROM c;",
+   "presets": [
+    {
+     "label": "Fetch 5 more",
+     "sql": "FETCH 5 FROM c;"
+    },
+    {
+     "label": "Jump to the end",
+     "sql": "FETCH LAST FROM c;"
+    },
+    {
+     "label": "See open cursors",
+     "sql": "SELECT name, statement, is_scrollable FROM pg_cursors;"
+    },
+    {
+     "label": "Finish",
+     "sql": "COMMIT;"
+    }
+   ]
+  }
+ }
+}

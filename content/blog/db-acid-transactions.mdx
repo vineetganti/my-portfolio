@@ -1,0 +1,429 @@
+---
+title: "Transactions and ACID: What a Database Actually Promises"
+description: "What a transaction is, and what atomicity, consistency, isolation and durability really guarantee, shown with real concurrent sessions on Postgres and MySQL, a live Postgres in your browser, and a server killed mid-commit."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 1
+tags: ["Databases", "PostgreSQL", "MySQL", "Transactions", "ACID"]
+---
+
+A bank transfer is two writes: take money from one account, add it to another. If the server dies between them, the money is gone. If a report runs between them, it sees money that exists nowhere. Every application that stores data has this problem, and the database's answer is the transaction.
+
+This post covers what a transaction is and the four promises known as **ACID**. Nothing here is taken on trust: each behaviour below was run on real Postgres and MySQL, with real concurrent connections, and in one case a server killed in the middle of committing.
+
+<Callout type="note" title="TL;DR">
+
+- A **transaction** is a group of statements that succeed or fail as one unit.
+- **Atomicity**: all of it or none of it. A crash or an error means rollback.
+- **Isolation**: how much of other transactions' work you can see. Weaker levels allow dirty reads, non-repeatable reads, phantoms and lost updates. Names are not portable: `REPEATABLE READ` on Postgres and on MySQL behaved differently here.
+- **Consistency**: the data obeys the rules you declared. A separate meaning covers whether a read sees the latest write.
+- **Durability**: once `COMMIT` returns, the data survives a crash, because the log reached disk first. With `synchronous_commit=off`, a killed server lost up to 161 commits it had already acknowledged.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. **01 · Transactions and ACID** (this post): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## How to read this series
+
+These are my notes from the course, rewritten so that they work as a reference. I kept the course's order and replaced most of the explanations and examples with ones I found clearer. Where the course or my own notes turned out to be wrong or out of date, the post says so in a **Correcting my notes** box, because those were the most useful moments.
+
+Every claim carries one of three labels:
+
+| Label | Meaning |
+| --- | --- |
+| ✅ **ran here** | I ran it on a real database, in Docker on my laptop. The output is copied from the run by a script, never typed by hand. |
+| 🎓 **from the course** | Stated in the course. I didn't reproduce it, and the post says why. |
+| 📘 **docs only** | From the official documentation, not run. |
+
+Big tables are scaled down from the course's (for example, one million rows rather than tens of millions), so timings differ from the lectures. Every run used **Postgres 18**, **MySQL 8.4**, **MongoDB 8.0**, **Redis 8.0** and **Memcached 1.6**, where the course used older versions.
+
+Three kinds of live element appear in every post:
+
+- **Session replays** show several real database connections side by side. When a statement waited for a lock in the recording, it waits here, until the step that really released it.
+- **Output blocks** marked ✅ show commands and what they printed.
+- **Live boxes** run real PostgreSQL in your own browser, through [PGlite](https://pglite.dev), which compiles Postgres to WebAssembly. It loads when you press **Run this**. Edit the SQL as much as you like: nothing leaves your machine, and Reset restores the box.
+
+## What is a transaction?
+
+A transaction is a collection of statements treated as **one unit of work**. Sending 100 from account 1 to account 2 is three statements: check the balance, subtract, add. Separately they mean nothing. A subtraction without its addition is a bug.
+
+![The life of a transaction. BEGIN opens it, then a SELECT checks the balance and two UPDATEs move 100 from account 1 to account 2. COMMIT makes all of it permanent together. Any error or crash along the way leads to ROLLBACK instead, which leaves the data as if the transaction never ran.](/images/data-engineering/database-engineering/db-acid-transactions/transaction-lifespan.svg)
+
+The lifespan has four possible events:
+
+| Event | What it does |
+| --- | --- |
+| `BEGIN` | Starts the unit of work. |
+| `COMMIT` | Makes every change permanent, all at once. |
+| `ROLLBACK` | Throws away every change. |
+| A crash, or a lost connection | Treated as `ROLLBACK`. |
+
+Transactions are mostly used to change data, but a **read-only** transaction is normal too. A report that runs five queries wants all five to describe the same moment, and a transaction gives it that, as the isolation section shows.
+
+Try it. This box is real Postgres, and each statement below runs exactly as it would on a server:
+
+<PgPlayground src="acid/transfer" />
+
+The second preset shows something the rest of this post depends on: every row carries hidden columns recording which transaction created it. Keep `xmin` in mind.
+
+## Atomicity: all of it or none of it
+
+If one statement in a transaction fails, every earlier statement that succeeded must be undone. The same goes for a crash before commit. Without this, a failed transfer leaves 100 missing, and nothing in the database says where it went.
+
+Here a transfer fails halfway, on a rule that a balance can't go below zero. Step through it and watch the third connection's view at the bottom:
+
+<TxnTheater src="acid/atomicity" />
+
+Two details matter here. The outside view never shows Ana at 400, because nothing was committed. And after the failure Postgres refuses to run anything else in the transaction: `current transaction is aborted, commands ignored until end of transaction block`. Not every database behaves this way. In MySQL a failed statement is undone alone and the transaction stays open, so your code has to decide what to do.
+
+The course's demo walks away from a transaction instead of failing it:
+
+<TxnTheater src="acid/exit" />
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes ended this demo with "exiting will result in failure of atomicity". That's backwards. The uncommitted change disappearing **is** atomicity working: the transaction didn't finish, so none of it counts.
+
+</Callout>
+
+## Isolation: what can my transaction see?
+
+Many transactions run at once. Isolation answers one question: **can my in-flight transaction see changes made by other transactions?**
+
+If everything ran one at a time, the answer would always be no, and databases would be slow. So they run transactions concurrently and offer **isolation levels** that choose how much interference you accept. To see what the levels buy you, start with what can go wrong.
+
+### Four things that go wrong
+
+The SQL standard defines three **read phenomena**, and a fourth is worse than any of them. Each demo below uses the same small `sales` table.
+
+#### Dirty read: seeing work that isn't committed
+
+A dirty read means reading a value another transaction wrote but hasn't committed. If that transaction rolls back, you read a value that never existed. Postgres can't do this at all:
+
+<TxnTheater src="acid/dirty" />
+
+It accepts `READ UNCOMMITTED` and then runs `READ COMMITTED`, which the [Postgres docs](https://www.postgresql.org/docs/current/transaction-iso.html) describe as the only sensible way to map that level onto its design. MySQL really implements the level, so the same steps give a different result. Watch the total go from 330 to 630 and back:
+
+<TxnTheater src="acid/dirty-mysql" />
+
+#### Non-repeatable read: the same question, a different answer
+
+A non-repeatable read means reading something twice in one transaction and getting two values, because another transaction committed in between. The report below prints revenue per product, then a total. The tabs run the same steps at each level:
+
+<TxnTheater src="acid/non-repeatable" />
+
+At read committed the lines say 330 and the footer says 830. Nothing was dirty: each statement read committed data. The report is still wrong, because its two statements describe two moments.
+
+#### Phantom read: a row that wasn't there before
+
+A phantom is different from a non-repeatable read: no row you read has changed, but a **new** row now matches your query. Locking the rows you read can't prevent this, because the new row didn't exist to lock.
+
+<TxnTheater src="acid/phantom" />
+
+#### Lost update: the one the standard doesn't list
+
+Two transactions read the same value, compute from it, and both write. The second write silently destroys the first. No error appears anywhere, which makes this the most dangerous of the four.
+
+<TxnTheater src="acid/lost-update" />
+
+The third tab is the fix most people should reach for first: write `units = units - 3` and let the database do the arithmetic. The read-then-write pattern in the application is what made the update losable.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes called phantom reads "one of the three phenomena" while listing four. Both are half right. The SQL standard's table has three, plus what Postgres calls a serialization anomaly. Lost update isn't in the standard's table at all: it was formalised later, in [A Critique of ANSI SQL Isolation Levels](https://arxiv.org/abs/cs/0701157) (1995), which also defines snapshot isolation and write skew.
+
+</Callout>
+
+### The isolation levels
+
+Each level is a promise about which phenomena can't happen. In order of strictness:
+
+- **Read uncommitted**: you can see uncommitted work.
+- **Read committed**: each statement sees only committed data, as of the moment that statement started. The default in Postgres.
+- **Repeatable read**: a row you read won't change if you read it again. The default in MySQL.
+- **Serializable**: the result is as if the transactions had run one at a time.
+
+The names come from the standard, but the implementations differ a lot. This table is what I found by running each one:
+
+| Level | SQL standard says | Postgres 18 | MySQL 8.4 (InnoDB) |
+| --- | --- | --- | --- |
+| **Read uncommitted** | Dirty reads allowed | ✅ Runs as read committed, so no dirty read | ✅ Dirty reads happen |
+| **Read committed** | No dirty reads | ✅ Non-repeatable reads and phantoms happen | 📘 Each read gets a fresh snapshot |
+| **Repeatable read** | No non-repeatable reads, phantoms allowed | ✅ One snapshot: no phantoms, a lost update fails with an error, write skew still happens | ✅ Plain reads use one snapshot, locking reads and updates see newer rows, a lost update goes through |
+| **Serializable** | Nothing anomalous | ✅ Nothing blocks, and a conflict fails one transaction, which must retry | ✅ Plain reads take shared locks, so transactions wait and can deadlock |
+
+The Postgres column matches the docs' [table of isolation levels](https://www.postgresql.org/docs/current/transaction-iso.html), and the MySQL column matches its [isolation level reference](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html).
+
+### Snapshots, and why they aren't copies
+
+The key difference between read committed and repeatable read is **when the snapshot is taken**.
+
+![Two timelines of the same report. At read committed each statement takes a fresh snapshot, so the second statement sees a change committed in between. At repeatable read the first statement takes the snapshot and the second reuses it, so the committed change stays invisible until the transaction ends.](/images/data-engineering/database-engineering/db-acid-transactions/snapshots.svg)
+
+A student asked the course why it never lists **snapshot isolation** as its own level. The answer is that in Postgres it's the same thing: the [docs](https://www.postgresql.org/docs/current/transaction-iso.html) say repeatable read is implemented using snapshot isolation. In theory, repeatable read means "lock the rows I read so they can't change", which still leaves room for phantoms. A snapshot gives you the stronger behaviour for free, and that's why Postgres shows no phantom in the demo above even though the standard would allow one.
+
+The word "snapshot" suggests a copy of the table, and that's the wrong picture. Nothing is copied. Each `UPDATE` writes a new **version** of the row and leaves the old one in place, and every version records the transaction that created it and the one that ended it. A snapshot is only a list of which transactions count as finished:
+
+![How Postgres keeps two versions of one row. Version one has xmin 100 and xmax 105, with quantity 2. Version two has xmin 105 and xmax 0, with quantity 7. A transaction whose snapshot was taken before transaction 105 committed sees version one. A transaction that started after sees version two. Nobody copied the table: the old version is simply still there.](/images/data-engineering/database-engineering/db-acid-transactions/row-versions.svg)
+
+This design is called **multiversion concurrency control (MVCC)**. Its headline benefit, in the [docs' words](https://www.postgresql.org/docs/current/mvcc-intro.html), is that reading never blocks writing and writing never blocks reading. Post 14 returns to its costs.
+
+### The same name on MySQL
+
+My notes said Postgres prevents phantom reads at repeatable read and that "this is not the case in MySQL". The real story is subtler, and the course suggests testing it. So I did:
+
+<TxnTheater src="acid/phantom-mysql" />
+
+Plain reads behave like Postgres: the count stays at 2. But InnoDB's [docs](https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html) say the snapshot applies to `SELECT` statements, "not necessarily to DML statements". A locking read or an `UPDATE` works on the latest committed rows. So the third phone appears as soon as you lock, update, or read your own update. The two engines also part ways on lost updates. Postgres's repeatable read failed session B with an error above; here is MySQL's:
+
+<TxnTheater src="acid/rr-mysql" />
+
+Same level name, same steps, and the sale is lost. If code relies on a level's behaviour, test it on the engine you run.
+
+### Write skew: when no row is in conflict
+
+Snapshots stop everything above, and there's still one anomaly they can't catch. Two doctors are on call, and the rule says at least one must stay. Each checks the rule, sees two, and takes themselves off:
+
+<TxnTheater src="acid/write-skew" />
+
+On the repeatable read tab both commit, and nobody is on call. Neither transaction changed a row the other changed, so no write conflict ever existed. The conflict was between one transaction's **read** and the other's **write**. That's **write skew**, and it's why repeatable read isn't the top of the ladder.
+
+The course admits it over-focused on phantoms and that this is the case that actually matters in practice. There are two ways out.
+
+**Optimistic: let the database detect it.** At `SERIALIZABLE`, Postgres runs the transactions concurrently and tracks what each one read, using locks that never block (they appear in `pg_locks` as `SIReadLock`). If the reads and writes couldn't have happened in any one-at-a-time order, one transaction fails at commit with `could not serialize access`. That's the Serializable tab above. Your code must catch the error and retry.
+
+**Pessimistic: lock what you read.** Take the locks yourself with `SELECT ... FOR UPDATE`, including the rows you only read to make the decision:
+
+<TxnTheater src="acid/write-skew-lock" />
+
+Bob waited instead of failing, and no retry code was needed. The course's author prefers this style, and has said he has never used `SERIALIZABLE` in production. The trade-off from the Q&A is worth remembering:
+
+| | Optimistic (`SERIALIZABLE`) | Pessimistic (`FOR UPDATE`) |
+| --- | --- | --- |
+| Under conflict | A transaction fails and must retry | A transaction waits |
+| Concurrency | High, nothing blocks | Lower, transactions queue |
+| Your code | Needs a retry loop around every transaction | Needs to know which rows to lock |
+| Best when | Conflicts are rare | Conflicts are common, or retries are awkward |
+
+Post 8 goes deeper on locks and on how this plays out for a seat-booking system.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes had a table headed "Serializable vs Non-Repeatable" (it should say serializable vs repeatable read) which said serializable locks "the entire range" and "can block access to the whole table", with the analogy of renting the whole theater. That describes a lock-based implementation, and only that. Postgres doesn't block at all, as the demo above shows. MySQL's is lock-based: the [docs](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html) say it turns plain `SELECT` statements into `SELECT ... FOR SHARE`. Here is what that means for the same two doctors.
+
+</Callout>
+
+<TxnTheater src="acid/write-skew-mysql" />
+
+Bob's `UPDATE` failed with `Deadlock found when trying to get lock`. The rule held, by a completely different route.
+
+## Consistency: two different things
+
+The C in ACID is the odd one out, because it's the one you define. The word also has a second meaning, and the two get mixed up constantly.
+
+![The four ACID properties as four cards. Atomicity: all or nothing, broken by a crash halfway, provided by rollback and the log. Consistency: only valid states, broken by rule violations, provided by constraints you define. Isolation: concurrent transactions don't see each other's work in progress, broken by read phenomena, provided by locks and snapshots. Durability: committed means safe, broken by a crash after commit, provided by the write-ahead log and fsync.](/images/data-engineering/database-engineering/db-acid-transactions/acid-map.svg)
+
+### Consistency in data: the rules you declared
+
+The data on disk should obey your rules. The course's example: a `pictures` table says picture 1 has 5 likes, but `picture_likes` holds only 2 rows for it. Nothing crashed, and the data is still wrong.
+
+The database can enforce a rule only if you state it: a `CHECK`, a `NOT NULL`, a foreign key, a unique constraint. Beyond those, consistency comes from atomicity and isolation doing their jobs, so a failed transaction can't leave half a change, and concurrent ones can't step on each other. Ask this database to break a rule:
+
+<PgPlayground src="acid/rule-break" />
+
+### Consistency in reads: do I see the latest write?
+
+The second meaning has nothing to do with rules. If a transaction committed a change, will a new read see it straight away? On one server, yes. With replicas, not necessarily: a read served by a copy that hasn't caught up returns the old value. Relational and NoSQL databases both have this problem, because it comes from having copies.
+
+**Eventual consistency** means the copies will agree if you wait. Synchronous replication avoids the gap and makes writes wait for it; asynchronous replication accepts the gap. A cache has the same problem, for the same reason. [Post 9](/blog/db-replication-and-cap) measures this on a real replica.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes say one option gives "a visual consistency". That was the transcript mishearing **eventual consistency**.
+
+</Callout>
+
+## Durability: committed means safe
+
+Durability means that once the database says committed, the data survives a crash, a power cut, or a restart. The hard part is speed. A transaction may change rows scattered across dozens of pages, and writing each one to disk on every commit would be very slow.
+
+### Write the log first
+
+The answer is the **write-ahead log (WAL)**. Instead of writing the changed pages, the database appends a small description of the change to a log file, and forces only that to disk. The [Postgres docs](https://www.postgresql.org/docs/current/wal-intro.html) put the rule plainly: data files may change only after the log records describing the change have reached permanent storage. The pages themselves can be written later, in bulk, at a checkpoint.
+
+![The path of a commit. The client sends COMMIT to the server, the server writes the change to the write-ahead log file through the operating system cache, and an fsync forces it onto the disk. Only then does the client get its acknowledgement. The table's data pages change in memory and reach the disk later, at a checkpoint. After a crash the log replays what the data files missed.](/images/data-engineering/database-engineering/db-acid-transactions/durability-path.svg)
+
+There's a trap in the middle of that path. When a program writes to a file, the operating system usually keeps the data in its own cache and reports success, because batching writes is faster. If the machine loses power, that "written" data is gone. **`fsync`** is the system call that forces it onto the disk and waits, and that wait is the real cost of a commit.
+
+### Killing the server for real
+
+To test this, I ran Postgres in a throwaway container, committed one row, left another in an open transaction, and sent `SIGKILL`:
+
+<Ran src="acid/crash" title="a real kill -9" />
+
+The log shows recovery working: Postgres saw it wasn't shut down cleanly, and replayed the WAL from the last checkpoint. The committed row survived, and the uncommitted one is gone, which is atomicity and durability in one result.
+
+Then the more interesting test. Postgres can skip the wait with `synchronous_commit = off`: `COMMIT` returns before the log is flushed. Here is what that buys and what it costs, with a client committing in a loop until the server is killed:
+
+<Ran src="acid/commit-tradeoff" title="three kills per setting" />
+
+With `synchronous_commit=on` every acknowledged commit survived. With `off` the server told the client "committed" and then lost those rows anyway: 23, 24 and 161 of them. The [docs](https://www.postgresql.org/docs/current/wal-async-commit.html) bound that risk window at three times `wal_writer_delay`, and the database itself stays consistent. You lose only the most recent commits, and nothing is left half done.
+
+Look at the third `on` run: 1,080 rows from 1,079 acknowledgements. The last commit reached disk, and the server died before its reply got back. The client thinks that insert may have failed, and it actually worked. That's why retries need care, a thread picked up in [post 4](/blog/db-bloom-filters-and-uuids).
+
+<Callout type="note" title="What this test can't show">
+
+A container kill is a process crash, not a power cut. The operating system survives, so its page cache does too. The `off` losses above came from Postgres's own memory, and an `fsync` that lied, or a real power loss, would need different hardware to test. That's why I don't show `fsync=off` here. I measured only one client, through Docker's port forwarding on a laptop, so treat the commits-per-second figures as a rough ratio.
+
+</Callout>
+
+The other techniques from the course:
+
+- **Asynchronous snapshots**: write the whole dataset to disk now and then. Fast, and you lose everything since the last one. Redis calls this RDB.
+- **Append-only file**: a log of every write, close to a WAL. Redis calls this AOF, and [post 12](/blog/db-mongo-memcached-redis) runs both.
+
+## Things that can trip you up
+
+- **A failed statement poisons a Postgres transaction.** Everything until `ROLLBACK` fails with `current transaction is aborted`. If you want to continue after an error, use a `SAVEPOINT`.
+- **Isolation level names aren't portable.** `REPEATABLE READ` protected the sale on Postgres and lost it on MySQL in the runs above.
+- **`SERIALIZABLE` and `REPEATABLE READ` in Postgres need retry code.** Error code `40001` means "run the whole transaction again", starting from a fresh read.
+- **A read-then-write in your application is a lost update waiting to happen.** Prefer `SET x = x - 1`, which the database recomputes correctly even at read committed.
+- **A long read-only transaction isn't free.** It keeps old row versions alive, because its snapshot might need them. Post 14 explains the cost.
+- **Sequences don't roll back.** A rolled-back `INSERT` still used up its `serial` number, which the [Postgres docs](https://www.postgresql.org/docs/current/transaction-iso.html) note, so gaps in ids are normal.
+- **`SELECT ... FOR UPDATE` only protects rows that exist.** It can't stop a new row from appearing. Write skew on an empty result needs `SERIALIZABLE` or a unique constraint.
+- **`synchronous_commit=off` isn't always wrong.** It suits data you can afford to lose a moment of, such as metrics. The point is to choose it knowingly.
+
+## Reproduce this yourself
+
+Steps marked ✅ are what I ran. Commands are for any shell with Docker.
+
+1. ✅ Start Postgres. I used `postgres:18`, where the course uses `postgres:13`:
+   ```bash
+   docker run --name pgacid -d -e POSTGRES_PASSWORD=postgres postgres:18
+   docker exec -it pgacid psql -U postgres
+   ```
+2. ✅ Open a second terminal with the same `docker exec` line. Each terminal is one session.
+3. ✅ Create the tables from any replay above, then type its steps in order, in the session it shows. A statement that waits will sit there until you run the next step in the other terminal.
+4. ✅ For MySQL, I used `mysql:8.4` and `docker exec -it <name> mysql -uroot -p`:
+   ```bash
+   docker run --name mydb -d -e MYSQL_ROOT_PASSWORD=password mysql:8.4
+   ```
+5. ✅ For the crash test, commit a row, open a transaction in another session, and then run `docker kill -s KILL pgacid` and `docker start pgacid`. Read `docker logs pgacid` for the recovery lines.
+6. 📘 To see the predicate locks behind `SERIALIZABLE`, query `pg_locks` for mode `SIReadLock` from a third session during a run ([docs](https://www.postgresql.org/docs/current/transaction-iso.html)).
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Transaction** | A group of statements that succeed or fail as one unit |
+| **Commit, rollback** | Make the changes permanent, or throw them away |
+| **Dirty read** | Reading another transaction's uncommitted change |
+| **Non-repeatable read** | Reading the same row twice and getting two values |
+| **Phantom read** | A new row appearing in a repeated query |
+| **Lost update** | One transaction's write silently overwriting another's |
+| **Write skew** | Two transactions reading overlapping data and writing different rows, breaking a rule together |
+| **Snapshot isolation** | Reading from a fixed point in time, using row versions |
+| **MVCC** | Keeping several versions of each row so readers and writers don't block each other |
+| **`xmin`, `xmax`** | Hidden Postgres columns: the transaction that created a row version, and the one that ended it |
+| **Write-ahead log (WAL)** | A log of changes, forced to disk before a commit is acknowledged |
+| **`fsync`** | The system call that forces cached writes onto the disk |
+| **Eventual consistency** | Copies of the data agree if you wait long enough |
+
+## Summary
+
+A transaction groups statements into one unit, and ACID is the set of promises around it. Atomicity undoes unfinished work, which the demos showed on a failed statement, a dropped connection and a killed server. Isolation is a dial: Postgres builds it on row versions, so snapshots cost almost nothing and even `SERIALIZABLE` never blocks, while MySQL mixes snapshots with locks, which is why the same level name gave different results. Consistency is partly yours to declare. Durability comes from a log that reaches the disk before the reply, and turning that off really did lose acknowledged commits.
+
+![A map of this post in four columns. Transactions: begin, commit, rollback; a crash means rollback; one failure aborts the whole transaction. Isolation: four phenomena, four levels, snapshots from row versions, write skew needs serializable or locks. Consistency: rules you declare, and reads that may lag. Durability: the log reaches disk before the reply, and async commit trades safety for speed.](/images/data-engineering/database-engineering/db-acid-transactions/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Atomicity** | All of a transaction or none of it | A crash can't leave half a transfer |
+| **Isolation level** | Which interference you accept | The trade between correctness and concurrency |
+| **Snapshot** | A list of which transactions count as finished | Consistent reads without copying or locking |
+| **Read committed** | A new snapshot per statement | The Postgres default, and reports can disagree with themselves |
+| **Repeatable read** | One snapshot per transaction | Stable reads; on Postgres, also blocks lost updates |
+| **Serializable** | Results as if run one at a time | The only level that stops write skew |
+| **Optimistic control** | Run anyway, detect conflicts, retry | Great when conflicts are rare |
+| **Pessimistic control** | Lock first, others wait | Simple, and costs concurrency |
+| **Consistency (data)** | Rules you declare, enforced | Only what you state can be enforced |
+| **Consistency (reads)** | Do reads see the latest write? | Replicas and caches can lag |
+| **WAL + `fsync`** | The log reaches disk before the reply | What "durable" is made of |
+| **`synchronous_commit`** | Whether `COMMIT` waits for the flush | Speed against the last moments of data |
+
+### Test yourself
+
+<details>
+<summary>A transaction updates three rows, and the client disconnects before COMMIT. What's in the table, and which ACID property explains it?</summary>
+
+The original values. An unfinished transaction is rolled back, so nothing it did counts. That's atomicity. If the same thing is described as "a failure of atomicity", it's the wrong way round: the demo shows it working.
+
+</details>
+
+<details>
+<summary>What is the difference between a non-repeatable read and a phantom read?</summary>
+
+In a non-repeatable read a row you already read has changed. In a phantom read no row you read has changed, but a new row now matches your query. That's why row locks can stop the first and not the second.
+
+</details>
+
+<details>
+<summary>Why did the same lost-update steps give an error on Postgres and a wrong answer on MySQL, both at REPEATABLE READ?</summary>
+
+Postgres refuses to let a repeatable read transaction change a row that changed after its snapshot, so session B gets a serialization error and must retry. InnoDB's snapshot applies to plain `SELECT` statements only, so its `UPDATE` waits for the lock, then writes over the latest row and succeeds. Session A's sale is lost.
+
+</details>
+
+<details>
+<summary>Two transactions change different rows and neither sees the other's writes, yet the result breaks a rule. What is this called, and what stops it?</summary>
+
+Write skew. Snapshots can't stop it, because no write conflict exists. `SERIALIZABLE` stops it by detecting the read-write dependency and failing one transaction, and `SELECT ... FOR UPDATE` stops it by locking the rows the decision was based on.
+
+</details>
+
+<details>
+<summary>COMMIT returned successfully, and then the power failed. Why is the data safe when the data files were never updated?</summary>
+
+Because the write-ahead log was forced to disk with `fsync` before `COMMIT` returned. On restart the server replays the log from the last checkpoint and rebuilds the changes the data files missed. With `synchronous_commit=off`, the reply doesn't wait for that flush, so the most recent commits can be lost.
+
+</details>
+
+## Open questions and gaps
+
+- 🎓 The course's isolation demos ran on Postgres 13. I re-ran the behaviour on 18, and the results matched, apart from the output format.
+- I couldn't test real power loss, as the box above explains, so "survives a power cut" rests on the docs.
+- The course says InnoDB's behaviour needs testing and leaves it there. The results above are mine, on 8.4 only.
+- I ran read committed on MySQL only indirectly. Its row in the table is marked 📘.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/), the course these notes follow
+- PostgreSQL docs: [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html), [Introduction to MVCC](https://www.postgresql.org/docs/current/mvcc-intro.html), [Write-Ahead Logging](https://www.postgresql.org/docs/current/wal-intro.html), [Asynchronous Commit](https://www.postgresql.org/docs/current/wal-async-commit.html)
+- MySQL 8.4 docs: [Transaction Isolation Levels](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html), [Consistent Nonlocking Reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html), [Locking Reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html)
+- Berenson et al., [A Critique of ANSI SQL Isolation Levels](https://arxiv.org/abs/cs/0701157) (1995)
+- [PGlite](https://pglite.dev), the Postgres build behind the live boxes

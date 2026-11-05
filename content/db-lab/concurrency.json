@@ -1,0 +1,1834 @@
+{
+ "theaters": {
+  "shared-lock": {
+   "title": "Who waits for a shared lock?",
+   "alt": "A recorded run on PostgreSQL. Session A takes a shared row lock. Session B can still read the row normally and take its own shared lock, but its update waits until session A commits.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "accounts",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "Session A wants a stable value while it works.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "SELECT balance FROM accounts WHERE id = 1 FOR SHARE",
+       "note": "A takes a shared lock on the row.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "balance"
+       ],
+       "rows": [
+        [
+         100
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT balance FROM accounts WHERE id = 1",
+       "note": "A plain read takes no lock at all, so nothing stops it.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "balance"
+       ],
+       "rows": [
+        [
+         100
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN",
+       "note": "Session B opens a transaction.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT balance FROM accounts WHERE id = 1 FOR SHARE",
+       "note": "Two shared locks can coexist. That's what shared means.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "balance"
+       ],
+       "rows": [
+        [
+         100
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "ROLLBACK",
+       "note": "B lets its lock go.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE accounts SET balance = 50 WHERE id = 1",
+       "note": "A write needs an exclusive lock, which conflicts with A's shared lock. B waits. It doesn't get an error.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          100
+         ]
+        ]
+       },
+       "resolvedAt": 7,
+       "resolved": {
+        "status": "ok",
+        "tag": "UPDATE 1"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A finishes and the write goes through.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          50
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "deadlock": {
+   "title": "Who dies in a deadlock?",
+   "alt": "A recorded run on PostgreSQL with two tabs. Two sessions each hold a row the other wants. If the second session blocks more than a second after the first, it is the one aborted. If it blocks within the first second, the first session is aborted instead, so the victim depends on timing, not on who came last.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "test",
+   "variants": [
+    {
+     "label": "B closes the loop late",
+     "summary": "B closed the cycle and died. A's own check had already run, a second after A began waiting, and found no cycle then, so it was B's check that found it.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "Two sessions, each about to take a row.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN",
+       "note": "B starts too.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO test VALUES (20)",
+       "note": "A holds 20.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO test VALUES (21)",
+       "note": "B holds 21.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO test VALUES (21)",
+       "note": "A wants 21 and waits for B. After one second (deadlock_timeout), A's backend checks for a cycle, finds none, and keeps waiting.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       },
+       "resolvedAt": 5,
+       "resolved": {
+        "status": "ok",
+        "tag": "INSERT 1"
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO test VALUES (20)",
+       "note": "Now B wants 20, held by A. Each waits for the other. One second later B's check finds the cycle and aborts B.",
+       "status": "error",
+       "error": "deadlock detected",
+       "code": "40P01",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A's insert of 21 went through when B died, so A can commit both rows.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": [
+         [
+          20
+         ],
+         [
+          21
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "B closes the loop early",
+     "summary": "A entered the wait first and still died, because its one-second check fired after the cycle existed. The rule isn't that the last one in fails: it's whoever's check runs first once the cycle exists.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "The same steps, closer together.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN",
+       "note": "B starts too.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO test VALUES (20)",
+       "note": "A holds 20.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO test VALUES (21)",
+       "note": "B holds 21.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO test VALUES (21)",
+       "note": "A wants 21 and waits, and its one-second timer starts.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       },
+       "resolvedAt": 5,
+       "resolved": {
+        "status": "error",
+        "error": "deadlock detected",
+        "code": "40P01"
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO test VALUES (20)",
+       "note": "B closes the cycle within the second, so A's timer fires first and finds it.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "This time B survives.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": [
+         [
+          20
+         ],
+         [
+          21
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "duplicate-wait": {
+   "title": "Waiting on someone else's uncommitted key",
+   "alt": "A recorded run on PostgreSQL with two tabs. Session A inserts a key without committing. Session B inserts the same key and waits, because the outcome depends on A. If A rolls back, B's insert succeeds. If A commits, B fails with a duplicate key error.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "test",
+   "variants": [
+    {
+     "label": "A rolls back",
+     "summary": "B's insert succeeded: the key turned out to be free.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "A opens a transaction.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO test VALUES (1)",
+       "note": "A inserts key 1, uncommitted.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO test VALUES (1)",
+       "note": "B can't know yet if this key is taken, so it waits for A's outcome.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       },
+       "resolvedAt": 3,
+       "resolved": {
+        "status": "ok",
+        "tag": "INSERT 1"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "ROLLBACK",
+       "note": "A ends with ROLLBACK, and B's statement returns.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": [
+         [
+          1
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "A commits",
+     "summary": "B got a duplicate key error, as soon as A's fate was known.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "A opens a transaction.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO test VALUES (1)",
+       "note": "A inserts key 1, uncommitted.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO test VALUES (1)",
+       "note": "B can't know yet if this key is taken, so it waits for A's outcome.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": []
+       },
+       "resolvedAt": 3,
+       "resolved": {
+        "status": "error",
+        "error": "duplicate key value violates unique constraint \"test_pkey\"",
+        "code": "23505"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A ends with COMMIT, and B's statement returns.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "pk"
+        ],
+        "rows": [
+         [
+          1
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "double-booking": {
+   "title": "Two people book the same seat",
+   "alt": "A recorded run on PostgreSQL with one tab per approach. Without locks both sessions see the seat free and both book it, and the last write wins. With SELECT FOR UPDATE the second session waits and then sees the seat taken. An UPDATE with the condition in its WHERE clause also works at read committed. At repeatable read the same UPDATE fails with a serialization error.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "Ana",
+    "Ben"
+   ],
+   "tableName": "seats",
+   "variants": [
+    {
+     "label": "No lock",
+     "summary": "Both were told they had seat 1. The table shows only Ben, so Ana has a booking confirmation for a seat she doesn't have.",
+     "steps": [
+      {
+       "s": "Ana",
+       "sql": "BEGIN",
+       "note": "Ana opens the booking page.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "BEGIN",
+       "note": "So does Ben.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "SELECT * FROM seats WHERE id = 1 AND isbooked = 0",
+       "note": "Seat 1 looks free.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "isbooked",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         0,
+         null
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "SELECT * FROM seats WHERE id = 1 AND isbooked = 0",
+       "note": "Ben sees it free as well. Plain reads don't block.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "isbooked",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         0,
+         null
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ana' WHERE id = 1",
+       "note": "Ana books it, and holds the row lock.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ben' WHERE id = 1",
+       "note": "Ben's update waits for Ana.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       },
+       "resolvedAt": 6,
+       "resolved": {
+        "status": "ok",
+        "tag": "UPDATE 1"
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "COMMIT",
+       "note": "Ana is told she has the seat.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "COMMIT",
+       "note": "Ben's update overwrote hers, and he's told the same thing.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ben"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "SELECT FOR UPDATE",
+     "summary": "Ben waited, and then found the seat taken. The application told him so.",
+     "steps": [
+      {
+       "s": "Ana",
+       "sql": "BEGIN",
+       "note": "The same flow, locking on the read.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "BEGIN",
+       "note": "Ben starts too.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "SELECT * FROM seats WHERE id = 1 AND isbooked = 0 FOR UPDATE",
+       "note": "Ana gets the seat and an exclusive lock on it.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "isbooked",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         0,
+         null
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "SELECT * FROM seats WHERE id = 1 AND isbooked = 0 FOR UPDATE",
+       "note": "Ben's locking read waits for Ana.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       },
+       "resolvedAt": 5,
+       "resolved": {
+        "status": "ok",
+        "tag": "SELECT",
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": []
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ana' WHERE id = 1",
+       "note": "Ana books.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "COMMIT",
+       "note": "When Ana commits, Ben's query re-checks the row, sees isbooked = 1, and returns no rows.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "ROLLBACK",
+       "note": "No rows came back, so the application tells Ben the seat is gone.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "UPDATE with the check",
+     "summary": "UPDATE 0 tells Ben he lost. It worked at read committed, because the waiting UPDATE re-evaluated its WHERE clause on the new row.",
+     "steps": [
+      {
+       "s": "Ana",
+       "sql": "BEGIN",
+       "note": "One statement does both the check and the write.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "BEGIN",
+       "note": "Ben starts too.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ana' WHERE id = 1 AND isbooked = 0",
+       "note": "Ana's update matches, so she holds the row.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ben' WHERE id = 1 AND isbooked = 0",
+       "note": "Ben's update waits.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       },
+       "resolvedAt": 4,
+       "resolved": {
+        "status": "ok",
+        "tag": "UPDATE 0"
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "COMMIT",
+       "note": "Postgres re-checks Ben's WHERE clause against Ana's new row version. It no longer matches, so he gets UPDATE 0.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "COMMIT",
+       "note": "The application reads the count of 0 and tells Ben the seat is gone.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "The same at repeatable read",
+     "summary": "The same statement behaves differently at a stricter level: it fails rather than re-checking, so the code must catch the error.",
+     "steps": [
+      {
+       "s": "Ana",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "The same statement at a stricter level.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "Ben starts too.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ana' WHERE id = 1 AND isbooked = 0",
+       "note": "Ana's update matches.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "UPDATE seats SET isbooked = 1, name = 'Ben' WHERE id = 1 AND isbooked = 0",
+       "note": "Ben's update waits.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          0,
+          null
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       },
+       "resolvedAt": 4,
+       "resolved": {
+        "status": "error",
+        "error": "could not serialize access due to concurrent update",
+        "code": "40001"
+       }
+      },
+      {
+       "s": "Ana",
+       "sql": "COMMIT",
+       "note": "Ben can't re-check at this level, because his snapshot is fixed. He gets a serialization error.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Ben",
+       "sql": "ROLLBACK",
+       "note": "The seat is safe either way.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "id",
+         "isbooked",
+         "name"
+        ],
+        "rows": [
+         [
+          1,
+          1,
+          "Ana"
+         ],
+         [
+          2,
+          0,
+          null
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "no-waiting": {
+   "title": "Three ways not to wait",
+   "alt": "A recorded run on PostgreSQL. Session A locks seat 1. Session B tries three options: lock_timeout gives up after 200 milliseconds with an error, NOWAIT fails at once, and SKIP LOCKED returns the next free seat instead.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "seats",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "Session A is halfway through booking.",
+       "status": "ok",
+       "tag": "BEGIN"
+      },
+      {
+       "s": "A",
+       "sql": "SELECT * FROM seats WHERE id = 1 FOR UPDATE",
+       "note": "A holds seat 1.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "isbooked",
+        "name"
+       ],
+       "rows": [
+        [
+         1,
+         0,
+         null
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "SET lock_timeout = '200ms'",
+       "note": "Option one: give up after a while.",
+       "status": "ok",
+       "tag": "SET"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM seats WHERE id = 1 FOR UPDATE",
+       "note": "After 200 ms the statement fails.",
+       "status": "error",
+       "error": "canceling statement due to lock timeout",
+       "code": "55P03"
+      },
+      {
+       "s": "B",
+       "sql": "RESET lock_timeout",
+       "note": "Back to waiting by default.",
+       "status": "ok",
+       "tag": "RESET"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM seats WHERE id = 1 FOR UPDATE NOWAIT",
+       "note": "Option two: fail at once.",
+       "status": "error",
+       "error": "could not obtain lock on row in relation \"seats\"",
+       "code": "55P03"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT * FROM seats WHERE isbooked = 0 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED",
+       "note": "Option three: take the next one nobody holds. This is how a job queue is built on a table.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "isbooked",
+        "name"
+       ],
+       "rows": [
+        [
+         2,
+         0,
+         null
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "duplicate-page": {
+   "title": "A row inserted between two pages",
+   "alt": "A recorded run on PostgreSQL. A reader fetches page one with OFFSET 0, a writer inserts a new top story, and the reader fetches page two with OFFSET 3. The last story of page one appears again at the top of page two.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "Reader",
+    "Writer"
+   ],
+   "tableName": "news",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "Reader",
+       "sql": "SELECT id, title FROM news ORDER BY id DESC OFFSET 0 LIMIT 3",
+       "note": "Page one: stories 10, 9 and 8.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "title"
+       ],
+       "rows": [
+        [
+         10,
+         "story 10"
+        ],
+        [
+         9,
+         "story 9"
+        ],
+        [
+         8,
+         "story 8"
+        ]
+       ]
+      },
+      {
+       "s": "Writer",
+       "sql": "INSERT INTO news (title) VALUES ('breaking story')",
+       "note": "A new story arrives at the top, and every row shifts down one place.",
+       "status": "ok",
+       "tag": "INSERT 1"
+      },
+      {
+       "s": "Reader",
+       "sql": "SELECT id, title FROM news ORDER BY id DESC OFFSET 3 LIMIT 3",
+       "note": "Page two starts with story 8 again, because offsets count positions, not rows.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "title"
+       ],
+       "rows": [
+        [
+         8,
+         "story 8"
+        ],
+        [
+         7,
+         "story 7"
+        ],
+        [
+         6,
+         "story 6"
+        ]
+       ]
+      },
+      {
+       "s": "Reader",
+       "sql": "SELECT id, title FROM news WHERE id < 8 ORDER BY id DESC LIMIT 3",
+       "note": "Keyset pagination asks for what comes after the last row seen, so the insert doesn't matter.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "id",
+        "title"
+       ],
+       "rows": [
+        [
+         7,
+         "story 7"
+        ],
+        [
+         6,
+         "story 6"
+        ],
+        [
+         5,
+         "story 5"
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": {
+  "lock-views": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "BEGIN;",
+     "out": ""
+    },
+    {
+     "cmd": "LOCK TABLE t IN ACCESS EXCLUSIVE MODE;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT locktype, mode, granted FROM pg_locks WHERE relation = 't'::regclass;",
+     "out": " locktype |        mode         | granted \n----------+---------------------+---------\n relation | AccessExclusiveLock | t\n(1 row)"
+    },
+    {
+     "cmd": "ROLLBACK;",
+     "out": ""
+    }
+   ]
+  },
+  "pool-bench": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- 1,000 lookups, one at a time",
+     "out": "new connection per request   12.63 ms each\nfrom a pool                  1.11 ms each"
+    }
+   ]
+  },
+  "leak": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- three requests for a taken seat, through a pool of 2, with an early return that skips release()",
+     "out": "request 1: seat already booked\nrequest 2: seat already booked\nrequest 3: ERROR timeout exceeded when trying to connect\n\npg_stat_activity: 2 idle in transaction"
+    }
+   ]
+  },
+  "offset-plans": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY ON) SELECT id, title FROM news ORDER BY id DESC OFFSET 1000000 LIMIT 10;",
+     "out": "                                     QUERY PLAN                                     \n------------------------------------------------------------------------------------\n Limit (actual rows=10.00 loops=1)\n   Buffers: shared hit=9106\n   ->  Index Scan Backward using news_pkey on news (actual rows=1000010.00 loops=1)\n         Index Searches: 1\n         Buffers: shared hit=9106\n Planning:\n   Buffers: shared hit=67\n Planning Time: 0.308 ms\n Execution Time: 68.122 ms\n(9 rows)"
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY ON) SELECT id, title FROM news WHERE id < 1000000 ORDER BY id DESC LIMIT 10;",
+     "out": "                                  QUERY PLAN                                   \n-------------------------------------------------------------------------------\n Limit (actual rows=10.00 loops=1)\n   Buffers: shared hit=5\n   ->  Index Scan Backward using news_pkey on news (actual rows=10.00 loops=1)\n         Index Cond: (id < 1000000)\n         Index Searches: 1\n         Buffers: shared hit=5\n Planning:\n   Buffers: shared hit=3\n Planning Time: 0.321 ms\n Execution Time: 0.037 ms\n(10 rows)"
+    }
+   ]
+  },
+  "read-only": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "BEGIN READ ONLY;",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO t VALUES (1);",
+     "out": "ERROR:  cannot execute INSERT in a read-only transaction"
+    },
+    {
+     "cmd": "ROLLBACK;",
+     "out": ""
+    },
+    {
+     "cmd": "BEGIN;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_current_xact_id_if_assigned() AS id_after_a_read;",
+     "out": " id_after_a_read \n-----------------\n                \n(1 row)"
+    },
+    {
+     "cmd": "SELECT count(*) FROM t;",
+     "out": " count \n-------\n     0\n(1 row)"
+    },
+    {
+     "cmd": "SELECT pg_current_xact_id_if_assigned() AS id_still;",
+     "out": " id_still \n----------\n         \n(1 row)"
+    },
+    {
+     "cmd": "INSERT INTO t VALUES (1);",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_current_xact_id_if_assigned() AS id_after_a_write;",
+     "out": " id_after_a_write \n------------------\n             1954\n(1 row)"
+    },
+    {
+     "cmd": "COMMIT;",
+     "out": ""
+    }
+   ]
+  }
+ },
+ "charts": {
+  "pagination": {
+   "engine": "PostgreSQL 18.6",
+   "title": "Fetching one page of 10, deep into a table",
+   "alt": "Time to fetch ten rows from a two-million-row table, at increasing depths. With OFFSET the time grows in step with the depth, because the rows are read and thrown away. With keyset pagination it stays flat at a fraction of a millisecond.",
+   "x": {
+    "label": "rows skipped",
+    "log": true
+   },
+   "y": {
+    "label": "execution time",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "OFFSET",
+     "points": [
+      [
+       10,
+       0.029
+      ],
+      [
+       1000,
+       0.15
+      ],
+      [
+       10000,
+       1.872
+      ],
+      [
+       100000,
+       17.561
+      ],
+      [
+       500000,
+       85.602
+      ],
+      [
+       1000000,
+       187.495
+      ],
+      [
+       1900000,
+       478.903
+      ]
+     ]
+    },
+    {
+     "name": "keyset",
+     "points": [
+      [
+       10,
+       0.018
+      ],
+      [
+       1000,
+       0.018
+      ],
+      [
+       10000,
+       0.03
+      ],
+      [
+       100000,
+       0.039
+      ],
+      [
+       500000,
+       0.024
+      ],
+      [
+       1000000,
+       0.02
+      ],
+      [
+       1900000,
+       0.029
+      ]
+     ]
+    }
+   ]
+  },
+  "pool-sizes": {
+   "engine": "PostgreSQL 18.6",
+   "title": "200 requests at once, each query taking 20 ms",
+   "alt": "The time the slowest five percent of 200 simultaneous requests waited, for connection pools of 1 to 50 connections. With one connection requests queue for seconds. It falls as the pool grows, because each query here only sleeps on the server.",
+   "x": {
+    "label": "connections in the pool",
+    "log": true
+   },
+   "y": {
+    "label": "95th percentile wait",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "p95 wait",
+     "points": [
+      [
+       1,
+       4202
+      ],
+      [
+       2,
+       2124
+      ],
+      [
+       5,
+       865
+      ],
+      [
+       10,
+       445
+      ],
+      [
+       20,
+       223
+      ],
+      [
+       50,
+       91
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {},
+ "playgrounds": {
+  "paging": {
+   "title": "Offset or keyset?",
+   "hint": "200,000 stories. Compare the rows read in each plan, then try a deeper OFFSET.",
+   "setup": "CREATE TABLE news (id serial PRIMARY KEY, title text);\nINSERT INTO news (title) SELECT 'story ' || g FROM generate_series(1, 200000) g;\nVACUUM ANALYZE news;",
+   "query": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY ON)\nSELECT id, title FROM news ORDER BY id DESC OFFSET 100000 LIMIT 10;",
+   "presets": [
+    {
+     "label": "Keyset at the same depth",
+     "sql": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY ON)\nSELECT id, title FROM news WHERE id < 100001 ORDER BY id DESC LIMIT 10;"
+    },
+    {
+     "label": "Both give the same rows",
+     "sql": "SELECT id FROM news ORDER BY id DESC OFFSET 100000 LIMIT 3;\nSELECT id FROM news WHERE id < 100001 ORDER BY id DESC LIMIT 3;"
+    }
+   ]
+  },
+  "locks": {
+   "title": "See your own locks",
+   "hint": "One session, so nothing can block here, but you can read what you hold. Compare what each statement takes in pg_locks.",
+   "setup": "CREATE TABLE t (id int PRIMARY KEY, v int);\nINSERT INTO t VALUES (1, 1), (2, 2);",
+   "query": "BEGIN;\nSELECT * FROM t WHERE id = 1 FOR UPDATE;\nSELECT locktype, mode, relation::regclass FROM pg_locks WHERE relation = 't'::regclass;\nROLLBACK;",
+   "presets": [
+    {
+     "label": "A plain SELECT",
+     "sql": "BEGIN;\nSELECT * FROM t;\nSELECT locktype, mode FROM pg_locks WHERE relation = 't'::regclass;\nROLLBACK;"
+    },
+    {
+     "label": "ALTER TABLE",
+     "sql": "BEGIN;\nALTER TABLE t ADD COLUMN w int;\nSELECT locktype, mode FROM pg_locks WHERE relation = 't'::regclass;\nROLLBACK;"
+    },
+    {
+     "label": "The row lock lives in the row",
+     "sql": "BEGIN;\nSELECT * FROM t WHERE id = 1 FOR UPDATE;\nSELECT id, xmin, xmax FROM t;\nROLLBACK;"
+    }
+   ]
+  }
+ }
+}

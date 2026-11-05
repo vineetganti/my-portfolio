@@ -1,0 +1,3664 @@
+{
+ "theaters": {
+  "atomicity": {
+   "title": "A transfer that dies halfway",
+   "alt": "A recorded run on PostgreSQL. Session A starts a transfer and takes 100 from Ana, then the second update fails a check constraint. The transaction is aborted, and a rollback leaves both balances as they began. A third connection sees 500 and 100 at every step.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A"
+   ],
+   "tableName": "accounts",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "The transaction opens. Nothing has changed yet.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "owner",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          "Ana",
+          500
+         ],
+         [
+          2,
+          "Ben",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE accounts SET balance = balance - 100 WHERE id = 1",
+       "note": "Ana's balance drops by 100 inside this transaction. A third connection still sees 500, because nothing is committed.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "owner",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          "Ana",
+          500
+         ],
+         [
+          2,
+          "Ben",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE accounts SET balance = balance - 200 WHERE id = 2",
+       "note": "This update would take Ben below zero. The CHECK constraint rejects it, so the statement fails.",
+       "status": "error",
+       "error": "new row for relation \"accounts\" violates check constraint \"accounts_balance_check\"",
+       "code": "23514",
+       "table": {
+        "cols": [
+         "id",
+         "owner",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          "Ana",
+          500
+         ],
+         [
+          2,
+          "Ben",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "SELECT balance FROM accounts WHERE id = 1",
+       "note": "Postgres won't run anything else now. After one failure the whole transaction is aborted, so the only useful command left is ROLLBACK.",
+       "status": "error",
+       "error": "current transaction is aborted, commands ignored until end of transaction block",
+       "code": "25P02",
+       "table": {
+        "cols": [
+         "id",
+         "owner",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          "Ana",
+          500
+         ],
+         [
+          2,
+          "Ben",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "Even COMMIT can't save it: Postgres answers ROLLBACK. Ana's 100 comes back and the row was never visibly changed. That's atomicity working.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "id",
+         "owner",
+         "balance"
+        ],
+        "rows": [
+         [
+          1,
+          "Ana",
+          500
+         ],
+         [
+          2,
+          "Ben",
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "dirty": {
+   "title": "Can a report see uncommitted work?",
+   "alt": "A recorded run on PostgreSQL at read uncommitted. Session A changes a quantity without committing. Session B, asking for read uncommitted, still reads the old committed total, because PostgreSQL treats that level as read committed.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "sales",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
+       "note": "Session B asks for the weakest level the SQL standard defines.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "The real total.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "330"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "Session A starts a change.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE sales SET quantity = 5 WHERE id = 1",
+       "note": "Session A raises a quantity but hasn't committed. A dirty read would now show B a total that may never be real.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "B still gets the committed total. Postgres accepts READ UNCOMMITTED but runs it as READ COMMITTED, so a dirty read can't happen here at all.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "330"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "ROLLBACK",
+       "note": "Session A changes its mind. Any reader that had seen its number would now be holding a value that never existed.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Done.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "dirty-mysql": {
+   "title": "The same run on MySQL",
+   "alt": "A recorded run on MySQL at read uncommitted. Session A changes a quantity without committing, session B's total rises to the uncommitted value, then session A rolls back and B's next total drops again. B saw a dirty read of a value that never existed.",
+   "engine": "MySQL 8.4.13",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "sales",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
+       "note": "MySQL really implements this level.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "START TRANSACTION",
+       "note": "Session B opens a transaction.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "The real total.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "330"
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "START TRANSACTION",
+       "note": "Session A starts a change.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE sales SET quantity = 5 WHERE id = 1",
+       "note": "Session A raises a quantity but hasn't committed.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "Here is the dirty read: B's total includes a change nobody has committed.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "630"
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "ROLLBACK",
+       "note": "Session A rolls back. The number B just read never existed.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "B's total falls back. If B had printed the earlier figure on a report, the report would be wrong for good.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "330"
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Done.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      }
+     ]
+    }
+   ]
+  },
+  "non-repeatable": {
+   "title": "Two reads inside one transaction",
+   "alt": "A recorded run on PostgreSQL with one tab per isolation level. Session B reads a total, session A commits a change, and B reads again. At read committed the second read differs from the first. At repeatable read and serializable it matches.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "sales",
+   "variants": [
+    {
+     "label": "Read committed",
+     "summary": "The report's two reads disagree: each statement got its own fresh snapshot.",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED",
+       "note": "Session B starts a report at READ COMMITTED.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT product, sum(quantity * price) AS revenue FROM sales GROUP BY product ORDER BY product",
+       "note": "The first read: revenue per product, which adds up to 330.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "product",
+        "revenue"
+       ],
+       "rows": [
+        [
+         "Case",
+         "30"
+        ],
+        [
+         "Phone",
+         "300"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE sales SET quantity = quantity + 5 WHERE id = 1",
+       "note": "Session A commits a change between B's two reads. Outside a transaction block, a statement commits at once.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "The second read, in the same transaction, for the report footer. Does it still add up to 330?",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "830"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "The report ends.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Repeatable read",
+     "summary": "Both reads agree, because the whole transaction reads from one snapshot.",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "Session B starts a report at REPEATABLE READ.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT product, sum(quantity * price) AS revenue FROM sales GROUP BY product ORDER BY product",
+       "note": "The first read: revenue per product, which adds up to 330.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "product",
+        "revenue"
+       ],
+       "rows": [
+        [
+         "Case",
+         "30"
+        ],
+        [
+         "Phone",
+         "300"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE sales SET quantity = quantity + 5 WHERE id = 1",
+       "note": "Session A commits a change between B's two reads. Outside a transaction block, a statement commits at once.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "The second read, in the same transaction, for the report footer. Does it still add up to 330?",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "330"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "The report ends.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Serializable",
+     "summary": "Both reads agree, because the whole transaction reads from one snapshot.",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "Session B starts a report at SERIALIZABLE.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT product, sum(quantity * price) AS revenue FROM sales GROUP BY product ORDER BY product",
+       "note": "The first read: revenue per product, which adds up to 330.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "product",
+        "revenue"
+       ],
+       "rows": [
+        [
+         "Case",
+         "30"
+        ],
+        [
+         "Phone",
+         "300"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE sales SET quantity = quantity + 5 WHERE id = 1",
+       "note": "Session A commits a change between B's two reads. Outside a transaction block, a statement commits at once.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT sum(quantity * price) AS revenue FROM sales",
+       "note": "The second read, in the same transaction, for the report footer. Does it still add up to 330?",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "revenue"
+       ],
+       "rows": [
+        [
+         "330"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "The report ends.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          7,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "phantom": {
+   "title": "A new row appears mid-report",
+   "alt": "A recorded run on PostgreSQL with one tab per isolation level. Session B counts phone sales, session A inserts and commits a new one, and B counts again. At read committed the count rises from 2 to 3. At repeatable read and serializable it stays at 2.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "sales",
+   "variants": [
+    {
+     "label": "Read committed",
+     "summary": "The second count includes a row that didn't exist for the first: a phantom.",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED",
+       "note": "Session B starts counting at READ COMMITTED.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM sales WHERE product = 'Phone'",
+       "note": "Two phone sales.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO sales (product, quantity, price) VALUES ('Phone', 1, 100)",
+       "note": "Session A inserts a matching row and commits it. No existing row changed, so locks on the rows B read wouldn't have stopped this.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM sales WHERE product = 'Phone'",
+       "note": "Session B counts again.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "3"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Done.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Repeatable read",
+     "summary": "No phantom. The SQL standard allows one at repeatable read, but Postgres goes further because the level is a snapshot.",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "Session B starts counting at REPEATABLE READ.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM sales WHERE product = 'Phone'",
+       "note": "Two phone sales.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO sales (product, quantity, price) VALUES ('Phone', 1, 100)",
+       "note": "Session A inserts a matching row and commits it. No existing row changed, so locks on the rows B read wouldn't have stopped this.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM sales WHERE product = 'Phone'",
+       "note": "Session B counts again.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Done.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Serializable",
+     "summary": "No phantom. The SQL standard allows one at repeatable read, but Postgres goes further because the level is a snapshot.",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "Session B starts counting at SERIALIZABLE.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM sales WHERE product = 'Phone'",
+       "note": "Two phone sales.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO sales (product, quantity, price) VALUES ('Phone', 1, 100)",
+       "note": "Session A inserts a matching row and commits it. No existing row changed, so locks on the rows B read wouldn't have stopped this.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM sales WHERE product = 'Phone'",
+       "note": "Session B counts again.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Done.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "id",
+         "product",
+         "quantity",
+         "price"
+        ],
+        "rows": [
+         [
+          1,
+          "Phone",
+          2,
+          100
+         ],
+         [
+          2,
+          "Case",
+          3,
+          10
+         ],
+         [
+          3,
+          "Phone",
+          1,
+          100
+         ],
+         [
+          4,
+          "Phone",
+          1,
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "phantom-mysql": {
+   "title": "The phantom on MySQL",
+   "alt": "A recorded run on MySQL at repeatable read. Session B counts two phone sales, session A inserts a third and commits. B's plain count stays at two, but a locking read in the same transaction sees three, because locking reads look at the latest committed rows.",
+   "engine": "MySQL 8.4.13",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "sales",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "B",
+       "sql": "START TRANSACTION",
+       "note": "MySQL's default is REPEATABLE READ.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) AS phones FROM sales WHERE product = 'Phone'",
+       "note": "Two phone sales, read from a snapshot.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "phones"
+       ],
+       "rows": [
+        [
+         2
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO sales (product, quantity, price) VALUES ('Phone', 1, 100)",
+       "note": "Session A inserts and commits a third.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) AS phones FROM sales WHERE product = 'Phone'",
+       "note": "A plain read still says two: it uses the same snapshot, so there's no phantom.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "phones"
+       ],
+       "rows": [
+        [
+         2
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) AS phones FROM sales WHERE product = 'Phone' FOR SHARE",
+       "note": "A locking read isn't a snapshot read. It looks at the latest committed rows, and the third phone appears inside the same transaction.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "phones"
+       ],
+       "rows": [
+        [
+         3
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE sales SET price = 90 WHERE product = 'Phone'",
+       "note": "An UPDATE works on the latest rows too. It reports three rows changed, one of which this transaction's snapshot says doesn't exist.",
+       "status": "ok",
+       "tag": "OK, 3 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) AS phones FROM sales WHERE product = 'Phone'",
+       "note": "Now the plain read says three: a transaction always sees its own changes, so the updated phantom joins the snapshot.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "phones"
+       ],
+       "rows": [
+        [
+         3
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Done. This is the behaviour behind the claim that MySQL's repeatable read isn't the same as Postgres's.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      }
+     ]
+    }
+   ]
+  },
+  "lost-update": {
+   "title": "Two people update the same stock count",
+   "alt": "A recorded run on PostgreSQL with tabs for read committed and repeatable read. Both sessions read 10 phones in stock and each wants to sell some. At read committed the second write waits, then overwrites, and one sale is lost. At repeatable read the second write fails with a serialization error and has to retry.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "stock",
+   "variants": [
+    {
+     "label": "Read committed",
+     "summary": "Two sales of 3 and 2 should leave 5 units. The table says 8, so session A's sale vanished without an error. That's a lost update.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED",
+       "note": "Session A starts a sale of 3.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED",
+       "note": "Session B starts a sale of 2.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "A reads 10 and works out 10 - 3 = 7 in the application.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         10
+        ]
+       ],
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "B reads 10 too and works out 10 - 2 = 8.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         10
+        ]
+       ],
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE stock SET units = 7 WHERE item = 'Phone'",
+       "note": "A writes the value it computed. It now holds the row lock.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE stock SET units = 8 WHERE item = 'Phone'",
+       "note": "B wants the same row and has to wait for A to finish.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       },
+       "resolvedAt": 6,
+       "resolved": {
+        "status": "ok",
+        "tag": "UPDATE 1"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A commits, which releases the lock, and B's statement returns.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "B commits whatever state it's in.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          8
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Repeatable read",
+     "summary": "Session B can't overwrite a row that changed after its snapshot. It gets an error, retries from a fresh read, and the count comes out right.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "Session A starts a sale of 3.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "Session B starts a sale of 2.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "A reads 10 and works out 10 - 3 = 7 in the application.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         10
+        ]
+       ],
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "B reads 10 too and works out 10 - 2 = 8.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         10
+        ]
+       ],
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE stock SET units = 7 WHERE item = 'Phone'",
+       "note": "A writes the value it computed. It now holds the row lock.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE stock SET units = 8 WHERE item = 'Phone'",
+       "note": "B wants the same row and has to wait for A to finish.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       },
+       "resolvedAt": 6,
+       "resolved": {
+        "status": "error",
+        "error": "could not serialize access due to concurrent update",
+        "code": "40001"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A commits, which releases the lock, and B's statement returns.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "B commits whatever state it's in.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "The application retries the whole transaction, as the error asks it to.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "This time B reads 7 and works out 7 - 2 = 5.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         7
+        ]
+       ],
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE stock SET units = 5 WHERE item = 'Phone'",
+       "note": "No conflict now.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "Both sales counted.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          5
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Read committed, relative update",
+     "summary": "No error and no lost sale, at the weakest level. Letting the database do the arithmetic means the waiting UPDATE recomputes from the row A committed.",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "Session A starts a sale of 3.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "BEGIN",
+       "note": "Session B starts a sale of 2.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE stock SET units = units - 3 WHERE item = 'Phone'",
+       "note": "A lets the database do the arithmetic, instead of writing a value it computed.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE stock SET units = units - 2 WHERE item = 'Phone'",
+       "note": "B waits for A's row lock.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          10
+         ]
+        ]
+       },
+       "resolvedAt": 4,
+       "resolved": {
+        "status": "ok",
+        "tag": "UPDATE 1"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A commits. Postgres re-reads the row for B's waiting UPDATE and subtracts from 7, not from 10.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          7
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "5 units left, the right answer.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "item",
+         "units"
+        ],
+        "rows": [
+         [
+          "Phone",
+          5
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "write-skew": {
+   "title": "Two doctors go off call at once",
+   "alt": "A recorded run on PostgreSQL with tabs for repeatable read and serializable. Two doctors are on call and the rule says at least one must stay. Each session sees two on call and takes its own doctor off. At repeatable read both commit and nobody is on call. At serializable the second commit fails with a serialization error.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "Adam",
+    "Bob"
+   ],
+   "tableName": "doctors",
+   "variants": [
+    {
+     "label": "Repeatable read",
+     "summary": "Both transactions committed and nobody is on call. They touched different rows, so no row conflict was ever visible.",
+     "steps": [
+      {
+       "s": "Adam",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "Adam wants to go off call, at REPEATABLE READ.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "So does Bob.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "The rule is that at least one doctor stays on call. Adam sees two, so leaving looks safe.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "Bob sees two as well.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Adam'",
+       "note": "Adam updates his own row.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Bob'",
+       "note": "Bob updates his own row. It's a different row, so there's no lock to wait for.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "COMMIT",
+       "note": "Adam commits.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "COMMIT",
+       "note": "Bob commits, if the database lets him.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          false
+         ]
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "Serializable",
+     "summary": "Postgres saw that the two transactions couldn't have run in any serial order and failed one. Nothing blocked: the loser retried, saw one doctor left and stayed on call.",
+     "steps": [
+      {
+       "s": "Adam",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "Adam wants to go off call, at SERIALIZABLE.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "So does Bob.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "The rule is that at least one doctor stays on call. Adam sees two, so leaving looks safe.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "Bob sees two as well.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         "2"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Adam'",
+       "note": "Adam updates his own row.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Bob'",
+       "note": "Bob updates his own row. It's a different row, so there's no lock to wait for.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "COMMIT",
+       "note": "Adam commits.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "COMMIT",
+       "note": "Bob commits, if the database lets him.",
+       "status": "error",
+       "error": "could not serialize access due to read/write dependencies among transactions",
+       "code": "40001",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "The application retries Bob's transaction.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "Now Bob sees one doctor on call, himself, so he can't leave.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         "1"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "ROLLBACK",
+       "note": "Bob stays on call and the rule holds.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "write-skew-lock": {
+   "title": "The same doctors with a lock",
+   "alt": "A recorded run on PostgreSQL at read committed. Each doctor's session locks the on-call rows with SELECT FOR UPDATE. Bob's lock waits for Adam to commit, then sees only one doctor on call, so Bob stays. No error and no retry, but Bob had to wait.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "Adam",
+    "Bob"
+   ],
+   "tableName": "doctors",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "Adam",
+       "sql": "BEGIN",
+       "note": "This time at plain READ COMMITTED.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "BEGIN",
+       "note": "Same for Bob.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "SELECT name FROM doctors WHERE on_call FOR UPDATE",
+       "note": "Adam locks every row he based the decision on, not only his own.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "name"
+       ],
+       "rows": [
+        [
+         "Adam"
+        ],
+        [
+         "Bob"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "SELECT name FROM doctors WHERE on_call FOR UPDATE",
+       "note": "Bob asks for the same locks and waits.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       },
+       "resolvedAt": 5,
+       "resolved": {
+        "status": "ok",
+        "tag": "SELECT",
+        "cols": [
+         "name"
+        ],
+        "rows": [
+         [
+          "Bob"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Adam'",
+       "note": "Two were on call, so Adam leaves.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          true
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Adam",
+       "sql": "COMMIT",
+       "note": "The locks are released and Bob's query returns. It rechecks the rows, so it lists only Bob.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "ROLLBACK",
+       "note": "Bob sees one doctor left and stays. The rule holds, with no error to handle.",
+       "status": "ok",
+       "tag": "ROLLBACK",
+       "table": {
+        "cols": [
+         "name",
+         "on_call"
+        ],
+        "rows": [
+         [
+          "Adam",
+          false
+         ],
+         [
+          "Bob",
+          true
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "rr-mysql": {
+   "title": "Lost update at MySQL's repeatable read",
+   "alt": "A recorded run on MySQL at repeatable read. Both sessions read 10 units and write values computed in the application. The second write waits for the first, then succeeds and overwrites, so MySQL's default level allows the lost update that PostgreSQL's level rejects.",
+   "engine": "MySQL 8.4.13",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "stock",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "START TRANSACTION",
+       "note": "Both sessions run at MySQL's default, REPEATABLE READ.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "START TRANSACTION",
+       "note": "Session B begins.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "A",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "A reads 10.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         10
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "B reads 10.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         10
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE stock SET units = 7 WHERE item = 'Phone'",
+       "note": "A writes its result.",
+       "status": "ok",
+       "tag": "OK, 1 row affected"
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE stock SET units = 8 WHERE item = 'Phone'",
+       "note": "B waits for A's row lock.",
+       "status": "blocked",
+       "resolvedAt": 6,
+       "resolved": {
+        "status": "ok",
+        "tag": "OK, 1 row affected"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "A commits. B's update returns successfully, with no error.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "B",
+       "sql": "COMMIT",
+       "note": "B commits.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "A",
+       "sql": "SELECT units FROM stock WHERE item = 'Phone'",
+       "note": "8 units. A's sale is lost at the same level name that protected it on Postgres.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "units"
+       ],
+       "rows": [
+        [
+         8
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "write-skew-mysql": {
+   "title": "Serializable on MySQL is built from locks",
+   "alt": "A recorded run on MySQL at serializable. Each doctor's read takes a shared lock. Adam's update then has to wait for Bob's shared lock, and Bob's update waits for Adam's, which is a deadlock. MySQL rolls Bob back with a deadlock error, Adam's update goes through, and the rule holds.",
+   "engine": "MySQL 8.4.13",
+   "sessions": [
+    "Adam",
+    "Bob"
+   ],
+   "tableName": "doctors",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "Adam",
+       "sql": "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "Adam's connection asks for MySQL's strictest level.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "Bob",
+       "sql": "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+       "note": "Bob's too.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "Adam",
+       "sql": "START TRANSACTION",
+       "note": "Adam begins.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "Bob",
+       "sql": "START TRANSACTION",
+       "note": "Bob begins.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "Adam",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "At this level InnoDB turns a plain SELECT into a locking read, so Adam now holds shared locks on the rows.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         2
+        ]
+       ]
+      },
+      {
+       "s": "Bob",
+       "sql": "SELECT count(*) AS on_call FROM doctors WHERE on_call",
+       "note": "Shared locks don't conflict, so Bob reads and holds them too.",
+       "status": "ok",
+       "tag": "1 row",
+       "cols": [
+        "on_call"
+       ],
+       "rows": [
+        [
+         2
+        ]
+       ]
+      },
+      {
+       "s": "Adam",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Adam'",
+       "note": "Adam needs an exclusive lock on his row, and Bob's shared lock is in the way, so he waits. This is the blocking my notes described.",
+       "status": "blocked",
+       "resolvedAt": 7,
+       "resolved": {
+        "status": "ok",
+        "tag": "OK, 1 row affected"
+       }
+      },
+      {
+       "s": "Bob",
+       "sql": "UPDATE doctors SET on_call = false WHERE name = 'Bob'",
+       "note": "Now Bob needs a row Adam has locked. Each waits for the other: a deadlock. MySQL picks a victim straight away.",
+       "status": "error",
+       "error": "Deadlock found when trying to get lock; try restarting transaction",
+       "code": "ER_LOCK_DEADLOCK"
+      },
+      {
+       "s": "Adam",
+       "sql": "COMMIT",
+       "note": "The survivor commits.",
+       "status": "ok",
+       "tag": "OK, 0 rows affected"
+      },
+      {
+       "s": "Adam",
+       "sql": "SELECT name, on_call FROM doctors ORDER BY name",
+       "note": "One doctor stays on call. The rule held, and the price was a wait and an error instead of a clean retry signal.",
+       "status": "ok",
+       "tag": "2 rows",
+       "cols": [
+        "name",
+        "on_call"
+       ],
+       "rows": [
+        [
+         "Adam",
+         0
+        ],
+        [
+         "Bob",
+         1
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "exit": {
+   "title": "Walking away from an open transaction",
+   "alt": "A recorded run on PostgreSQL. Session one begins a transaction, takes 10 phones out of inventory and sees 90, then disconnects without committing. A new connection reads the inventory and finds 100, because the unfinished transaction was rolled back.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "A, reconnected"
+   ],
+   "tableName": "products",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "The transaction starts.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "name",
+         "inventory"
+        ],
+        "rows": [
+         [
+          "Phone",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "UPDATE products SET inventory = inventory - 10",
+       "note": "Ten phones leave the inventory.",
+       "status": "ok",
+       "tag": "UPDATE 1",
+       "table": {
+        "cols": [
+         "name",
+         "inventory"
+        ],
+        "rows": [
+         [
+          "Phone",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "SELECT name, inventory FROM products",
+       "note": "Inside the transaction the change is real: 90.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "name",
+        "inventory"
+       ],
+       "rows": [
+        [
+         "Phone",
+         90
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "inventory"
+        ],
+        "rows": [
+         [
+          "Phone",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "\\q",
+       "note": "The client quits without COMMIT. To the server, an open transaction on a closed connection is an abandoned one.",
+       "status": "ok",
+       "tag": "connection closed",
+       "table": {
+        "cols": [
+         "name",
+         "inventory"
+        ],
+        "rows": [
+         [
+          "Phone",
+          100
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A, reconnected",
+       "sql": "SELECT name, inventory FROM products",
+       "note": "A new connection finds 100. The unfinished work is gone, which is atomicity doing its job.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "name",
+        "inventory"
+       ],
+       "rows": [
+        [
+         "Phone",
+         100
+        ]
+       ],
+       "table": {
+        "cols": [
+         "name",
+         "inventory"
+        ],
+        "rows": [
+         [
+          "Phone",
+          100
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": {
+  "durability": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SHOW synchronous_commit;",
+     "out": " synchronous_commit \n--------------------\n on\n(1 row)"
+    },
+    {
+     "cmd": "SHOW fsync;",
+     "out": " fsync \n-------\n on\n(1 row)"
+    },
+    {
+     "cmd": "SHOW wal_level;",
+     "out": " wal_level \n-----------\n replica\n(1 row)"
+    },
+    {
+     "cmd": "SELECT pg_current_wal_lsn() AS before_insert;",
+     "out": " before_insert \n---------------\n 0/539C500\n(1 row)"
+    },
+    {
+     "cmd": "CREATE TABLE t (id int);",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO t VALUES (1);",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_current_wal_lsn() AS after_insert;",
+     "out": " after_insert \n--------------\n 0/539D5D0\n(1 row)"
+    }
+   ]
+  },
+  "crash": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- connection 1 commits a row\nINSERT INTO log VALUES (1);\n-- connection 2 leaves one uncommitted\nBEGIN;\nINSERT INTO log VALUES (2);\n-- then the server dies without warning, and comes back\n$ docker kill -s KILL dbe-crash\n$ docker start dbe-crash",
+     "out": "LOG:  database system was interrupted; last known up at 2026-11-04 18:51:10 UTC\nLOG:  database system was not properly shut down; automatic recovery in progress\nLOG:  redo starts at 0/1761990\nLOG:  redo done at 0/1781FE8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s\nLOG:  database system is ready to accept connections"
+    },
+    {
+     "cmd": "SELECT n FROM log;",
+     "out": " n \n---\n 1\n(1 row)"
+    }
+   ]
+  },
+  "commit-tradeoff": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- one client, three seconds of single-row commits",
+     "out": "synchronous_commit=on   690 commits per second\nsynchronous_commit=off  1390 commits per second"
+    },
+    {
+     "cmd": "-- commit in a loop, kill the server after 1.5 seconds, restart, count the rows",
+     "out": "synchronous_commit=on   acknowledged   1272  in table after crash   1272  lost 0\nsynchronous_commit=on   acknowledged   1091  in table after crash   1091  lost 0\nsynchronous_commit=on   acknowledged   1079  in table after crash   1080  lost 0\nsynchronous_commit=off  acknowledged   2223  in table after crash   2200  lost 23\nsynchronous_commit=off  acknowledged   2105  in table after crash   2081  lost 24\nsynchronous_commit=off  acknowledged   2162  in table after crash   2001  lost 161"
+    }
+   ]
+  }
+ },
+ "charts": {},
+ "playgrounds": {
+  "transfer": {
+   "title": "Commit and rollback",
+   "hint": "Run the transfer, then try the presets. Each run starts from whatever the last one left, and Reset puts the balances back.",
+   "setup": "CREATE TABLE accounts (id int PRIMARY KEY, owner text, balance int NOT NULL CHECK (balance >= 0));\nINSERT INTO accounts VALUES (1, 'Ana', 500), (2, 'Ben', 100);",
+   "query": "BEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 1;\nUPDATE accounts SET balance = balance + 100 WHERE id = 2;\nCOMMIT;\n\nSELECT * FROM accounts ORDER BY id;",
+   "presets": [
+    {
+     "label": "Change your mind",
+     "sql": "BEGIN;\nUPDATE accounts SET balance = 0 WHERE id = 1;\nSELECT * FROM accounts ORDER BY id;   -- inside: Ana has 0\nROLLBACK;\nSELECT * FROM accounts ORDER BY id;   -- after: back as it was"
+    },
+    {
+     "label": "See the transaction id",
+     "sql": "BEGIN;\nSELECT txid_current() AS my_transaction;\nUPDATE accounts SET balance = balance + 1 WHERE id = 1;\nSELECT id, balance, xmin, xmax, ctid FROM accounts ORDER BY id;\nCOMMIT;"
+    }
+   ]
+  },
+  "rule-break": {
+   "title": "Ask the database to break its own rule",
+   "hint": "The CHECK constraint is a consistency rule you defined. This run fails on purpose: read the error, then add a smaller amount.",
+   "setup": "CREATE TABLE accounts (id int PRIMARY KEY, owner text, balance int NOT NULL CHECK (balance >= 0));\nINSERT INTO accounts VALUES (1, 'Ana', 500), (2, 'Ben', 100);",
+   "query": "UPDATE accounts SET balance = balance - 700 WHERE id = 1;",
+   "presets": [
+    {
+     "label": "What's in the table now?",
+     "sql": "SELECT * FROM accounts ORDER BY id;"
+    },
+    {
+     "label": "A foreign key rule",
+     "sql": "CREATE TABLE IF NOT EXISTS payments (account_id int REFERENCES accounts(id), amount int);\nINSERT INTO payments VALUES (99, 10);"
+    }
+   ]
+  }
+ },
+ "data": {}
+}

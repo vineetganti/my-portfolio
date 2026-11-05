@@ -42,3 +42,8 @@ next-env.d.ts
 
 # recorded narrations live in object storage; see content/audio.json
 /public/audio/
+
+# Private raw source material (paid course transcripts): never commit
+raw/
+# PGlite runtime, copied from node_modules at build time
+public/pglite/

@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "from": "query",
+      "to": "buffer pool",
+      "label": "page?",
+      "type": "request"
+    },
+    {
+      "from": "buffer pool",
+      "to": "OS file cache",
+      "label": "miss",
+      "type": "request"
+    },
+    {
+      "from": "OS file cache",
+      "to": "disk",
+      "label": "miss",
+      "type": "request"
+    }
+  ]
+}

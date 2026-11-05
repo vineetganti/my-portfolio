@@ -1,0 +1,459 @@
+{
+ "theaters": {},
+ "runs": {
+  "tls": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- a new container, client asks for TLS",
+     "out": "error: The server does not support SSL connections"
+    },
+    {
+     "cmd": "$ openssl req -x509 -newkey rsa:4096 -nodes -keyout private.pem -out cert.pem\n# ssl = on in postgresql.conf, key left readable by everyone (chmod 644)\n$ docker restart",
+     "out": "container state: exited\nFATAL:  private key file \"private.pem\" has group or world access"
+    },
+    {
+     "cmd": "$ chmod 600 private.pem\n$ docker restart\n-- connect with TLS",
+     "out": "{\"ssl\":true,\"version\":\"TLSv1.3\",\"cipher\":\"TLS_AES_256_GCM_SHA384\"}"
+    },
+    {
+     "cmd": "-- connect without TLS: it's still allowed",
+     "out": "{\"ssl\":false}"
+    },
+    {
+     "cmd": "-- connect with TLS, checking the certificate",
+     "out": "error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca"
+    },
+    {
+     "cmd": "# pg_hba.conf: host all all all  ->  hostssl all all all\n-- connect without TLS again",
+     "out": "error: no pg_hba.conf entry for host \"172.17.0.1\", user \"postgres\", database \"postgres\", no encryption"
+    }
+   ]
+  },
+  "login-errors": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SHOW password_encryption;\nSELECT left(rolpassword, 30) FROM pg_authid WHERE rolname = 'postgres';",
+     "out": "scram-sha-256\nSCRAM-SHA-256$4096:kTihwWtT1FH…"
+    },
+    {
+     "cmd": "-- three failed logins, and everything the server sent back",
+     "out": "wrong password: FATAL 28P01 \"password authentication failed for user \"postgres\"\" (auth.c:317, auth_failed)\nunknown user: FATAL 28P01 \"password authentication failed for user \"ghost\"\" (auth.c:317, auth_failed)\nunknown database: FATAL 3D000 \"database \"ghost\" does not exist\" (postinit.c:1014, InitPostgres)"
+    }
+   ]
+  },
+  "big-query": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- SELECT count(*) FROM t WHERE id = 1 OR id = 2 OR ...",
+     "out": "      100 ids        1 KB of SQL  ~     1 TCP segments  ok in 2 ms\n     1000 ids       12 KB of SQL  ~     9 TCP segments  ok in 3 ms\n    10000 ids      126 KB of SQL  ~    89 TCP segments  ok in 34 ms\n   100000 ids     1356 KB of SQL  ~   952 TCP segments  ok in 800 ms\n  1000000 ids    14540 KB of SQL  ~ 10198 TCP segments  ok in 54332 ms"
+    }
+   ]
+  },
+  "least-privilege": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SET ROLE dbcreate;",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO todos (text) VALUES ('second');",
+     "out": "ERROR:  permission denied for sequence todos_id_seq"
+    },
+    {
+     "cmd": "RESET ROLE;",
+     "out": ""
+    },
+    {
+     "cmd": "GRANT USAGE ON SEQUENCE todos_id_seq TO dbcreate;",
+     "out": ""
+    },
+    {
+     "cmd": "SET ROLE dbcreate;",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO todos (text) VALUES ('second') RETURNING id;",
+     "out": "ERROR:  permission denied for table todos"
+    },
+    {
+     "cmd": "INSERT INTO todos (text) VALUES ('third');",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT * FROM todos;",
+     "out": "ERROR:  permission denied for table todos"
+    },
+    {
+     "cmd": "RESET ROLE;",
+     "out": ""
+    },
+    {
+     "cmd": "SET ROLE dbdelete;",
+     "out": ""
+    },
+    {
+     "cmd": "DELETE FROM todos WHERE id = 1;",
+     "out": "ERROR:  permission denied for table todos"
+    },
+    {
+     "cmd": "RESET ROLE;",
+     "out": ""
+    },
+    {
+     "cmd": "GRANT SELECT ON todos TO dbdelete;",
+     "out": ""
+    },
+    {
+     "cmd": "SET ROLE dbdelete;",
+     "out": ""
+    },
+    {
+     "cmd": "DELETE FROM todos WHERE id = 1;",
+     "out": ""
+    },
+    {
+     "cmd": "RESET ROLE;",
+     "out": ""
+    },
+    {
+     "cmd": "SET ROLE dbread;",
+     "out": ""
+    },
+    {
+     "cmd": "DELETE FROM todos;",
+     "out": "ERROR:  permission denied for table todos"
+    },
+    {
+     "cmd": "CREATE TABLE IF NOT EXISTS app_table (id int);",
+     "out": "ERROR:  permission denied for schema public\nLINE 1: CREATE TABLE IF NOT EXISTS app_table (id int);\n                                   ^"
+    }
+   ]
+  },
+  "injection": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- the app builds: SELECT * FROM todos WHERE id = ' + input + '\nSELECT * FROM todos WHERE id = 1 OR 1 = 1;",
+     "out": " id | text \n----+------\n  1 | a\n  2 | b\n(2 rows)"
+    },
+    {
+     "cmd": "SELECT id, text FROM todos WHERE id = 0 UNION SELECT id, password FROM users;",
+     "out": " id |  text   \n----+---------\n  1 | hunter2\n(1 row)"
+    },
+    {
+     "cmd": "SET ROLE dbread;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT id, text FROM todos WHERE id = 0 UNION SELECT id, password FROM users;",
+     "out": "ERROR:  permission denied for table users"
+    },
+    {
+     "cmd": "DROP TABLE todos;",
+     "out": "ERROR:  must be owner of table todos"
+    }
+   ]
+  },
+  "mongo-wire": {
+   "engine": "MongoDB 8.0.34",
+   "blocks": [
+    {
+     "cmd": "-- a hand-built OP_MSG for { hello: 1, $db: \"admin\" }, 52 bytes",
+     "out": "34 00 00 00 01 00 00 00 00 00 00 00 dd 07 00 00 00 00 00 00 00 1f 00 00 00 10 68 65 6c 6c 6f 00  …"
+    },
+    {
+     "cmd": "-- the reply's header, then fields of its BSON document",
+     "out": "length 313, responseTo 1, opCode 2013 (OP_MSG)\nisWritablePrimary: true\nmaxBsonObjectSize: 16777216\nmaxMessageSizeBytes: 48000000\nminWireVersion: 0, maxWireVersion: 25\nreadOnly: false"
+    }
+   ]
+  }
+ },
+ "charts": {
+  "big-query": {
+   "engine": "PostgreSQL 18.6",
+   "title": "One huge OR, or one array parameter",
+   "alt": "Time to count rows matching a list of ids, for lists from 100 to a million ids. A query text built from OR clauses takes far longer to parse and plan as it grows. Passing the same ids as one array parameter stays much faster.",
+   "x": {
+    "label": "ids in the list",
+    "log": true
+   },
+   "y": {
+    "label": "time",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "id = 1 OR id = 2 …",
+     "points": [
+      [
+       100,
+       2.3
+      ],
+      [
+       1000,
+       2.7
+      ],
+      [
+       10000,
+       34
+      ],
+      [
+       100000,
+       800.1
+      ],
+      [
+       1000000,
+       54332.1
+      ]
+     ]
+    },
+    {
+     "name": "id = ANY($1)",
+     "points": [
+      [
+       100,
+       1.9
+      ],
+      [
+       1000,
+       1.9
+      ],
+      [
+       10000,
+       6.6
+      ],
+      [
+       100000,
+       65.9
+      ],
+      [
+       1000000,
+       935.2
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {
+  "wire": {
+   "engine": "PostgreSQL 18.6",
+   "plain": {
+    "messages": [
+     {
+      "dir": "C",
+      "name": "StartupMessage",
+      "len": 62,
+      "detail": "user postgres database postgres client_encoding UTF8"
+     },
+     {
+      "dir": "S",
+      "name": "AuthenticationSASL",
+      "len": 24,
+      "detail": "SCRAM-SHA-256"
+     },
+     {
+      "dir": "C",
+      "name": "PasswordMessage / SASL response",
+      "len": 56,
+      "detail": "SCRAM-SHA-256 !n,,n=*,r=XxzSam2NI0BaOhMBxQ6PNSoK"
+     },
+     {
+      "dir": "S",
+      "name": "AuthenticationSASLContinue",
+      "len": 93,
+      "detail": "r=XxzSam2NI0BaOhMBxQ6PNSoK6pmmkBZjELK+XnSfvvkbLKLm,s=kTihwWtT1FHOA1lC0vmFYw==,i=4096"
+     },
+     {
+      "dir": "C",
+      "name": "PasswordMessage / SASL response",
+      "len": 109,
+      "detail": "c=biws,r=XxzSam2NI0BaOhMBxQ6PNSoK6pmmkBZjELK+XnSfvvkbLKLm,p=h50pDYG8YFovx3+BSooATI2JHVaxPM53LEFJaZNPU+Q="
+     },
+     {
+      "dir": "S",
+      "name": "AuthenticationSASLFinal",
+      "len": 55,
+      "detail": "v=MxyIkJg+zVtcO4zG+kjES1D+oF/98JqfuOb3nFCMN90="
+     },
+     {
+      "dir": "S",
+      "name": "AuthenticationOk",
+      "len": 9,
+      "detail": ""
+     },
+     {
+      "dir": "S",
+      "name": "ParameterStatus",
+      "len": 441,
+      "detail": "15 settings, such as server_version and TimeZone",
+      "count": 15
+     },
+     {
+      "dir": "S",
+      "name": "BackendKeyData",
+      "len": 13,
+      "detail": "9 X"
+     },
+     {
+      "dir": "S",
+      "name": "ReadyForQuery",
+      "len": 6,
+      "detail": "I"
+     },
+     {
+      "dir": "C",
+      "name": "Query",
+      "len": 38,
+      "detail": "SELECT 'my secret value' AS note"
+     },
+     {
+      "dir": "S",
+      "name": "RowDescription",
+      "len": 30,
+      "detail": "note"
+     },
+     {
+      "dir": "S",
+      "name": "DataRow",
+      "len": 26,
+      "detail": "my secret value"
+     },
+     {
+      "dir": "S",
+      "name": "CommandComplete",
+      "len": 14,
+      "detail": "SELECT 1"
+     },
+     {
+      "dir": "S",
+      "name": "ReadyForQuery",
+      "len": 6,
+      "detail": "I"
+     },
+     {
+      "dir": "C",
+      "name": "Terminate",
+      "len": 5,
+      "detail": ""
+     }
+    ],
+    "secretVisible": true
+   },
+   "tls": {
+    "messages": [
+     {
+      "dir": "C",
+      "name": "SSLRequest",
+      "len": 8,
+      "detail": "May we speak TLS?"
+     },
+     {
+      "dir": "S",
+      "name": "SSL accepted",
+      "len": 1,
+      "detail": "'S'"
+     },
+     {
+      "dir": "C",
+      "name": "TLS Handshake",
+      "len": 1568,
+      "detail": "16 03 01 06 1b 01 00 06 17 03 03 df …"
+     },
+     {
+      "dir": "S",
+      "name": "TLS Handshake",
+      "len": 2105,
+      "detail": "16 03 03 00 7a 02 00 00 76 03 03 6c …"
+     },
+     {
+      "dir": "C",
+      "name": "TLS ChangeCipherSpec",
+      "len": 164,
+      "detail": "14 03 03 00 01 01 17 03 03 00 45 2f …"
+     },
+     {
+      "dir": "S",
+      "name": "TLS ApplicationData",
+      "len": 65,
+      "detail": "17 03 03 00 3c 01 22 57 57 a0 33 4f …"
+     },
+     {
+      "dir": "C",
+      "name": "TLS ApplicationData",
+      "len": 78,
+      "detail": "17 03 03 00 49 1b 6a c4 4b 4b ab ce …"
+     },
+     {
+      "dir": "S",
+      "name": "TLS ApplicationData",
+      "len": 115,
+      "detail": "17 03 03 00 6e 65 79 61 3c 3e 2b 27 …"
+     },
+     {
+      "dir": "C",
+      "name": "TLS ApplicationData",
+      "len": 131,
+      "detail": "17 03 03 00 7e 4b cd 08 23 7b d8 cf …"
+     },
+     {
+      "dir": "S",
+      "name": "TLS ApplicationData",
+      "len": 546,
+      "detail": "17 03 03 02 1d e6 e3 6b bf d3 0e 59 …"
+     },
+     {
+      "dir": "C",
+      "name": "TLS ApplicationData",
+      "len": 60,
+      "detail": "17 03 03 00 37 c5 5a dd 23 45 46 d6 …"
+     },
+     {
+      "dir": "S",
+      "name": "TLS ApplicationData",
+      "len": 98,
+      "detail": "17 03 03 00 5d 04 cc 40 dc 8a 5b 35 …"
+     },
+     {
+      "dir": "C",
+      "name": "TLS ApplicationData",
+      "len": 51,
+      "detail": "17 03 03 00 16 85 3b 5c 40 de 7a fc …"
+     }
+    ],
+    "secretVisible": false
+   }
+  }
+ },
+ "playgrounds": {
+  "roles": {
+   "title": "Least privilege, tested",
+   "hint": "A role that can only insert. Each preset is a surprise from the course: read the error, then grant the missing right.",
+   "setup": "CREATE TABLE todos (id serial PRIMARY KEY, text text);\nINSERT INTO todos (text) VALUES ('first');\nDO $$ BEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dbcreate2') THEN CREATE ROLE dbcreate2; END IF;\n  EXECUTE format('GRANT USAGE ON SCHEMA %I TO dbcreate2', current_schema());\nEND $$;\nGRANT INSERT ON todos TO dbcreate2;",
+   "query": "SET ROLE dbcreate2;\nINSERT INTO todos (text) VALUES ('second');",
+   "presets": [
+    {
+     "label": "Grant the sequence",
+     "sql": "RESET ROLE;\nGRANT USAGE ON SEQUENCE todos_id_seq TO dbcreate2;\nSET ROLE dbcreate2;\nINSERT INTO todos (text) VALUES ('second');"
+    },
+    {
+     "label": "Try RETURNING",
+     "sql": "SET ROLE dbcreate2;\nINSERT INTO todos (text) VALUES ('third') RETURNING id;"
+    },
+    {
+     "label": "Can it read?",
+     "sql": "SET ROLE dbcreate2;\nSELECT * FROM todos;"
+    },
+    {
+     "label": "Who can do what",
+     "sql": "RESET ROLE;\nSELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name = 'todos' AND grantee <> 'postgres';"
+    }
+   ]
+  }
+ }
+}

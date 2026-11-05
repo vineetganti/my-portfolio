@@ -398,6 +398,38 @@ In a spec, a trace step's query can return a `_mark` column (`keep`, `new`, `dro
 
 ---
 
+### Database lab components
+
+The Database Engineering posts (`db-*`) use the components in `src/components/db/`. Anything that shows a result reads it from `content/db-lab/<file>.json`, so a post only names it: `src="acid/transfer"` is the item `transfer` in `acid.json`. Only strings can be passed here, and `labItem` in `src/lib/dbLab.ts` fails the build if the item is missing.
+
+| Component | Shows | Stored under |
+| --- | --- | --- |
+| `<Ran src="acid/crash" title="a real kill -9" />` | A command and its real output, with the engine and version that ran it | `runs` |
+| `<TxnTheater src="acid/atomicity" />` | Two or more sessions side by side, step by step, including real blocking | `theaters` |
+| `<LabChart src="indexing/plan-cost" />` | A chart of measured results | `charts` |
+| `<PgPlayground src="acid/transfer" />` | Editable SQL on real PostgreSQL (PGlite) in the reader's browser | `playgrounds` |
+| `<PageExplorer src="disk/page-steps" />`, `<PlanMatrix src="indexing/matrix" />`, `<WireTrace src="security/wire" />`, `<HotView src="internals/hot-steps" />` | One-off views of real pages, plans, packets and HOT chains | `data` |
+
+These take no props, because they are simulators with their logic in the component: `<RowColumnLab />`, `<BPlusTreeLab />`, `<InsertOrderLab />`, `<BloomLab />`, `<PartitionPruner />`, `<HashRing />`, `<ReplicationLab />`, `<LsmLab />`, `<WalLab />`, `<HomomorphicLab />` and `<SlabLab />`.
+
+Don't edit `content/db-lab/` by hand. The harness in `scripts/db-lab/` writes it: it starts PostgreSQL, MySQL, MongoDB, Redis and Memcached in Docker and records what they really do. The specs are in `scripts/db-lab/specs/` and the diagrams in `scripts/db-lab/diagrams/`.
+
+```bash
+node scripts/db-lab/record.mjs                             # re-record everything (slow)
+node scripts/db-lab/record.mjs design                      # one spec
+ONLY='^collisions$' node scripts/db-lab/record.mjs design  # one item in a spec
+node scripts/db-lab/draw.mjs                               # redraw the SVGs and flow files
+node scripts/db-lab/series-callouts.mjs                    # refresh the series list in each post
+```
+
+- A re-record can change the numbers, and the prose quotes them. Re-check the text around an item after recording it.
+- `record.mjs` runs every live box on PGlite and stops if a statement fails. Set `mayFail: true` on a box that is meant to show an error.
+- `draw.mjs` stops if a `c.flow()` step names text that isn't in the diagram.
+- Live boxes on one page share a database, each in its own schema (`lab_<id>`). In a query, use `'t'::regclass` rather than `relname = 't'`, which can match another box's table.
+- `scripts/copy-pglite.mjs` runs before `dev` and `build` and copies PGlite into `public/pglite/` (git-ignored). The browser loads it from there when a reader presses Run, about 6 MB once per visit. It also gzips `pglite.data`, because hosts compress `.wasm` but not `.data`: without that the download is nearly 10 MB.
+
+---
+
 ### Recorded audio (m4a)
 
 Recordings are kept out of git and served from Vercel Blob. To attach one to a post:

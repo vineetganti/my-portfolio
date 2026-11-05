@@ -68,6 +68,12 @@ export const SERIES: Series[] = [
       "Building agents with Strands and Groq: tools, memory, multi-agent patterns and the protocols agents talk through.",
   },
   {
+    slug: "database-engineering",
+    title: "Database Engineering",
+    description:
+      "How databases really work, following Hussein Nasser's course: transactions, storage, indexes, B+Trees, scaling and engine internals, with live Postgres in every post.",
+  },
+  {
     slug: "de-sql",
     title: "Data Engineering SQL",
     description:

@@ -1,0 +1,694 @@
+{
+ "theaters": {
+  "long-transaction": {
+   "title": "One open transaction stops the cleanup",
+   "alt": "A recorded run on PostgreSQL. Session A opens a repeatable read transaction and reads. Session B updates every row and vacuums, but vacuum can't remove the old versions, because session A might still need them. After session A commits, vacuum removes them.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "dead row versions",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+       "note": "A long report starts.",
+       "status": "ok",
+       "tag": "BEGIN"
+      },
+      {
+       "s": "A",
+       "sql": "SELECT sum(v) FROM t",
+       "note": "Its snapshot is now fixed.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "sum"
+       ],
+       "rows": [
+        [
+         "0"
+        ]
+       ]
+      },
+      {
+       "s": "B",
+       "sql": "UPDATE t SET v = 1",
+       "note": "Another session updates every row. Each row now has an old version that A's snapshot can still see.",
+       "status": "ok",
+       "tag": "UPDATE 1000"
+      },
+      {
+       "s": "B",
+       "sql": "VACUUM (VERBOSE) t",
+       "note": "VACUUM can't remove them. The tag only says VACUUM, but the next step shows the result.",
+       "status": "ok",
+       "tag": "VACUUM"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT n_dead_tup FROM pg_stat_user_tables WHERE relname = 't'",
+       "note": "All 1,000 dead versions are still there.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "n_dead_tup"
+       ],
+       "rows": [
+        [
+         "1000"
+        ]
+       ]
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "The report ends.",
+       "status": "ok",
+       "tag": "COMMIT"
+      },
+      {
+       "s": "B",
+       "sql": "VACUUM t",
+       "note": "Now nothing needs the old versions.",
+       "status": "ok",
+       "tag": "VACUUM"
+      },
+      {
+       "s": "B",
+       "sql": "SELECT n_dead_tup FROM pg_stat_user_tables WHERE relname = 't'",
+       "note": "Gone.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "n_dead_tup"
+       ],
+       "rows": [
+        [
+         "0"
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": {
+  "processes": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT backend_type, count(*) FROM pg_stat_activity GROUP BY 1;",
+     "out": "autovacuum launcher            1\nbackground writer              1\ncheckpointer                   1\nclient backend                 2\nio worker                      3\nlogical replication launcher   1\nwalwriter                      1"
+    },
+    {
+     "cmd": "-- two client connections are two operating system processes",
+     "out": "backend pids: 5002, 5003\nshared_buffers = 256MB, io_method = worker"
+    },
+    {
+     "cmd": "-- MySQL, for comparison: one process, many threads",
+     "out": "processes in the container: 5, threads in mysqld: 42\nBACKGROUND\t36\nFOREGROUND\t3\nthread/innodb/buf_dump_thread\nthread/innodb/buf_resize_thread\nthread/innodb/clone_gtid_thread\nthread/innodb/dict_stats_thread\nthread/innodb/fts_optimize_thread\nthread/innodb/io_ibuf_thread\nthread/innodb/io_read_thread\nthread/innodb/io_read_thread"
+    }
+   ]
+  },
+  "two-phase": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "BEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 1;\nPREPARE TRANSACTION 'transfer-42';\nSELECT gid FROM pg_prepared_xacts;",
+     "out": "transfer-42"
+    },
+    {
+     "cmd": "SELECT balance FROM accounts WHERE id = 1;",
+     "out": "500   (not committed, so other sessions see the old value)"
+    },
+    {
+     "cmd": "-- another session tries to change the row",
+     "out": "canceling statement due to lock timeout"
+    },
+    {
+     "cmd": "$ docker kill -s KILL (the server dies while prepared)\n$ docker start\nSELECT count(*) FROM pg_prepared_xacts;",
+     "out": "1   (it survived the crash, and it's still holding its lock)"
+    },
+    {
+     "cmd": "COMMIT PREPARED 'transfer-42';\nSELECT balance FROM accounts WHERE id = 1;",
+     "out": "400"
+    }
+   ]
+  },
+  "select-star": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT id FROM students WHERE grade >= 90;",
+     "out": "4.6 ms, 38 KB delivered to the client\nIndex Only Scan using students_grade on students (actual rows=5000.00 loops=1)\n  Heap Fetches: 0\n  Buffers: shared hit=17"
+    },
+    {
+     "cmd": "SELECT * FROM students WHERE grade >= 90;",
+     "out": "296.5 ms, 46.9 MB delivered to the client\nBitmap Heap Scan on students (actual rows=5000.00 loops=1)\n  Buffers: shared hit=753\n  ->  Bitmap Index Scan on students_grade (actual rows=5000.00 loops=1)"
+    }
+   ]
+  },
+  "wal-records": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT pg_current_wal_insert_lsn() AS start_here \\gset\nBEGIN;",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO t VALUES (1, 'a');",
+     "out": ""
+    },
+    {
+     "cmd": "UPDATE t SET v = 'b' WHERE id = 1;",
+     "out": ""
+    },
+    {
+     "cmd": "COMMIT;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT resource_manager, record_type, record_length, fpi_length FROM pg_get_wal_records_info(:'start_here', pg_current_wal_insert_lsn());",
+     "out": " resource_manager | record_type | record_length | fpi_length \n------------------+-------------+---------------+------------\n Heap             | INSERT+INIT |            61 |          0\n Heap             | HOT_UPDATE  |            69 |          0\n Transaction      | COMMIT      |            34 |          0\n(3 rows)"
+    }
+   ]
+  },
+  "full-page-writes": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CHECKPOINT;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_current_wal_insert_lsn() AS a \\gset\nUPDATE t SET v = 1 WHERE id % 100 = 0;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_size_pretty(pg_current_wal_insert_lsn() - :'a') AS wal_just_after_a_checkpoint;",
+     "out": " wal_just_after_a_checkpoint \n-----------------------------\n 5758 kB\n(1 row)"
+    },
+    {
+     "cmd": "SELECT pg_current_wal_insert_lsn() AS b \\gset\nUPDATE t SET v = 2 WHERE id % 100 = 0;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_size_pretty(pg_current_wal_insert_lsn() - :'b') AS the_same_update_again;",
+     "out": " the_same_update_again \n-----------------------\n 231 kB\n(1 row)"
+    }
+   ]
+  },
+  "hot-counters": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "UPDATE t SET note = 'changed';",
+     "out": ""
+    },
+    {
+     "cmd": "UPDATE t SET v = v + 1;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_stat_force_next_flush();",
+     "out": " pg_stat_force_next_flush \n--------------------------\n \n(1 row)"
+    },
+    {
+     "cmd": "SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 't';",
+     "out": " n_tup_upd | n_tup_hot_upd \n-----------+---------------\n     20000 |          4368\n(1 row)"
+    }
+   ]
+  },
+  "innodb-undo": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "SELECT name, count FROM information_schema.innodb_metrics WHERE name = 'trx_rseg_history_len';",
+     "out": "+----------------------+-------+\n| name                 | count |\n+----------------------+-------+\n| trx_rseg_history_len |     1 |\n+----------------------+-------+\n1 row in set (0.01 sec)"
+    },
+    {
+     "cmd": "SHOW VARIABLES LIKE 'innodb_undo_tablespaces';",
+     "out": "+-------------------------+-------+\n| Variable_name           | Value |\n+-------------------------+-------+\n| innodb_undo_tablespaces | 2     |\n+-------------------------+-------+\n1 row in set (0.05 sec)"
+    },
+    {
+     "cmd": "SELECT space_type, name FROM information_schema.innodb_tablespaces WHERE row_format = 'Undo' OR name LIKE 'innodb_undo%';",
+     "out": "+------------+-----------------+\n| space_type | name            |\n+------------+-----------------+\n| Undo       | innodb_undo_001 |\n| Undo       | innodb_undo_002 |\n+------------+-----------------+\n2 rows in set (0.01 sec)"
+    }
+   ]
+  },
+  "nulls-size": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE TABLE n (a int, b int, c int, d int, e int, f int, g int, h int, i int);",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO n VALUES (1, 2, 3, 4, 5, 6, 7, 8, 9);",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO n VALUES (1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT lp, lp_len, t_hoff, t_bits FROM heap_page_items(get_raw_page('n', 0));",
+     "out": " lp | lp_len | t_hoff |      t_bits      \n----+--------+--------+------------------\n  1 |     60 |     24 | \n  2 |     36 |     32 | 1000000000000000\n(2 rows)"
+    }
+   ]
+  },
+  "nulls-logic": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT count(*) AS all_rows, count(parent) AS with_a_parent FROM t;",
+     "out": " all_rows | with_a_parent \n----------+---------------\n        3 |             2\n(1 row)"
+    },
+    {
+     "cmd": "SELECT id FROM t WHERE parent = NULL;",
+     "out": " id \n----\n(0 rows)"
+    },
+    {
+     "cmd": "SELECT id FROM t WHERE parent IS NULL;",
+     "out": " id \n----\n  1\n(1 row)"
+    },
+    {
+     "cmd": "SELECT id FROM t WHERE id NOT IN (SELECT parent FROM t);",
+     "out": " id \n----\n(0 rows)"
+    },
+    {
+     "cmd": "SELECT id FROM t WHERE id NOT IN (SELECT parent FROM t WHERE parent IS NOT NULL);",
+     "out": " id \n----\n  2\n  3\n(2 rows)"
+    },
+    {
+     "cmd": "SELECT NULL = NULL AS equal, NULL IS NOT DISTINCT FROM NULL AS same;",
+     "out": " equal | same \n-------+------\n       | t\n(1 row)"
+    }
+   ]
+  },
+  "nulls-index": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (COSTS OFF) SELECT id FROM t WHERE v IS NULL LIMIT 1;",
+     "out": "         QUERY PLAN          \n-----------------------------\n Limit\n   ->  Seq Scan on t\n         Filter: (v IS NULL)\n(3 rows)"
+    },
+    {
+     "cmd": "SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) FROM pg_stat_user_indexes WHERE relname = 't';",
+     "out": " indexrelname | pg_size_pretty \n--------------+----------------\n t_v          | 6944 kB\n t_v_partial  | 240 kB\n(2 rows)"
+    }
+   ]
+  },
+  "bloat": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT pg_size_pretty(pg_relation_size('t')) AS before;",
+     "out": " before  \n---------\n 3544 kB\n(1 row)"
+    },
+    {
+     "cmd": "UPDATE t SET v = v + 1;",
+     "out": ""
+    },
+    {
+     "cmd": "UPDATE t SET v = v + 1;",
+     "out": ""
+    },
+    {
+     "cmd": "UPDATE t SET v = v + 1;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_size_pretty(pg_relation_size('t')) AS after_three_updates;",
+     "out": " after_three_updates \n---------------------\n 14 MB\n(1 row)"
+    },
+    {
+     "cmd": "SELECT pg_stat_force_next_flush();",
+     "out": " pg_stat_force_next_flush \n--------------------------\n \n(1 row)"
+    },
+    {
+     "cmd": "SELECT n_live_tup, n_dead_tup FROM pg_stat_user_tables WHERE relname = 't';",
+     "out": " n_live_tup | n_dead_tup \n------------+------------\n     100000 |     299935\n(1 row)"
+    },
+    {
+     "cmd": "VACUUM t;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_size_pretty(pg_relation_size('t')) AS after_vacuum;",
+     "out": " after_vacuum \n--------------\n 14 MB\n(1 row)"
+    },
+    {
+     "cmd": "VACUUM FULL t;",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT pg_size_pretty(pg_relation_size('t')) AS after_vacuum_full;",
+     "out": " after_vacuum_full \n-------------------\n 3544 kB\n(1 row)"
+    }
+   ]
+  }
+ },
+ "charts": {
+  "write-amp": {
+   "engine": "PostgreSQL 18.6",
+   "title": "WAL written to update 50,000 rows",
+   "alt": "Megabytes of write-ahead log written to update 50,000 rows, as a table gains secondary indexes from none to five. Updating a column with no index stays flat, because of heap-only tuples. Updating an indexed column grows with every index on the table, even indexes on other columns.",
+   "x": {
+    "label": "secondary indexes on the table"
+   },
+   "y": {
+    "label": "WAL written",
+    "unit": "MB"
+   },
+   "series": [
+    {
+     "name": "unindexed column (HOT)",
+     "points": [
+      [
+       0,
+       15
+      ],
+      [
+       1,
+       15
+      ],
+      [
+       2,
+       15
+      ],
+      [
+       3,
+       15
+      ],
+      [
+       4,
+       15
+      ],
+      [
+       5,
+       15
+      ]
+     ]
+    },
+    {
+     "name": "indexed column",
+     "points": [
+      [
+       0,
+       15
+      ],
+      [
+       1,
+       33
+      ],
+      [
+       2,
+       38
+      ],
+      [
+       3,
+       45
+      ],
+      [
+       4,
+       52
+      ],
+      [
+       5,
+       59
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {
+  "hot-steps": {
+   "engine": "PostgreSQL 18.6",
+   "steps": [
+    {
+     "label": "A new row",
+     "caption": "One row version, and one index entry pointing at line pointer 1.",
+     "heap": [
+      [
+       1,
+       8160,
+       1,
+       "2120",
+       "0",
+       "(0,1)",
+       false,
+       false
+      ]
+     ],
+     "index": [
+      [
+       1,
+       "(0,1)"
+      ]
+     ]
+    },
+    {
+     "label": "HOT update",
+     "caption": "note isn't indexed and the page has room, so the new version is heap-only. The index still has one entry, pointing at line pointer 1, and the old version links to the new one.",
+     "heap": [
+      [
+       1,
+       8160,
+       1,
+       "2120",
+       "2121",
+       "(0,2)",
+       true,
+       false
+      ],
+      [
+       2,
+       8128,
+       1,
+       "2121",
+       "0",
+       "(0,2)",
+       false,
+       true
+      ]
+     ],
+     "index": [
+      [
+       1,
+       "(0,1)"
+      ]
+     ]
+    },
+    {
+     "label": "HOT again",
+     "caption": "The chain grows, and the index still isn't touched.",
+     "heap": [
+      [
+       1,
+       8160,
+       1,
+       "2120",
+       "2121",
+       "(0,2)",
+       true,
+       false
+      ],
+      [
+       2,
+       8128,
+       1,
+       "2121",
+       "2122",
+       "(0,3)",
+       true,
+       true
+      ],
+      [
+       3,
+       8096,
+       1,
+       "2122",
+       "0",
+       "(0,3)",
+       false,
+       true
+      ]
+     ],
+     "index": [
+      [
+       1,
+       "(0,1)"
+      ]
+     ]
+    },
+    {
+     "label": "Update an indexed column",
+     "caption": "With an index on v, changing v can't be HOT. The new version gets its own line pointer, and every index gets a new entry, including the primary key, though id never changed.",
+     "heap": [
+      [
+       1,
+       8160,
+       1,
+       "2120",
+       "2121",
+       "(0,2)",
+       true,
+       false
+      ],
+      [
+       2,
+       8128,
+       1,
+       "2121",
+       "2122",
+       "(0,3)",
+       true,
+       true
+      ],
+      [
+       3,
+       8096,
+       1,
+       "2122",
+       "2124",
+       "(0,4)",
+       false,
+       true
+      ],
+      [
+       4,
+       8064,
+       1,
+       "2124",
+       "0",
+       "(0,4)",
+       false,
+       false
+      ]
+     ],
+     "index": [
+      [
+       1,
+       "(0,1)"
+      ],
+      [
+       2,
+       "(0,4)"
+      ]
+     ]
+    },
+    {
+     "label": "VACUUM",
+     "caption": "Dead versions are removed and the stale index entry goes with them.",
+     "heap": [
+      [
+       1,
+       0,
+       0,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      [
+       2,
+       0,
+       0,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      [
+       3,
+       0,
+       0,
+       null,
+       null,
+       null,
+       null,
+       null
+      ],
+      [
+       4,
+       8160,
+       1,
+       "2124",
+       "0",
+       "(0,4)",
+       false,
+       false
+      ]
+     ],
+     "index": [
+      [
+       1,
+       "(0,4)"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "playgrounds": {
+  "hot": {
+   "title": "HOT or not?",
+   "hint": "n_tup_hot_upd counts updates that touched no index. Update the unindexed column, then the indexed one, and compare.",
+   "setup": "CREATE TABLE t (id int PRIMARY KEY, v int, note text) WITH (fillfactor = 70);\nCREATE INDEX t_v ON t (v);\nINSERT INTO t SELECT g, g, 'n' FROM generate_series(1, 5000) g;\nVACUUM ANALYZE t;",
+   "query": "UPDATE t SET note = 'changed';\nDO $$ BEGIN PERFORM pg_stat_force_next_flush(); END $$;\nSELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relid = 't'::regclass;",
+   "presets": [
+    {
+     "label": "Update the indexed column",
+     "sql": "UPDATE t SET v = v + 1;\nDO $$ BEGIN PERFORM pg_stat_force_next_flush(); END $$;\nSELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relid = 't'::regclass;"
+    },
+    {
+     "label": "See a HOT chain",
+     "sql": "CREATE TABLE IF NOT EXISTS small (id int PRIMARY KEY, note text) WITH (autovacuum_enabled = off);\nTRUNCATE small;\nINSERT INTO small VALUES (1, 'a');\nUPDATE small SET note = 'b' WHERE id = 1;\nUPDATE small SET note = 'c' WHERE id = 1;\nSELECT lp, t_ctid, t_xmax, (t_infomask2 & 16384) > 0 AS hot_updated, (t_infomask2 & 32768) > 0 AS heap_only\nFROM heap_page_items(get_raw_page('small', 0));"
+    }
+   ]
+  },
+  "nulls": {
+   "title": "NULL isn't a value",
+   "hint": "Each preset is a real trap. Try to predict the result first.",
+   "setup": "CREATE TABLE t (id int, parent int);\nINSERT INTO t VALUES (1, NULL), (2, 1), (3, 1);",
+   "query": "SELECT count(*), count(parent) FROM t;",
+   "presets": [
+    {
+     "label": "= NULL",
+     "sql": "SELECT id FROM t WHERE parent = NULL;"
+    },
+    {
+     "label": "NOT IN with a NULL",
+     "sql": "SELECT id FROM t WHERE id NOT IN (SELECT parent FROM t);"
+    },
+    {
+     "label": "NOT EXISTS instead",
+     "sql": "SELECT id FROM t a WHERE NOT EXISTS (SELECT 1 FROM t b WHERE b.parent = a.id);"
+    }
+   ]
+  },
+  "wal": {
+   "title": "Read the log",
+   "hint": "pg_walinspect reads the WAL. Run a change, then read the records it wrote, including the commit record.",
+   "setup": "CREATE TABLE t (id int, v text);\nCREATE TEMP TABLE mark (lsn pg_lsn);",
+   "query": "TRUNCATE mark;\nINSERT INTO mark SELECT pg_current_wal_insert_lsn();\nINSERT INTO t VALUES (1, 'a');\nSELECT resource_manager, record_type, record_length\nFROM pg_get_wal_records_info((SELECT lsn FROM mark), pg_current_wal_insert_lsn());",
+   "presets": [
+    {
+     "label": "An update",
+     "sql": "TRUNCATE mark;\nINSERT INTO mark SELECT pg_current_wal_insert_lsn();\nUPDATE t SET v = v || 'b';\nSELECT resource_manager, record_type, record_length\nFROM pg_get_wal_records_info((SELECT lsn FROM mark), pg_current_wal_insert_lsn());"
+    }
+   ]
+  }
+ }
+}

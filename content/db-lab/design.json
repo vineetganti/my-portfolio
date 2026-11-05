@@ -1,0 +1,343 @@
+{
+ "theaters": {},
+ "runs": {
+  "follow-queries": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT count(*) AS followers FROM follows WHERE followee = 1;",
+     "out": " followers \n-----------\n   1000000\n(1 row)\n\nTime: 47.074 ms"
+    },
+    {
+     "cmd": "SELECT count(*) AS following FROM follows WHERE follower = 2;",
+     "out": " following \n-----------\n        21\n(1 row)\n\nTime: 0.521 ms"
+    },
+    {
+     "cmd": "SELECT EXISTS (SELECT 1 FROM follows WHERE follower = 2 AND followee = 1) AS am_i_following;",
+     "out": " am_i_following \n----------------\n t\n(1 row)\n\nTime: 0.187 ms"
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT count(*) FROM follows WHERE followee = 1;",
+     "out": "                                   QUERY PLAN                                   \n--------------------------------------------------------------------------------\n Finalize Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=7866 read=8351\n   ->  Gather (actual rows=3.00 loops=1)\n         Workers Planned: 2\n         Workers Launched: 2\n         Buffers: shared hit=7866 read=8351\n         ->  Partial Aggregate (actual rows=1.00 loops=3)\n               Buffers: shared hit=7866 read=8351\n               ->  Parallel Seq Scan on follows (actual rows=333333.33 loops=3)\n                     Filter: (followee = 1)\n                     Rows Removed by Filter: 666667\n                     Buffers: shared hit=7866 read=8351\n(12 rows)\n\nTime: 49.009 ms"
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT EXISTS (SELECT 1 FROM follows WHERE follower = 2 AND followee = 1);",
+     "out": "                                    QUERY PLAN                                    \n----------------------------------------------------------------------------------\n Result (actual rows=1.00 loops=1)\n   Buffers: shared hit=4\n   InitPlan 1\n     ->  Index Only Scan using follows_pkey on follows (actual rows=1.00 loops=1)\n           Index Cond: ((follower = 2) AND (followee = 1))\n           Heap Fetches: 0\n           Index Searches: 1\n           Buffers: shared hit=4\n(8 rows)\n\nTime: 0.414 ms"
+    }
+   ]
+  },
+  "url-v1": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE TABLE urls (id bigserial PRIMARY KEY, long_url text NOT NULL);",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO urls (long_url) VALUES ('https://example.com/a'), ('https://example.com/b') RETURNING id;",
+     "out": " id \n----\n  1\n  2\n(2 rows)"
+    },
+    {
+     "cmd": "SELECT long_url FROM urls WHERE id = 2;",
+     "out": "       long_url        \n-----------------------\n https://example.com/b\n(1 row)"
+    }
+   ]
+  },
+  "url-v2": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE TABLE urls (short_url char(8) PRIMARY KEY, long_url text NOT NULL);",
+     "out": ""
+    },
+    {
+     "cmd": "INSERT INTO urls VALUES (left(encode(sha256('https://example.com/a'::bytea), 'base64'), 8), 'https://example.com/a') RETURNING short_url;",
+     "out": " short_url \n-----------\n Lc4KTFBE\n(1 row)"
+    },
+    {
+     "cmd": "INSERT INTO urls VALUES (left(encode(sha256('https://example.com/a'::bytea), 'base64'), 8), 'https://example.com/a');",
+     "out": "ERROR:  duplicate key value violates unique constraint \"urls_pkey\"\nDETAIL:  Key (short_url)=(Lc4KTFBE) already exists."
+    },
+    {
+     "cmd": "INSERT INTO urls VALUES (left(encode(sha256('https://example.com/a'::bytea), 'base64'), 8), 'https://example.com/a') ON CONFLICT (short_url) DO NOTHING;",
+     "out": ""
+    }
+   ]
+  }
+ },
+ "charts": {
+  "collisions": {
+   "engine": "1,000,000 real SHA-256 hashes",
+   "title": "Clashes as short codes fill up",
+   "alt": "The number of colliding short codes as a million URLs are hashed and cut to 4, 5, 6 or 8 characters. By a million URLs, four characters had about 29,000 clashes, five had 436, six had 8, and eight had none, which is drawn at the bottom of the scale.",
+   "x": {
+    "label": "URLs shortened",
+    "log": true
+   },
+   "y": {
+    "label": "collisions so far",
+    "log": true,
+    "zeroAt": 0.5
+   },
+   "series": [
+    {
+     "name": "4 characters",
+     "points": [
+      [
+       1000,
+       0.5
+      ],
+      [
+       10000,
+       3
+      ],
+      [
+       50000,
+       76
+      ],
+      [
+       100000,
+       297
+      ],
+      [
+       250000,
+       1822
+      ],
+      [
+       500000,
+       7431
+      ],
+      [
+       1000000,
+       29032
+      ]
+     ]
+    },
+    {
+     "name": "5 characters",
+     "points": [
+      [
+       1000,
+       0.5
+      ],
+      [
+       10000,
+       0.5
+      ],
+      [
+       50000,
+       0.5
+      ],
+      [
+       100000,
+       4
+      ],
+      [
+       250000,
+       28
+      ],
+      [
+       500000,
+       103
+      ],
+      [
+       1000000,
+       436
+      ]
+     ]
+    },
+    {
+     "name": "6 characters",
+     "points": [
+      [
+       1000,
+       0.5
+      ],
+      [
+       10000,
+       0.5
+      ],
+      [
+       50000,
+       0.5
+      ],
+      [
+       100000,
+       0.5
+      ],
+      [
+       250000,
+       1
+      ],
+      [
+       500000,
+       2
+      ],
+      [
+       1000000,
+       8
+      ]
+     ]
+    },
+    {
+     "name": "8 characters",
+     "points": [
+      [
+       1000,
+       0.5
+      ],
+      [
+       10000,
+       0.5
+      ],
+      [
+       50000,
+       0.5
+      ],
+      [
+       100000,
+       0.5
+      ],
+      [
+       250000,
+       0.5
+      ],
+      [
+       500000,
+       0.5
+      ],
+      [
+       1000000,
+       0.5
+      ]
+     ]
+    }
+   ]
+  },
+  "timeline-pull": {
+   "engine": "PostgreSQL 18.6",
+   "title": "Reading a timeline by asking everyone you follow",
+   "alt": "Time to build a home timeline at read time, from a table of two million tweets, as the number of accounts followed grows from 10 to 5,000. The time grows with the number of accounts.",
+   "x": {
+    "label": "accounts followed",
+    "log": true
+   },
+   "y": {
+    "label": "time per timeline read",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "pull at read time",
+     "points": [
+      [
+       10,
+       1.26
+      ],
+      [
+       100,
+       1.82
+      ],
+      [
+       500,
+       6.62
+      ],
+      [
+       1000,
+       10.89
+      ],
+      [
+       5000,
+       52.83
+      ]
+     ]
+    }
+   ]
+  },
+  "timeline-push": {
+   "engine": "PostgreSQL 18.6",
+   "title": "Writing one tweet into every follower's timeline",
+   "alt": "Time to copy one tweet into every follower's timeline, as the follower count grows from 10 to a million. It grows in step with the followers, reaching seconds for a celebrity.",
+   "x": {
+    "label": "followers",
+    "log": true
+   },
+   "y": {
+    "label": "time per tweet",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "push at write time",
+     "points": [
+      [
+       10,
+       2.12
+      ],
+      [
+       100,
+       2.31
+      ],
+      [
+       1000,
+       3
+      ],
+      [
+       10000,
+       15.52
+      ],
+      [
+       100000,
+       133.86
+      ],
+      [
+       1000000,
+       1166.59
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {},
+ "playgrounds": {
+  "follows": {
+   "title": "The follows table",
+   "hint": "One row per follow, with an index for each direction. Try the Follow button's query, and see what a counter would save.",
+   "setup": "CREATE TABLE follows (follower bigint NOT NULL, followee bigint NOT NULL, PRIMARY KEY (follower, followee));\nCREATE INDEX follows_followee ON follows (followee, follower);\nINSERT INTO follows SELECT g, 1 FROM generate_series(2, 100001) g;\nVACUUM ANALYZE follows;",
+   "query": "SELECT count(*) AS followers FROM follows WHERE followee = 1;",
+   "presets": [
+    {
+     "label": "Am I following?",
+     "sql": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT EXISTS (SELECT 1 FROM follows WHERE follower = 500 AND followee = 1);"
+    },
+    {
+     "label": "Who follows me? Page 1",
+     "sql": "SELECT follower FROM follows WHERE followee = 1 ORDER BY follower LIMIT 5;"
+    },
+    {
+     "label": "Follow twice",
+     "sql": "INSERT INTO follows VALUES (500, 1) ON CONFLICT DO NOTHING;\nSELECT count(*) FROM follows WHERE follower = 500;"
+    }
+   ]
+  },
+  "shortener": {
+   "title": "Two short URL designs",
+   "hint": "Generated ids are easy and guessable. Hash codes are unguessable and can collide. Try both.",
+   "setup": "CREATE TABLE urls (id bigserial PRIMARY KEY, long_url text NOT NULL);\nCREATE TABLE codes (code char(8) PRIMARY KEY, long_url text NOT NULL);",
+   "query": "INSERT INTO urls (long_url) VALUES ('https://example.com/my-page') RETURNING id;",
+   "presets": [
+    {
+     "label": "Hash it",
+     "sql": "INSERT INTO codes VALUES (left(encode(sha256('https://example.com/my-page'::bytea), 'base64'), 8), 'https://example.com/my-page')\nON CONFLICT (code) DO NOTHING RETURNING code;"
+    },
+    {
+     "label": "Look it up",
+     "sql": "SELECT * FROM codes;"
+    }
+   ]
+  }
+ }
+}

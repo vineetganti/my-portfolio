@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "from": "client",
+      "to": "server",
+      "label": "COMMIT",
+      "type": "request"
+    },
+    {
+      "from": "server",
+      "to": "OS page cache",
+      "label": "write",
+      "type": "data"
+    },
+    {
+      "from": "OS page cache",
+      "to": "WAL on disk",
+      "label": "fsync",
+      "type": "data"
+    }
+  ]
+}

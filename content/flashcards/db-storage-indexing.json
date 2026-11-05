@@ -1,0 +1,652 @@
+[
+  {
+    "id": "si-01",
+    "post": "db-how-data-sits-on-disk",
+    "q": "Why does a database fetch a whole page when an index has already located the row?",
+    "options": [
+      "Disks serve whole blocks rather than single bytes, and the row's position within the page is stored in the page itself",
+      "Reading a whole page lets the database skip the checksum, which would otherwise be computed for every row",
+      "Rows are compressed as a group, so one row can't be decoded without its neighbours on the page",
+      "The operating system refuses reads smaller than 8 KB, which is why Postgres chose that page size"
+    ],
+    "answer": 0,
+    "why": "Block devices aren't byte addressable, and row sizes vary, so only the page can be computed. Neighbouring rows arrive for free, which helps range reads."
+  },
+  {
+    "id": "si-02",
+    "post": "db-how-data-sits-on-disk",
+    "q": "To read pages 2 through 9 of a table with 8 KB pages, what does the database ask the OS for?",
+    "options": [
+      "Offset 16,384 and length 65,536 in the table's file",
+      "Offset 16,484 and length 65,536 in the table's file",
+      "Offset 8,192 and length 57,344 in the table's file",
+      "Eight separate reads, because pages can't be requested together"
+    ],
+    "answer": 0,
+    "why": "Offset is page number times page size: 2 × 8192 = 16,384. Eight pages are 65,536 bytes. No lookup is needed because every page is the same size."
+  },
+  {
+    "id": "si-03",
+    "post": "db-how-data-sits-on-disk",
+    "q": "What does the ctid (2,5) mean in Postgres?",
+    "options": [
+      "Page 2, line pointer 5, which holds the row's offset and length within that page",
+      "Byte offset 2,005 in the table's file, counted from the first row",
+      "Transaction 2 created this row, and it's the fifth version of it",
+      "Partition 2, row 5 of that partition's sorted order"
+    ],
+    "answer": 0,
+    "why": "A ctid is (page, line pointer). The pointer gives the indirection that lets a row move inside its page without changing its address."
+  },
+  {
+    "id": "si-04",
+    "post": "db-how-data-sits-on-disk",
+    "q": "You run UPDATE on one row, then read the page with pageinspect. What do you find?",
+    "options": [
+      "A new row version with its own line pointer, and the old version still there with xmax set",
+      "The same line pointer with the new value overwritten in place, and a note in the WAL",
+      "The old row removed and its space reused by the new version straight away",
+      "The new version on the next page, because updates always move rows to a fresh page"
+    ],
+    "answer": 0,
+    "why": "Postgres never overwrites a row. The old version stays for older snapshots, and only VACUUM reclaims it."
+  },
+  {
+    "id": "si-05",
+    "post": "db-how-data-sits-on-disk",
+    "q": "A heap page has special = 8192 and a B-tree page has special = 8176. What does that tell you?",
+    "options": [
+      "Heap pages have no special space, while the index page reserves 16 bytes for index data such as sibling links",
+      "The index page is 16 bytes smaller than a heap page, because indexes use a shorter page size",
+      "Both have a special space, but the heap's is at the very start of the page",
+      "The index page has 16 free bytes left, so it's about to split"
+    ],
+    "answer": 0,
+    "why": "special marks where the special space starts. For a table it equals the page size, meaning there's none. Index pages keep access-method data there."
+  },
+  {
+    "id": "si-06",
+    "post": "db-how-data-sits-on-disk",
+    "q": "The course repeats a criticism that 1,000 items would spend half an 8 KB page on line pointers. What did measuring show?",
+    "options": [
+      "A heap page can't hold 1,000 rows: the smallest rows fit about 226, so pointers took about 11% of the page",
+      "It's correct: at 1,000 rows, 4 KB of the page is line pointers",
+      "Pointers are stored on a separate page, so they take no room in the data page at all",
+      "Line pointers are only 1 byte each, so even 1,000 of them use a tiny share"
+    ],
+    "answer": 0,
+    "why": "Each row has a tuple header, so rows can't be that small. 226 rows × 4 bytes of pointers is about 900 bytes of the page."
+  },
+  {
+    "id": "si-07",
+    "post": "db-how-data-sits-on-disk",
+    "q": "A row holds a 1.7 MB text value, yet the main table stays at one 8 KB page. Why?",
+    "options": [
+      "TOAST compressed the value and moved it out of line, since a row can't span pages",
+      "Postgres truncates values longer than a page and keeps the rest in the WAL",
+      "The value is stored as a chain of rows across many pages of the same table",
+      "Large text columns are kept in the buffer pool only and never reach the table's file"
+    ],
+    "answer": 0,
+    "why": "Past about 2 KB, TOAST compresses and moves large values to a side table. The docs state that tuples can't span pages."
+  },
+  {
+    "id": "si-08",
+    "post": "db-how-data-sits-on-disk",
+    "q": "Insert ids 3, 1, 2 and select with no ORDER BY. What do Postgres and InnoDB return, and why?",
+    "options": [
+      "Postgres gives 3, 1, 2 because a heap has no order, and InnoDB gives 1, 2, 3 because rows live in the primary key's tree",
+      "Both give 1, 2, 3, because a primary key always sorts the table",
+      "Both give 3, 1, 2, because rows are always returned in insertion order",
+      "Postgres gives 1, 2, 3 because of its primary key index, and InnoDB gives 3, 1, 2 from its heap"
+    ],
+    "answer": 0,
+    "why": "That's the heap and clustered difference. Neither order is a promise: only ORDER BY guarantees one."
+  },
+  {
+    "id": "si-09",
+    "post": "db-how-data-sits-on-disk",
+    "q": "An index on email only. MySQL answers SELECT id ... WHERE email = ? with 'Using index', but Postgres visits the table. Why?",
+    "options": [
+      "InnoDB's secondary index entries contain the primary key, so id is already there",
+      "MySQL caches primary keys in memory, while Postgres has to read them from disk",
+      "Postgres can't do index-only scans on text columns",
+      "InnoDB rewrites the query to use the primary key index instead of the email index"
+    ],
+    "answer": 0,
+    "why": "A Postgres index entry holds the key and a heap address, so id needs the heap, unless you add it with INCLUDE."
+  },
+  {
+    "id": "si-10",
+    "post": "db-how-data-sits-on-disk",
+    "q": "Why is a column store slow at updating a single row?",
+    "options": [
+      "Each column lives in its own pages, so one row touches a page per column, often in compressed blocks",
+      "Column stores don't support UPDATE, so an update is always a full table rewrite",
+      "Every row in a column store has to be re-sorted whenever any value changes",
+      "Column stores keep no primary key, so finding the row needs a full scan of every column"
+    ],
+    "answer": 0,
+    "why": "The layout that makes reading one column cheap makes writing one row expensive. Row stores write the row in one place."
+  },
+  {
+    "id": "si-11",
+    "post": "db-how-data-sits-on-disk",
+    "q": "Which statement about a plain secondary index in Oracle is right?",
+    "options": [
+      "By default it stores a rowid, and storing the primary key only applies to index-organized tables",
+      "It always stores the primary key, exactly as InnoDB does",
+      "It stores the whole row, so Oracle never needs to read the table",
+      "It stores a hash of the row rather than an address"
+    ],
+    "answer": 0,
+    "why": "My notes said MySQL and Oracle both store the primary key. That's true of InnoDB and of Oracle's IOTs, while Oracle's default heap tables use rowids."
+  },
+  {
+    "id": "si-12",
+    "post": "db-how-data-sits-on-disk",
+    "q": "A SELECT shows Buffers: shared hit=934. What does that mean?",
+    "options": [
+      "934 pages were touched, all found in the buffer pool, so no disk read was needed but the work still happened",
+      "934 rows were returned to the client from cached results",
+      "934 milliseconds were spent waiting on shared locks",
+      "934 pages were written back to disk during the query"
+    ],
+    "answer": 0,
+    "why": "Buffers count pages. hit means already in memory, read means fetched from outside the buffer pool. A hit still costs CPU."
+  },
+  {
+    "id": "si-13",
+    "post": "db-how-data-sits-on-disk",
+    "q": "What does an SSD do when a page has to be rewritten?",
+    "options": [
+      "Writes to a fresh page and remaps the logical block, leaving the old page to be erased later",
+      "Overwrites the same cells in place, which is what wears out that exact spot",
+      "Erases the whole drive region first, then writes the page back",
+      "Keeps the change in RAM until the block has 100 changes, then rewrites it once"
+    ],
+    "answer": 0,
+    "why": "Flash can't overwrite a page. The controller remaps and spreads wear, so the real concern is write amplification, not one hot spot dying."
+  },
+  {
+    "id": "si-14",
+    "post": "db-indexes-and-query-plans",
+    "q": "A plan shows Sort (cost=136537.84..139037.84). What do those numbers mean?",
+    "options": [
+      "Estimated cost in arbitrary units: before the first row, then for all rows",
+      "Milliseconds: the fastest and slowest run of this node",
+      "Bytes of memory the sort used, before and after spilling",
+      "Rows sorted so far, and rows still waiting"
+    ],
+    "answer": 0,
+    "why": "A sort must read everything before output, so its startup cost is nearly its total. Cost isn't time: only actual time is in milliseconds."
+  },
+  {
+    "id": "si-15",
+    "post": "db-indexes-and-query-plans",
+    "q": "Why can a Bitmap Heap Scan beat an Index Scan on the same index?",
+    "options": [
+      "It notes which pages hold matches first, then reads each page once in order, instead of jumping per row",
+      "It stores a copy of the rows in the bitmap, so it never reads the table",
+      "It avoids the index altogether by using the table's statistics",
+      "It reads rows in random order, which spreads the load across the disk"
+    ],
+    "answer": 0,
+    "why": "An Index Scan follows pointers one at a time, and may revisit pages. A bitmap turns that into one sorted pass, and needs a recheck because a page holds other rows."
+  },
+  {
+    "id": "si-16",
+    "post": "db-indexes-and-query-plans",
+    "q": "In the measured sweep, what happened to a forced Index Scan as the matching share of a random column approached 100%?",
+    "options": [
+      "It reached 428 ms, while a Seq Scan took 56 ms, because each row cost a random page jump",
+      "It stayed the fastest plan throughout, since the index was in memory",
+      "It became identical to the Seq Scan, because Postgres converts it automatically",
+      "It stopped working, and Postgres raised an error about too many index reads"
+    ],
+    "answer": 0,
+    "why": "A Seq Scan reads each page once. An Index Scan on a randomly ordered column jumps around for every row, a million times."
+  },
+  {
+    "id": "si-17",
+    "post": "db-indexes-and-query-plans",
+    "q": "You index g, and a query on a range of g gets slower than with no index. What's the likely reason?",
+    "options": [
+      "Matches are on nearly every page, so the table is read anyway, plus the index, and parallelism is lost",
+      "The index was built concurrently, so it isn't usable for ranges",
+      "Indexes only help equality, so a range always makes things worse",
+      "The planner stops using statistics once an index exists"
+    ],
+    "answer": 0,
+    "why": "In the run, the bitmap visited 24,340 pages and spilled its sort. Only a covering index, which avoided the table, cut the pages read."
+  },
+  {
+    "id": "si-18",
+    "post": "db-indexes-and-query-plans",
+    "q": "EXPLAIN says Index Only Scan, but it's slow and Heap Fetches is 49,999. What's the fix?",
+    "options": [
+      "Run VACUUM, so the visibility map marks those pages all-visible",
+      "Drop and rebuild the index, because Heap Fetches means it's corrupted",
+      "Add the column to the index with INCLUDE",
+      "Raise work_mem so that the heap fits in memory"
+    ],
+    "answer": 0,
+    "why": "An index doesn't know row visibility. If a page's bit isn't set, the scan must check the heap. VACUUM sets the bits, and writes clear them."
+  },
+  {
+    "id": "si-19",
+    "post": "db-indexes-and-query-plans",
+    "q": "What's the difference between key and non-key columns in CREATE INDEX i ON t (id) INCLUDE (name)?",
+    "options": [
+      "id is sorted and searchable, and name is only carried in the leaf pages to allow index-only scans",
+      "Both are sorted, but name comes second, so it only helps range queries",
+      "name is hashed for fast equality search, while id is kept as a B-tree",
+      "name is stored in the table only, and the index just remembers its offset"
+    ],
+    "answer": 0,
+    "why": "Non-key columns can't be searched. They make the index bigger, so include them only when you know the query needs them."
+  },
+  {
+    "id": "si-20",
+    "post": "db-indexes-and-query-plans",
+    "q": "On Postgres 18, a composite index on (a, b) served WHERE b = 40, with Index Searches: 103. How?",
+    "options": [
+      "A skip scan: the index is searched once per distinct value of a, which works when a has few values",
+      "Postgres 18 stores a second copy of the index sorted by b",
+      "The planner reversed the column order and rebuilt the index for this query",
+      "The filter ran on the table, and the index was only used to count rows"
+    ],
+    "answer": 0,
+    "why": "The old rule said b alone couldn't use it. With a million distinct values of a, the same query still fell back to a Seq Scan."
+  },
+  {
+    "id": "si-21",
+    "post": "db-indexes-and-query-plans",
+    "q": "WHERE x + 1 = 501 doesn't use the index on x, though WHERE x = 500 does. Why?",
+    "options": [
+      "The index stores x, not x + 1, so the planner can't match the expression to it",
+      "Arithmetic in a WHERE clause disables all indexes for the whole query",
+      "The planner evaluates x + 1 only after the index scan finishes",
+      "Index lookups only work when the column is on the right-hand side"
+    ],
+    "answer": 0,
+    "why": "Rewrite the condition, or create an index on the expression itself."
+  },
+  {
+    "id": "si-22",
+    "post": "db-indexes-and-query-plans",
+    "q": "WHERE state = 'California' does a Seq Scan, and WHERE state = 'Florida' uses the index on the same column. Why?",
+    "options": [
+      "Statistics show California covers almost every row, so an index would only add work, while Florida is rare",
+      "The index only stores values that appear fewer than 100 times",
+      "Postgres alternates between plans to spread the load",
+      "The first query warmed the cache, so the planner picked an index for the second"
+    ],
+    "answer": 0,
+    "why": "Selectivity depends on the value, not only the column. Same index, opposite plans."
+  },
+  {
+    "id": "si-23",
+    "post": "db-indexes-and-query-plans",
+    "q": "A plan's estimate is rows=1, and the actual count is 999,990. What's the most likely cause?",
+    "options": [
+      "Stale statistics: ANALYZE hasn't run since a bulk load",
+      "The index is corrupted and must be rebuilt",
+      "A parallel worker lost part of its count",
+      "The table has too many partitions to estimate"
+    ],
+    "answer": 0,
+    "why": "The planner works from statistics. Comparing estimated and actual rows is the first thing to check. After ANALYZE, the plan changed."
+  },
+  {
+    "id": "si-24",
+    "post": "db-indexes-and-query-plans",
+    "q": "What does `Index Searches: 3` against `Index Searches: 1` show for IN (1, 5003, 9000) and BETWEEN 1 AND 9000?",
+    "options": [
+      "Three separate descents of the tree, against one descent followed by a walk along the leaves",
+      "Three indexes were used, against one index",
+      "The first query was retried twice after a lock conflict",
+      "The query ran on three parallel workers, against one"
+    ],
+    "answer": 0,
+    "why": "That's seek against scan. Far-apart values favour separate seeks, and close ones favour one seek plus a walk. Postgres 18 shows the count directly."
+  },
+  {
+    "id": "si-25",
+    "post": "db-indexes-and-query-plans",
+    "q": "An index on a column with 10 distinct values across a million rows came out at 6.8 MB, or 21 MB with one option off. Which option?",
+    "options": [
+      "deduplicate_items, which stores each value once followed by a list of row addresses",
+      "fillfactor, which leaves empty space in every page",
+      "INCLUDE, which copies extra columns into the leaves",
+      "CONCURRENTLY, which builds the index in two passes"
+    ],
+    "answer": 0,
+    "why": "Deduplication arrived in Postgres 13. Without it, a low-cardinality index is as big as one on unique values."
+  },
+  {
+    "id": "si-26",
+    "post": "db-indexes-and-query-plans",
+    "q": "What goes wrong with CREATE UNIQUE INDEX CONCURRENTLY if duplicates exist?",
+    "options": [
+      "It fails and leaves an INVALID index behind, which slows writes until you drop it",
+      "It silently removes the duplicates to make the index valid",
+      "It succeeds, and rejects the duplicates only on the next VACUUM",
+      "It rolls everything back automatically, so nothing remains"
+    ],
+    "answer": 0,
+    "why": "A concurrent build can't run in one transaction, so a failure leaves its catalog entry. \\d shows it marked INVALID."
+  },
+  {
+    "id": "si-27",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "A Bloom filter says a name is 'definitely not' present. What makes that answer safe?",
+    "options": [
+      "A clear bit proves the name was never added, as long as every write went through the filter",
+      "The filter also keeps a sorted list of names, which it checks first",
+      "It's only an estimate, so you still need to query the database",
+      "It queries a replica in the background before answering"
+    ],
+    "answer": 0,
+    "why": "There are no false negatives. A set bit only means maybe, because another name may have set it."
+  },
+  {
+    "id": "si-28",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "What's the effect of adding many more names to a fixed-size Bloom filter?",
+    "options": [
+      "Bits fill up until nearly every answer is 'maybe', so the filter saves nothing",
+      "It starts giving false negatives for the oldest names",
+      "It automatically grows and rehashes, so nothing changes",
+      "It raises an error once half the bits are set"
+    ],
+    "answer": 0,
+    "why": "That's saturation. It isn't harmful, just useless: you're back to querying every time."
+  },
+  {
+    "id": "si-29",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Why can't you simply delete a name from a basic Bloom filter?",
+    "options": [
+      "Clearing its bits might erase other names that share them, creating false negatives",
+      "Bits can only be written once, because they're stored in read-only memory",
+      "Deleting requires knowing every hash function's secret key",
+      "A filter is stored compressed, so individual bits can't be reached"
+    ],
+    "answer": 0,
+    "why": "Sharing bits is what keeps the filter small. To remove items, rebuild it or use a counting variant."
+  },
+  {
+    "id": "si-30",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Each new follower took 375 ms and 3.6 MB of WAL with a JSON list at a million followers. Why so much?",
+    "options": [
+      "An UPDATE writes a whole new row version, so appending one id rewrites the entire list",
+      "JSON columns are stored outside the table, and each read takes a network hop",
+      "Postgres re-validates every element of a JSON array against a schema on each write",
+      "The follows table index had to be rebuilt on every update"
+    ],
+    "answer": 0,
+    "why": "MVCC copies the row. A separate follows table stayed at about 3 ms, whatever the account's size."
+  },
+  {
+    "id": "si-31",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Which is the right order for dealing with a table heading for a billion rows?",
+    "options": [
+      "Avoid it by design, index, partition, shard, and only then brute force",
+      "Shard first, since it's the only thing that scales, then partition and index",
+      "Brute force first because it needs no changes, then index",
+      "Partition, then avoid it, then index, then shard"
+    ],
+    "answer": 0,
+    "why": "Each rung adds complexity. Brute force suits analytics only, since live rows change while you scan them."
+  },
+  {
+    "id": "si-32",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "In the insert race, InnoDB with random 16-byte keys fell from about 120,000 to about 3,500 rows a second. When?",
+    "options": [
+      "Once the table outgrew the 128 MB buffer pool, so nearly every insert needed a page from disk",
+      "As soon as the second batch started, because of lock contention between batches",
+      "When autovacuum started rewriting the table in the background",
+      "When the key column reached its maximum length"
+    ],
+    "answer": 0,
+    "why": "Random keys need any page at any time. While the tree fits in memory that's mildly wasteful. After that, inserts thrash."
+  },
+  {
+    "id": "si-33",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "After the race on Postgres, the UUIDv4 index was about 69% full and the UUIDv7 index about 90%. Why?",
+    "options": [
+      "Random keys split pages in the middle and leave them part-empty, while ordered keys only add at the right edge",
+      "UUIDv7 values are shorter, so more of them fit in a page",
+      "Postgres compresses ordered values, but not random ones",
+      "UUIDv4 indexes reserve free space for later updates"
+    ],
+    "answer": 0,
+    "why": "Same data, emptier pages, so a bigger index: 118 MB against 90 MB, plus more WAL."
+  },
+  {
+    "id": "si-34",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Why do UUIDv7 and ULID insert like sequential ids?",
+    "options": [
+      "They start with a 48-bit timestamp, so new values sort after older ones",
+      "They're generated by a central sequence on the database server",
+      "They're shorter than UUIDv4, so they fit at the end of each page",
+      "Databases recognise them and store them in a separate ordered file"
+    ],
+    "answer": 0,
+    "why": "Time first means new keys land at the end of the index, and any client can generate one without coordination."
+  },
+  {
+    "id": "si-35",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Why does a URL shortener benefit less from ordered keys than Shopify's idempotency keys?",
+    "options": [
+      "Its reads are random whatever the key, while idempotency keys are looked up soon after being written",
+      "Short URLs are too short to hold a timestamp",
+      "URL shorteners never use B-tree indexes",
+      "Ordered keys make writes slower when the table is small"
+    ],
+    "answer": 0,
+    "why": "Ordered keys always help writes. They help reads only if reads cluster around recent inserts."
+  },
+  {
+    "id": "si-36",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Two requests with the same idempotency key arrive at once. What does the second INSERT ... ON CONFLICT DO NOTHING do?",
+    "options": [
+      "It waits for the first to finish, then inserts nothing if the first committed",
+      "It inserts a second row and leaves cleanup to a background job",
+      "It fails at once with a unique violation, before the first commits",
+      "It returns the first request's row before that request commits"
+    ],
+    "answer": 0,
+    "why": "The outcome depends on the first transaction, so the second waits. The customer is charged once."
+  },
+  {
+    "id": "si-37",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "What's a privacy cost of UUIDv7 compared with UUIDv4?",
+    "options": [
+      "Anyone with the id can read when it was created",
+      "It reveals the MAC address of the machine that made it",
+      "It contains the row's primary key in plain text",
+      "It can be reversed to find the client's IP address"
+    ],
+    "answer": 0,
+    "why": "The timestamp is the first 48 bits. Leaking a MAC address was UUIDv1's problem."
+  },
+  {
+    "id": "si-38",
+    "post": "db-bloom-filters-and-uuids",
+    "q": "Why is the InnoDB slowdown from random keys worse than the Postgres one in these tests?",
+    "options": [
+      "The whole table lives in the primary key's tree, so random keys scatter full rows, not only index entries",
+      "InnoDB doesn't have a buffer pool, so each insert goes straight to disk",
+      "Postgres sorts random keys before inserting them",
+      "InnoDB fsyncs every page of the table on each commit"
+    ],
+    "answer": 0,
+    "why": "A Postgres heap appends rows, so only the smaller index scatters. It also fit in memory in this test."
+  },
+  {
+    "id": "si-39",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "In a B+Tree, what do internal pages hold?",
+    "options": [
+      "Keys and child pointers only, so that many more fit per page",
+      "Keys, values and child pointers, like every other page",
+      "Only pointers to the leaves, with no keys at all",
+      "Full copies of the rows, for faster reads"
+    ],
+    "answer": 0,
+    "why": "Values live only in leaves. That raises the fanout, so the tree is shorter and the internal pages stay in memory."
+  },
+  {
+    "id": "si-40",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "Why is a range scan slow on a plain B-Tree?",
+    "options": [
+      "Adjacent keys can sit on different levels, so the scan climbs back through parents and re-reads pages",
+      "B-Trees don't keep keys in sorted order",
+      "A B-Tree can only be searched for exact matches",
+      "Each key has to be looked up from the root in a separate transaction"
+    ],
+    "answer": 0,
+    "why": "The B+Tree fixes this with linked leaves, so a range becomes a walk along one level."
+  },
+  {
+    "id": "si-41",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "A real Postgres index on a million ints had a root of 10 entries, internal pages of 286, and leaves of 367. How tall was it?",
+    "options": [
+      "Three levels: 10 × 286 × 367 is about a million",
+      "Twenty levels, which is log base 2 of a million",
+      "Two levels, since 367 × 367 is more than enough",
+      "Six levels, one for each digit of a million"
+    ],
+    "answer": 0,
+    "why": "Fanout multiplies at every level, so real trees are very flat. A fourth level reaches hundreds of millions."
+  },
+  {
+    "id": "si-42",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "Why did int and bigint keys give an index of exactly the same size?",
+    "options": [
+      "Index entries are padded to 8-byte boundaries, so a 4-byte key saves nothing",
+      "Postgres stores every integer as 8 bytes internally",
+      "Both were deduplicated down to the same size",
+      "The index only stores the first 4 bytes of a bigint"
+    ],
+    "answer": 0,
+    "why": "Both gave 367 entries a leaf and 21 MB. Don't pick int only to shrink an index."
+  },
+  {
+    "id": "si-43",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "The same email index doubled from 18.6 MB to 36.7 MB. What changed?",
+    "options": [
+      "The InnoDB primary key went from an int to a 36-character string, which every secondary entry contains",
+      "The emails got longer in the second table",
+      "The index was rebuilt with a lower fill factor",
+      "The second table used a heap instead of a clustered index"
+    ],
+    "answer": 0,
+    "why": "Every secondary index entry carries the primary key. A wide key pays again in each index."
+  },
+  {
+    "id": "si-44",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "A B-Tree of degree 5 can hold how many elements in a node?",
+    "options": [
+      "4: a node with M children holds M − 1 elements",
+      "5: one element per child",
+      "6: one more element than it has children",
+      "It depends only on the page size, so degree doesn't apply"
+    ],
+    "answer": 0,
+    "why": "The elements separate the children, so there's always one fewer."
+  },
+  {
+    "id": "si-45",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "Where does a B+Tree store a key that's also used to route searches?",
+    "options": [
+      "In an internal page to route, and again in a leaf with its value",
+      "Only in the internal page, with the value alongside it",
+      "Only in the leaf, with the internal page storing a hash of it",
+      "In the root page only, since that's where every search starts"
+    ],
+    "answer": 0,
+    "why": "That duplication is the small price of keeping all values in the leaves. At an equal key a search goes right."
+  },
+  {
+    "id": "si-46",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "What makes a B-Tree stay balanced?",
+    "options": [
+      "It grows at the top: full pages split upwards, and only a root split adds a level",
+      "A background process rebalances the tree every night",
+      "New keys are always added to the shortest branch",
+      "The tree is rebuilt whenever it becomes uneven"
+    ],
+    "answer": 0,
+    "why": "Every leaf stays the same distance from the root, so there's no unlucky key."
+  },
+  {
+    "id": "si-47",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "Postgres leaf entries hold a heap address, and InnoDB secondary entries hold a primary key. What's the trade?",
+    "options": [
+      "Postgres reads directly but rows moving can touch every index, while InnoDB moves rows freely but pays a second tree walk",
+      "Postgres uses less disk, and InnoDB uses less memory, but they behave the same on updates",
+      "InnoDB's approach is always faster for reads, because a key is smaller than an address",
+      "Postgres can't have secondary indexes on tables with a primary key"
+    ],
+    "answer": 0,
+    "why": "This is the root of the Uber story in post 14: update cost against read cost."
+  },
+  {
+    "id": "si-48",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "A range of 5,001 consecutive ids touched only 18 pages. Why so few?",
+    "options": [
+      "One descent of the tree, then a walk along about 14 leaf pages holding hundreds of entries each",
+      "The result was already cached, so only 18 pages were needed for the metadata",
+      "Each page holds 5,001 entries, and the other pages were skipped",
+      "The planner sampled the range rather than reading all of it"
+    ],
+    "answer": 0,
+    "why": "Index Searches: 1 confirms one descent. Linked leaves turn the rest into a sideways walk."
+  },
+  {
+    "id": "si-49",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "Which is true of Postgres B-tree levels, according to its docs?",
+    "options": [
+      "Each level can be used as a doubly linked list of pages, not only the leaves",
+      "Only leaf pages are linked, and only in one direction",
+      "No pages are linked: all navigation goes through the root",
+      "Pages are linked through the WAL rather than through the page itself"
+    ],
+    "answer": 0,
+    "why": "The real leaf in the walk showed both neighbours. The docs extend that to every level."
+  },
+  {
+    "id": "si-50",
+    "post": "db-btrees-and-bplus-trees",
+    "q": "A text UUID key fits 141 entries a leaf where an int fits 367, yet both trees were 3 levels high. So what did the wider key cost?",
+    "options": [
+      "Memory: the index was 56 MB instead of 21 MB, competing for the buffer pool",
+      "Nothing: if the height is the same, the cost is the same",
+      "Lookup speed: each lookup read about 2.6 times as many pages",
+      "Correctness: text keys can return rows in the wrong order"
+    ],
+    "answer": 0,
+    "why": "A lookup still reads 3 pages, but a larger index needs more memory to stay cached. Post 4's cliff shows why that matters."
+  }
+]

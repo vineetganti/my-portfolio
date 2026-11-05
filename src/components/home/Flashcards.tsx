@@ -75,6 +75,7 @@ function verdict(pct: number): string {
 
 export default function Flashcards({ decks }: { decks: FlashcardDeck[] }) {
   const [seriesSlug, setSeriesSlug] = useState<string | null>(null);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [dealt, setDealt] = useState<DealtCard[]>([]);
   const [index, setIndex] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
@@ -151,6 +152,27 @@ export default function Flashcards({ decks }: { decks: FlashcardDeck[] }) {
 
   const pct = answeredCount === 0 ? 0 : Math.round((correct / answeredCount) * 100);
 
+  // A deck on its own is one row. Decks that share a group fold into one row that opens a sub-list.
+  const groups = [...new Set(decks.map((d) => d.group).filter((g): g is string => Boolean(g)))];
+  const shown = openGroup ? decks.filter((d) => d.group === openGroup) : decks.filter((d) => !d.group);
+
+  const deckRow = (d: FlashcardDeck) => {
+    const best = bests[d.series];
+    return (
+      <button
+        key={d.series}
+        type="button"
+        onClick={() => start(d.series)}
+        className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card-2 px-4 py-3 text-left hover:border-accent transition-colors"
+      >
+        <span className="font-semibold text-ink">{d.title}</span>
+        <span className="shrink-0 text-xs text-ink-muted tabular-nums">
+          {best == null ? `${d.cards.length} cards` : `best ${best}/${d.cards.length}`}
+        </span>
+      </button>
+    );
+  };
+
   return (
     <div className="rounded-2xl border border-border bg-card p-4" onKeyDown={onKeyDown}>
       <div className="flex items-baseline justify-between gap-3 mb-3">
@@ -161,7 +183,7 @@ export default function Flashcards({ decks }: { decks: FlashcardDeck[] }) {
             onClick={() => setSeriesSlug(null)}
             className="text-xs font-semibold text-ink-muted hover:text-accent transition-colors"
           >
-            Change series
+            Change deck
           </button>
         )}
       </div>
@@ -169,26 +191,39 @@ export default function Flashcards({ decks }: { decks: FlashcardDeck[] }) {
       {!deck && (
         <div>
           <p className="text-sm text-ink-2 leading-relaxed mb-3">
-            50 harder-than-recall questions per series, scored as you go. Pick one.
+            {openGroup
+              ? `${openGroup}: ${shown.length} decks of 50, by theme. Pick one.`
+              : "50 harder-than-recall questions per deck, scored as you go. Pick one."}
           </p>
           <div className="grid gap-2">
-            {decks.map((d) => {
-              const best = bests[d.series];
-              return (
-                <button
-                  key={d.series}
-                  type="button"
-                  onClick={() => start(d.series)}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card-2 px-4 py-3 text-left hover:border-accent transition-colors"
-                >
-                  <span className="font-semibold text-ink">{d.title}</span>
-                  <span className="shrink-0 text-xs text-ink-muted tabular-nums">
-                    {best == null ? `${d.cards.length} cards` : `best ${best}/${d.cards.length}`}
-                  </span>
-                </button>
-              );
-            })}
+            {shown.map(deckRow)}
+            {!openGroup &&
+              groups.map((g) => {
+                const members = decks.filter((d) => d.group === g);
+                return (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setOpenGroup(g)}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card-2 px-4 py-3 text-left hover:border-accent transition-colors"
+                  >
+                    <span className="font-semibold text-ink">{g}</span>
+                    <span className="shrink-0 text-xs text-ink-muted tabular-nums">
+                      {members.length} decks &rarr;
+                    </span>
+                  </button>
+                );
+              })}
           </div>
+          {openGroup && (
+            <button
+              type="button"
+              onClick={() => setOpenGroup(null)}
+              className="mt-3 text-xs font-semibold text-ink-muted hover:text-accent transition-colors"
+            >
+              &larr; All decks
+            </button>
+          )}
         </div>
       )}
 
@@ -297,7 +332,7 @@ export default function Flashcards({ decks }: { decks: FlashcardDeck[] }) {
               onClick={() => setSeriesSlug(null)}
               className="rounded-lg border border-border bg-card px-4 py-2 font-semibold text-ink-2 hover:border-ink-2 hover:text-ink transition-colors"
             >
-              Try the other series
+              Try another deck
             </button>
           </div>
         </div>

@@ -1,0 +1,16 @@
+{
+  "steps": [
+    {
+      "from": "coordinator",
+      "to": "database A",
+      "label": "1. PREPARE, then 2. COMMIT",
+      "type": "request"
+    },
+    {
+      "from": "coordinator",
+      "to": "database B",
+      "label": "1. PREPARE, then 2. COMMIT",
+      "type": "request"
+    }
+  ]
+}

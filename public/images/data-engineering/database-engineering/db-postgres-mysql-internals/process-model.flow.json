@@ -1,0 +1,10 @@
+{
+  "steps": [
+    {
+      "from": "client",
+      "to": "postmaster",
+      "label": "connect",
+      "type": "request"
+    }
+  ]
+}

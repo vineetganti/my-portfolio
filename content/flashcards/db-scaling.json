@@ -1,0 +1,652 @@
+[
+  {
+    "id": "sc-01",
+    "post": "db-partitioning",
+    "q": "A parent partitioned table has no rows of its own. Where do they live, and who routes them?",
+    "options": [
+      "In the partitions, and the database routes inserts and queries, so clients don't change",
+      "In the parent's own file, and an index points at each range",
+      "In the partitions, and the client has to name the right one",
+      "In a shared heap, and a trigger copies rows into each partition"
+    ],
+    "answer": 0,
+    "why": "That's what separates partitioning from sharding, where the client has to know."
+  },
+  {
+    "id": "sc-02",
+    "post": "db-partitioning",
+    "q": "A partition is declared FROM (0) TO (35). What's the highest value it holds?",
+    "options": [
+      "34: the upper bound is exclusive",
+      "35: both bounds are inclusive",
+      "36: the bound is rounded up",
+      "It depends on the column's type"
+    ],
+    "answer": 0,
+    "why": "The real max(g) was 34. Adjacent partitions can share a bound for that reason."
+  },
+  {
+    "id": "sc-03",
+    "post": "db-partitioning",
+    "q": "A query with a good index read 46 pages on a plain table, and 46 on the partitioned one. What does that show?",
+    "options": [
+      "The index already narrowed the search, so partitioning added nothing for this query",
+      "Pruning was turned off by default",
+      "Partitioned tables can't use indexes",
+      "The planner ignored the partition's smaller index"
+    ],
+    "answer": 0,
+    "why": "The course saw the same thing. Its explanation is that the benefit appears when a big index no longer fits in memory."
+  },
+  {
+    "id": "sc-04",
+    "post": "db-partitioning",
+    "q": "With no index, a range query read 22,124 pages on the plain table and 4,420 on the partitioned one. Why?",
+    "options": [
+      "Pruning left one small partition, so the sequential scan simply read less",
+      "Partitions are compressed, so each page holds more rows",
+      "Partitioned tables build a hidden index at insert time",
+      "The second query reused the first query's cached pages"
+    ],
+    "answer": 0,
+    "why": "180 ms against 56 ms. Partitioning shines when a scan can be limited to fewer pages."
+  },
+  {
+    "id": "sc-05",
+    "post": "db-partitioning",
+    "q": "What does SELECT * FROM grades_parts WHERE id = 7 do on a table partitioned by g?",
+    "options": [
+      "Searches every partition, because the filter isn't on the partition key",
+      "Goes straight to the first partition, because ids start there",
+      "Fails, because id isn't part of the partition key",
+      "Uses the parent's global index on id"
+    ],
+    "answer": 0,
+    "why": "Pruning needs the key. Partition by what your queries filter on."
+  },
+  {
+    "id": "sc-06",
+    "post": "db-partitioning",
+    "q": "Why did dropping a year of data take 46 ms where DELETE took 407 ms?",
+    "options": [
+      "Dropping a partition removes a file, and DELETE marks rows dead one at a time",
+      "DELETE has to rebuild the partition's index first",
+      "Dropping a partition skips the WAL and fsync entirely",
+      "DELETE takes a table lock, and DROP doesn't take any lock"
+    ],
+    "answer": 0,
+    "why": "DELETE also left half a million dead rows for vacuum to clean up."
+  },
+  {
+    "id": "sc-07",
+    "post": "db-partitioning",
+    "q": "What happens when an UPDATE changes a row's partition key?",
+    "options": [
+      "The row moves to the right partition, as a delete and an insert",
+      "The update fails with a constraint error",
+      "The row stays put, and a query can't find it again",
+      "The partition bounds stretch to fit the new value"
+    ],
+    "answer": 0,
+    "why": "The real run showed tableoid change from g_low to g_high. Pick a key that rarely changes."
+  },
+  {
+    "id": "sc-08",
+    "post": "db-partitioning",
+    "q": "Inserting NULL into a range-partitioned table failed. What let it succeed?",
+    "options": [
+      "A DEFAULT partition, which catches rows that fit no range",
+      "Casting the NULL to zero in the insert",
+      "Declaring the partition key NOT NULL",
+      "Setting enable_partition_pruning to off"
+    ],
+    "answer": 0,
+    "why": "My notes said the column must be NOT NULL. That was the demo, not a rule."
+  },
+  {
+    "id": "sc-09",
+    "post": "db-partitioning",
+    "q": "What's the largest value of a Postgres int?",
+    "options": [
+      "About 2.1 billion, because it's signed",
+      "About 4.3 billion, because it's 32 bits",
+      "About 9 quintillion",
+      "About 65,000"
+    ],
+    "answer": 0,
+    "why": "2,147,483,647. My notes said 4 billion, which would be unsigned."
+  },
+  {
+    "id": "sc-10",
+    "post": "db-partitioning",
+    "q": "Where should you create an index on a partitioned table since Postgres 11?",
+    "options": [
+      "Once on the parent, and it appears on every partition",
+      "On each partition, by hand, in the same transaction",
+      "Only on the partition that's queried most",
+      "Indexes can't be used on partitioned tables"
+    ],
+    "answer": 0,
+    "why": "The parent has no real index data of its own. Each partition gets a smaller index."
+  },
+  {
+    "id": "sc-11",
+    "post": "db-partitioning",
+    "q": "What does vertical partitioning do?",
+    "options": [
+      "Moves a big, rarely read column away, so hot columns pack more rows per page",
+      "Splits rows by a date range",
+      "Spreads rows over several servers",
+      "Stores each row twice, for faster reads"
+    ],
+    "answer": 0,
+    "why": "Horizontal splits by rows. Postgres does a version of vertical partitioning automatically with TOAST."
+  },
+  {
+    "id": "sc-12",
+    "post": "db-partitioning",
+    "q": "Why can't a unique constraint on a non-key column be enforced across a partitioned table?",
+    "options": [
+      "Each partition enforces its own, so the constraint must include the partition key",
+      "Unique constraints aren't allowed on partitioned tables at all",
+      "It would need a table lock on the parent for every insert",
+      "Partitions don't support B-tree indexes"
+    ],
+    "answer": 0,
+    "why": "One partition can't see another's rows, so only keys that include the partition column are checkable."
+  },
+  {
+    "id": "sc-13",
+    "post": "db-sharding",
+    "q": "What's the new question that sharding creates and partitioning doesn't?",
+    "options": [
+      "Given a key, which server has it?",
+      "Which index should this query use?",
+      "How large should a page be?",
+      "Which isolation level should each row have?"
+    ],
+    "answer": 0,
+    "why": "Partitions live in one database that routes for you. Shards are separate servers, so something else has to route."
+  },
+  {
+    "id": "sc-14",
+    "post": "db-sharding",
+    "q": "You have 16 servers using hash % N and add one. What share of keys moved in the measurement?",
+    "options": [
+      "About 94%",
+      "About 6%",
+      "About 50%",
+      "None: only new keys go to the new server"
+    ],
+    "answer": 0,
+    "why": "A key stays only if both remainders match. With a ring it was about 6%."
+  },
+  {
+    "id": "sc-15",
+    "post": "db-sharding",
+    "q": "On a hash ring, which server owns a key?",
+    "options": [
+      "The next server clockwise from the key's position",
+      "The server closest in network distance",
+      "The server with the least data at the time",
+      "The server whose hash equals the key's hash"
+    ],
+    "answer": 0,
+    "why": "So a new server only takes keys from the arc just before it."
+  },
+  {
+    "id": "sc-16",
+    "post": "db-sharding",
+    "q": "Why does a real ring give each server many points?",
+    "options": [
+      "With one point the busiest of five servers held 263% over its fair share",
+      "It lets a server store each key several times",
+      "Clients can then read from any point in parallel",
+      "A ring needs at least 64 points to work at all"
+    ],
+    "answer": 0,
+    "why": "Many points average out the arcs, and spread a departing server's keys over many others."
+  },
+  {
+    "id": "sc-17",
+    "post": "db-sharding",
+    "q": "My notes described consistent hashing as hash modulo N. What's wrong with that?",
+    "options": [
+      "Modulo is what consistent hashing replaces, because changing N remaps most keys",
+      "Modulo can't be computed on strings",
+      "Consistent hashing doesn't use a hash function",
+      "Nothing: the two are the same thing"
+    ],
+    "answer": 0,
+    "why": "The course's later talk on the topic gets this right."
+  },
+  {
+    "id": "sc-18",
+    "post": "db-sharding",
+    "q": "A transfer updates two shards, and the second dies between commits. What did the real run end with?",
+    "options": [
+      "500 in total instead of 600: one side committed and the other didn't",
+      "600: the first shard rolled back automatically",
+      "600: the second shard replayed the change on restart",
+      "An error on both, with nothing changed"
+    ],
+    "answer": 0,
+    "why": "Each shard commits alone. Nothing ties them together without a protocol such as two-phase commit."
+  },
+  {
+    "id": "sc-19",
+    "post": "db-sharding",
+    "q": "A URL shortener is sharded by short code. What does a search by long URL have to do?",
+    "options": [
+      "Ask every server and combine the results",
+      "Ask whichever server is least busy",
+      "Hash the long URL and ask one server",
+      "Use the shard map to find the right index"
+    ],
+    "answer": 0,
+    "why": "A query that doesn't use the shard key has no way to pick a server."
+  },
+  {
+    "id": "sc-20",
+    "post": "db-sharding",
+    "q": "What should you try before sharding?",
+    "options": [
+      "Partitioning, caching and replication, after finding the real bottleneck",
+      "Nothing: shard as soon as a table passes a million rows",
+      "Moving from B-trees to hash indexes",
+      "Raising max_connections until it stops helping"
+    ],
+    "answer": 0,
+    "why": "Reads scale easily with copies. Writes are the usual reason to shard at all."
+  },
+  {
+    "id": "sc-21",
+    "post": "db-sharding",
+    "q": "What's the problem with a serial id on each shard?",
+    "options": [
+      "Each server counts separately, so ids aren't unique across shards",
+      "serial is unavailable once a table is sharded",
+      "The ring can't hash integers",
+      "Serial ids always land on the same shard"
+    ],
+    "answer": 0,
+    "why": "Use UUIDs, or a key that includes the shard."
+  },
+  {
+    "id": "sc-22",
+    "post": "db-sharding",
+    "q": "A hash spreads keys evenly. Why can a shard still get overloaded?",
+    "options": [
+      "One very popular key still lands on a single server",
+      "Hash functions favour low-numbered servers",
+      "Rings drift out of balance over time",
+      "Replicas send their reads to the first shard"
+    ],
+    "answer": 0,
+    "why": "A hash balances keys, not traffic."
+  },
+  {
+    "id": "sc-23",
+    "post": "db-sharding",
+    "q": "What does Vitess do?",
+    "options": [
+      "Sits in front of MySQL, parses SQL, and routes it to the right shard",
+      "Replaces MySQL's storage engine with a sharded one",
+      "Copies all shards into one server for reporting",
+      "Adds cross-shard foreign keys to MySQL"
+    ],
+    "answer": 0,
+    "why": "It hides sharding from clients, at the cost of one more system to run."
+  },
+  {
+    "id": "sc-24",
+    "post": "db-sharding",
+    "q": "The course's first consistent-hashing library failed. How?",
+    "options": [
+      "The same key gave different servers, which broke reads",
+      "It was too slow to use on every request",
+      "It only worked with numeric keys",
+      "It sent every key to the first server"
+    ],
+    "answer": 0,
+    "why": "The lesson is to verify that a mapping is stable before trusting it with data."
+  },
+  {
+    "id": "sc-25",
+    "post": "db-sharding",
+    "q": "A server is removed from a ring after a crash, with no warning. What's the catch?",
+    "options": [
+      "Its keys now map to a neighbour that doesn't have the data, so shards also need replicas",
+      "The whole ring has to be rebuilt from scratch",
+      "All the keys are remapped, as with modulo",
+      "Nothing: the ring copies each key to its neighbour"
+    ],
+    "answer": 0,
+    "why": "A ring limits what moves, but a crash gives no time to copy anything."
+  },
+  {
+    "id": "sc-26",
+    "post": "db-replication-and-cap",
+    "q": "What does a Postgres standby actually receive and replay?",
+    "options": [
+      "The primary's write-ahead log",
+      "Copies of each SQL statement",
+      "A nightly dump of the tables",
+      "Row changes decoded into JSON"
+    ],
+    "answer": 0,
+    "why": "The same log that protects the primary builds the copy, which is why schema changes replicate too."
+  },
+  {
+    "id": "sc-27",
+    "post": "db-replication-and-cap",
+    "q": "You run CREATE TABLE on a standby. What happens?",
+    "options": [
+      "It fails: cannot execute CREATE TABLE in a read-only transaction",
+      "It works, and the table is copied back to the primary",
+      "It works on the standby only, until the next restart",
+      "It's forwarded to the primary automatically"
+    ],
+    "answer": 0,
+    "why": "Standbys only replay. That's why replicas scale reads and not writes."
+  },
+  {
+    "id": "sc-28",
+    "post": "db-replication-and-cap",
+    "q": "Which synchronous_commit setting waits until a read on the standby would see the change?",
+    "options": [
+      "remote_apply",
+      "remote_write",
+      "local",
+      "on"
+    ],
+    "answer": 0,
+    "why": "It was the slowest in the test, and it gives read-your-writes on the standby."
+  },
+  {
+    "id": "sc-29",
+    "post": "db-replication-and-cap",
+    "q": "A user saves their profile, and the reload shows the old value. Why?",
+    "options": [
+      "The read went to a replica that hadn't applied the change yet",
+      "The commit silently rolled back",
+      "The browser cached the page",
+      "The write went to the wrong shard"
+    ],
+    "answer": 0,
+    "why": "With a 2-second delay, the real run showed the primary and standby disagreeing for 2 seconds."
+  },
+  {
+    "id": "sc-30",
+    "post": "db-replication-and-cap",
+    "q": "With synchronous replication on, the standby's network is cut. What did a client's INSERT do?",
+    "options": [
+      "It waited, with the server showing wait_event=SyncRep",
+      "It failed at once with a connection error",
+      "It succeeded straight away, and replication caught up later",
+      "It was redirected to a different standby"
+    ],
+    "answer": 0,
+    "why": "That's consistency over availability: no client hears 'saved' for what the standby lacks."
+  },
+  {
+    "id": "sc-31",
+    "post": "db-replication-and-cap",
+    "q": "You cancel a commit stuck waiting for a synchronous standby. Is the row in the table?",
+    "options": [
+      "Yes: it had already committed locally, and only the acknowledgement was being held",
+      "No: cancelling rolls the transaction back",
+      "Only after the standby returns",
+      "Only on the standby"
+    ],
+    "answer": 0,
+    "why": "The warning says so. An application treating this as a rollback would be wrong."
+  },
+  {
+    "id": "sc-32",
+    "post": "db-replication-and-cap",
+    "q": "Under asynchronous replication with the network cut, what do the two servers do?",
+    "options": [
+      "The primary accepts every write, and the standby keeps answering with stale data",
+      "Both refuse all requests until the network returns",
+      "The primary stops, and the standby takes over",
+      "The standby starts accepting writes as well"
+    ],
+    "answer": 0,
+    "why": "That's availability over consistency. The standby caught up by itself when the network came back."
+  },
+  {
+    "id": "sc-33",
+    "post": "db-replication-and-cap",
+    "q": "In the failover test, the primary acknowledged 200 orders the standby never got. How many were on the new primary?",
+    "options": [
+      "None",
+      "All 200, replayed after promotion",
+      "About half, depending on timing",
+      "All 200, but marked as unconfirmed"
+    ],
+    "answer": 0,
+    "why": "All 200 were gone. That's the true price of asynchronous replication."
+  },
+  {
+    "id": "sc-34",
+    "post": "db-replication-and-cap",
+    "q": "In CAP, what does C mean?",
+    "options": [
+      "A read sees the latest write",
+      "The data obeys the rules you declared",
+      "Transactions commit in order",
+      "All columns have a consistent type"
+    ],
+    "answer": 0,
+    "why": "The second option is ACID's C. They're different ideas that share a word."
+  },
+  {
+    "id": "sc-35",
+    "post": "db-replication-and-cap",
+    "q": "In CAP, what does P mean?",
+    "options": [
+      "Tolerating a network failure between nodes",
+      "Splitting a table into partitions",
+      "The primary being available",
+      "Persisting data to disk"
+    ],
+    "answer": 0,
+    "why": "With more than one node, networks do fail, so the real choice is C or A during a split."
+  },
+  {
+    "id": "sc-36",
+    "post": "db-replication-and-cap",
+    "q": "Why is a single big server 'CA' in the course's terms?",
+    "options": [
+      "It has no network between copies to fail, so the question doesn't arise until it fails",
+      "It keeps two copies of everything in memory",
+      "It uses synchronous replication to itself",
+      "It's fast enough to hide any inconsistency"
+    ],
+    "answer": 0,
+    "why": "Where CAP applies depends on where you draw the line around the system."
+  },
+  {
+    "id": "sc-37",
+    "post": "db-replication-and-cap",
+    "q": "Why does adding replicas not help a write-heavy system?",
+    "options": [
+      "Every standby replays every write, so writes aren't spread out",
+      "Replicas slow writes down by locking the primary",
+      "Replicas can only be added while writes are paused",
+      "Writes are sent to all replicas at random"
+    ],
+    "answer": 0,
+    "why": "Replication scales reads. Spreading writes takes sharding."
+  },
+  {
+    "id": "sc-38",
+    "post": "db-replication-and-cap",
+    "q": "Why is one synchronous standby risky?",
+    "options": [
+      "If it dies, all writes stop, so it's a single point of failure",
+      "It doubles the chance of data corruption",
+      "It can't be used for reads at the same time",
+      "It stops the primary from taking backups"
+    ],
+    "answer": 0,
+    "why": "Use ANY 1 over several standbys, so that one failure doesn't stop writes."
+  },
+  {
+    "id": "sc-39",
+    "post": "db-system-design",
+    "q": "What's the course's rule for adding a component to a design?",
+    "options": [
+      "Add it only to fix a failure you can name",
+      "Add everything a large company uses, then remove what's idle",
+      "Start with a queue, a cache and a load balancer, as a baseline",
+      "Add components until each one is under 50% load"
+    ],
+    "answer": 0,
+    "why": "Start simple and ask what fails. Each box brings failure modes of its own."
+  },
+  {
+    "id": "sc-40",
+    "post": "db-system-design",
+    "q": "A queue goes between your servers and the database. What does a client's success now mean?",
+    "options": [
+      "The write was accepted, and it may appear a little later, or fail later",
+      "The write is durable on disk",
+      "The write has reached every replica",
+      "Nothing changes: the client still waits for the database"
+    ],
+    "answer": 0,
+    "why": "A queue protects the database from spikes, and changes what 'done' means."
+  },
+  {
+    "id": "sc-41",
+    "post": "db-system-design",
+    "q": "Why can't a layer 4 balancer route /api and /static to different servers?",
+    "options": [
+      "It only sees TCP packets, and doesn't read the HTTP request",
+      "It can only route to one server at a time",
+      "URLs are encrypted by the client's operating system",
+      "It has no way of connecting to more than one backend"
+    ],
+    "answer": 0,
+    "why": "A layer 7 balancer can, because it terminates the connection, which means it holds your TLS keys."
+  },
+  {
+    "id": "sc-42",
+    "post": "db-system-design",
+    "q": "Why does the follows table have two indexes?",
+    "options": [
+      "One answers 'who do I follow?' and the other 'who follows me?'",
+      "Two indexes are needed for a composite primary key",
+      "The second is a backup in case the first is corrupted",
+      "Postgres needs one index per column in a join"
+    ],
+    "answer": 0,
+    "why": "Reads far outnumber follows, so the extra write cost is worth it."
+  },
+  {
+    "id": "sc-43",
+    "post": "db-system-design",
+    "q": "Counting a celebrity's million followers took 47 ms, as a parallel table scan. What's the design answer?",
+    "options": [
+      "Keep a stored counter, and accept that it can lag a little",
+      "Run the count on every view, on a bigger server",
+      "Shard the follows table by followee",
+      "Show no count for accounts with many followers"
+    ],
+    "answer": 0,
+    "why": "Nobody can tell 3.2 million from 3.1 million, so a slightly stale counter is fine."
+  },
+  {
+    "id": "sc-44",
+    "post": "db-system-design",
+    "q": "Why is the 'am I following?' check cheap enough to run on every profile view?",
+    "options": [
+      "It's one primary key lookup: 4 pages, about 0.2 ms",
+      "It's cached by Postgres for the session",
+      "It reads a counter stored on the profile",
+      "It only runs on the first view of a profile"
+    ],
+    "answer": 0,
+    "why": "The plan was an index-only scan on (follower, followee)."
+  },
+  {
+    "id": "sc-45",
+    "post": "db-system-design",
+    "q": "Why does fan-out on write struggle with a celebrity?",
+    "options": [
+      "One tweet means a write per follower: over a second at a million",
+      "Celebrities' tweets are too large for the timeline table",
+      "Followers read too often for the table to keep up",
+      "The tweet table's index can't take that many reads"
+    ],
+    "answer": 0,
+    "why": "It's cheap for most accounts. That's why real systems pull for the few largest."
+  },
+  {
+    "id": "sc-46",
+    "post": "db-system-design",
+    "q": "What does pulling a timeline at read time cost?",
+    "options": [
+      "A lookup per followed account on every read: 53 ms at 5,000 accounts",
+      "A write per follower on every tweet",
+      "Nothing, once the tweets table has an index",
+      "A full scan of the tweets table on every read"
+    ],
+    "answer": 0,
+    "why": "Cheap to tweet, costly to read. Push is the reverse."
+  },
+  {
+    "id": "sc-47",
+    "post": "db-system-design",
+    "q": "What's the drawback of using a serial id as the short URL?",
+    "options": [
+      "Short URLs are guessable, so anyone can walk through them",
+      "Inserts are slow because the ids are ordered",
+      "Ids can't be used as a primary key",
+      "It needs a second index for lookups"
+    ],
+    "answer": 0,
+    "why": "It's otherwise the simplest and fastest design."
+  },
+  {
+    "id": "sc-48",
+    "post": "db-system-design",
+    "q": "Why did 5-character codes clash 436 times in a million URLs, out of about a billion possible codes?",
+    "options": [
+      "The birthday problem: clashes grow with the square of the count",
+      "SHA-256 favours some prefixes over others",
+      "base64 repeats every 4 characters",
+      "Similar URLs produce similar hashes"
+    ],
+    "answer": 0,
+    "why": "Each new code can clash with every earlier one. 8 characters gave none."
+  },
+  {
+    "id": "sc-49",
+    "post": "db-system-design",
+    "q": "A short link is created once and read many times. What's the design consequence?",
+    "options": [
+      "Split the paths: writes go to the primary, reads to replicas near users",
+      "Use synchronous replication for every read",
+      "Cache writes in the client before sending them",
+      "Move the data to a column store"
+    ],
+    "answer": 0,
+    "why": "A little replication lag on a new link harms nobody."
+  },
+  {
+    "id": "sc-50",
+    "post": "db-system-design",
+    "q": "Which part of the Twitter design did the course's sessions never reach?",
+    "options": [
+      "The home timeline",
+      "Posting a tweet",
+      "Following a user",
+      "The load balancer"
+    ],
+    "answer": 0,
+    "why": "Three features were planned and two were covered, so the timeline section in the post is my addition."
+  }
+]

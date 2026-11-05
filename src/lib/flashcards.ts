@@ -4,9 +4,10 @@ import { getAllPosts } from "./blog";
 import { getSeriesInfo } from "./sections";
 
 /**
- * Flashcard decks for the home page, one JSON file per series in content/flashcards/.
+ * Flashcard decks for the home page, one JSON file per deck in content/flashcards/.
  * A card is a multiple-choice question; `answer` is the index of the correct option and
- * `post` is the slug of the post the question comes from.
+ * `post` is the slug of the post the question comes from. A long series can split into several
+ * decks: decks that share a `group` appear together under one entry on the home page.
  */
 export interface Flashcard {
   id: string;
@@ -18,18 +19,29 @@ export interface Flashcard {
 }
 
 export interface FlashcardDeck {
+  /** The deck's file name, also its key for the saved best score. */
   series: string;
   title: string;
+  /** The group this deck sits in on the chooser, if any. */
+  group?: string;
   cards: Flashcard[];
   /** Post slug to title, for the "from this post" link on the answer. */
   posts: Record<string, string>;
 }
 
 const DECKS_DIR = path.join(process.cwd(), "content", "flashcards");
-const DECK_SERIES = ["llm-architectures", "agentic-ai"];
 const DECK_SIZE = 50;
+const DB = "Database Engineering";
+const DECKS: { series: string; title?: string; group?: string }[] = [
+  { series: "llm-architectures" },
+  { series: "agentic-ai" },
+  { series: "db-transactions", title: "Transactions and concurrency", group: DB },
+  { series: "db-storage-indexing", title: "Storage and indexing", group: DB },
+  { series: "db-scaling", title: "Scaling out", group: DB },
+  { series: "db-engines-internals", title: "Engines and internals", group: DB },
+];
 
-function readDeck(series: string): FlashcardDeck {
+function readDeck({ series, title, group }: (typeof DECKS)[number]): FlashcardDeck {
   const raw = JSON.parse(fs.readFileSync(path.join(DECKS_DIR, `${series}.json`), "utf8")) as Flashcard[];
   const titles = Object.fromEntries(getAllPosts().map((p) => [p.slug, p.title]));
   const seen = new Set<string>();
@@ -49,9 +61,9 @@ function readDeck(series: string): FlashcardDeck {
   if (raw.length !== DECK_SIZE) throw new Error(`flashcards/${series}.json has ${raw.length} cards, expected ${DECK_SIZE}`);
 
   const posts = Object.fromEntries([...new Set(raw.map((c) => c.post))].map((slug) => [slug, titles[slug]]));
-  return { series, title: getSeriesInfo(series).title, cards: raw, posts };
+  return { series, title: title ?? getSeriesInfo(series).title, group, cards: raw, posts };
 }
 
 export function getFlashcardDecks(): FlashcardDeck[] {
-  return DECK_SERIES.map(readDeck);
+  return DECKS.map(readDeck);
 }

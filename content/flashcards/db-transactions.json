@@ -1,0 +1,652 @@
+[
+  {
+    "id": "tx-01",
+    "post": "db-acid-transactions",
+    "q": "A client runs BEGIN and UPDATE, then disconnects without COMMIT. A new connection finds the old value. What does that show?",
+    "options": [
+      "Atomicity working: the unfinished transaction counts for nothing",
+      "A failure of atomicity: the update was lost",
+      "A failure of durability: the write wasn't flushed in time",
+      "An isolation anomaly: the new connection read a stale snapshot"
+    ],
+    "answer": 0,
+    "why": "A lost connection is treated as a rollback. My notes called this a failure of atomicity, which is backwards."
+  },
+  {
+    "id": "tx-02",
+    "post": "db-acid-transactions",
+    "q": "One statement in a Postgres transaction fails a CHECK constraint. What happens to the next SELECT in that transaction?",
+    "options": [
+      "It fails with 'current transaction is aborted', until ROLLBACK",
+      "It runs normally, and only the failed statement is undone",
+      "It runs, and returns the values from before the transaction",
+      "It waits until the application decides whether to commit"
+    ],
+    "answer": 0,
+    "why": "After an error Postgres refuses further commands, and even COMMIT answers ROLLBACK. MySQL undoes only the failed statement, which is why engines need testing."
+  },
+  {
+    "id": "tx-03",
+    "post": "db-acid-transactions",
+    "q": "You set READ UNCOMMITTED on Postgres and watch for a dirty read. What do you see?",
+    "options": [
+      "None: Postgres accepts the level and runs it as read committed",
+      "A dirty read, as the SQL standard requires at this level",
+      "An error, because Postgres doesn't accept that level",
+      "A dirty read only if the other transaction later commits"
+    ],
+    "answer": 0,
+    "why": "The docs call that the only sensible mapping onto MVCC. MySQL really implements the level: its total went from 330 to 630 and back."
+  },
+  {
+    "id": "tx-04",
+    "post": "db-acid-transactions",
+    "q": "What separates a phantom read from a non-repeatable read?",
+    "options": [
+      "A row you read changes in one, and a new matching row appears in the other",
+      "One reads uncommitted data, and the other reads committed data",
+      "One needs SERIALIZABLE to occur, and the other needs READ COMMITTED",
+      "They're the same anomaly, under two names from different standards"
+    ],
+    "answer": 0,
+    "why": "That's why locking the rows you read can stop a non-repeatable read and not a phantom: the new row didn't exist to lock."
+  },
+  {
+    "id": "tx-05",
+    "post": "db-acid-transactions",
+    "q": "A report prints lines that add up to 330 and a footer that says 830, in one transaction at read committed. Why?",
+    "options": [
+      "Each statement got its own snapshot, and a commit landed between them",
+      "The second statement read uncommitted data from the writer",
+      "The report's transaction was aborted and silently retried",
+      "The footer query used a stale index that hadn't been vacuumed"
+    ],
+    "answer": 0,
+    "why": "Nothing was dirty. The two statements just describe two moments. Repeatable read gives both one snapshot."
+  },
+  {
+    "id": "tx-06",
+    "post": "db-acid-transactions",
+    "q": "Why does Postgres's repeatable read show no phantoms, though the SQL standard allows them there?",
+    "options": [
+      "It's implemented as snapshot isolation, so the whole transaction reads one snapshot",
+      "It locks the whole table for the length of the transaction",
+      "It runs repeatable read transactions one at a time",
+      "It checks for phantoms at commit and retries them silently"
+    ],
+    "answer": 0,
+    "why": "The standard sets a minimum. Snapshots give the stronger behaviour for free."
+  },
+  {
+    "id": "tx-07",
+    "post": "db-acid-transactions",
+    "q": "How does Postgres provide a snapshot without copying the table?",
+    "options": [
+      "Row versions record the transactions that made and ended them, and a snapshot lists which count as finished",
+      "It keeps a hidden copy of each page that changed since the transaction began",
+      "It blocks writers until all the readers have finished",
+      "It stores old values in an undo log and rebuilds rows on read"
+    ],
+    "answer": 0,
+    "why": "Old versions stay in the table. That's MVCC, and it's why reading never blocks writing."
+  },
+  {
+    "id": "tx-08",
+    "post": "db-acid-transactions",
+    "q": "At repeatable read on MySQL, a plain count says 2, then SELECT ... FOR SHARE in the same transaction says 3. Why?",
+    "options": [
+      "Locking reads see the latest committed rows, and only plain SELECTs use the snapshot",
+      "FOR SHARE starts a new transaction with a new snapshot",
+      "The first count missed a row because of a stale index",
+      "InnoDB's snapshot expires after a fixed number of statements"
+    ],
+    "answer": 0,
+    "why": "The docs say the snapshot applies to SELECT, not necessarily to DML. An UPDATE there works on the latest rows too."
+  },
+  {
+    "id": "tx-09",
+    "post": "db-acid-transactions",
+    "q": "Two sessions read 10 units and write back computed values, 7 and 8, at repeatable read. What happened on each engine?",
+    "options": [
+      "Postgres failed the second write with a serialization error, and MySQL let it overwrite the first",
+      "Both failed the second write with a serialization error",
+      "Both let the second write overwrite the first",
+      "MySQL failed the second write, and Postgres let it overwrite the first"
+    ],
+    "answer": 0,
+    "why": "Same level name, same steps, different results. Test isolation behaviour on the engine you run."
+  },
+  {
+    "id": "tx-10",
+    "post": "db-acid-transactions",
+    "q": "Which change fixes the stock-count lost update even at read committed?",
+    "options": [
+      "UPDATE stock SET units = units - 3, so the database does the arithmetic on the current row",
+      "Reading the value twice before writing it",
+      "Adding an index on the units column",
+      "Setting synchronous_commit to on"
+    ],
+    "answer": 0,
+    "why": "The waiting UPDATE recomputes from the row the first transaction committed, so 5 units remain. The read-then-write in the application is what lost the sale."
+  },
+  {
+    "id": "tx-11",
+    "post": "db-acid-transactions",
+    "q": "Two on-call doctors each see two on call and take themselves off. Why doesn't repeatable read stop this?",
+    "options": [
+      "They wrote different rows, so no write conflict exists: the conflict is between a read and a write",
+      "Repeatable read only protects primary key columns",
+      "Their transactions were on separate connections, which aren't compared",
+      "Boolean columns aren't covered by snapshot isolation"
+    ],
+    "answer": 0,
+    "why": "That's write skew. Only SERIALIZABLE, or locking the rows you read, stops it."
+  },
+  {
+    "id": "tx-12",
+    "post": "db-acid-transactions",
+    "q": "How does Postgres's SERIALIZABLE stop write skew?",
+    "options": [
+      "It tracks what each transaction read, with locks that don't block, and fails one at commit",
+      "It runs transactions strictly one after another",
+      "It takes shared locks on everything read, so writers wait",
+      "It locks the whole table for each transaction"
+    ],
+    "answer": 0,
+    "why": "Those locks show up as SIReadLock. The loser gets a serialization error and must retry."
+  },
+  {
+    "id": "tx-13",
+    "post": "db-acid-transactions",
+    "q": "The same doctors at SERIALIZABLE on MySQL ended with a deadlock error. Why?",
+    "options": [
+      "InnoDB turns plain SELECTs into FOR SHARE, so each update waited on the other's shared lock",
+      "MySQL's SERIALIZABLE is implemented with a single global lock",
+      "The two transactions used different isolation levels by accident",
+      "InnoDB detected write skew and labelled it as a deadlock"
+    ],
+    "answer": 0,
+    "why": "That's lock-based serializable, which is what my notes described as if it were universal. The rule held by a different route."
+  },
+  {
+    "id": "tx-14",
+    "post": "db-acid-transactions",
+    "q": "Which is the fair trade between SERIALIZABLE and SELECT ... FOR UPDATE?",
+    "options": [
+      "Serializable keeps concurrency and needs retry code, and FOR UPDATE queues work but rarely fails",
+      "Serializable is always slower, and FOR UPDATE is always safer",
+      "Serializable needs no application changes, and FOR UPDATE needs a retry loop",
+      "They're the same thing with different syntax"
+    ],
+    "answer": 0,
+    "why": "Optimistic against pessimistic. Which wins depends on how often conflicts really happen."
+  },
+  {
+    "id": "tx-15",
+    "post": "db-acid-transactions",
+    "q": "A pictures table says 5 likes, and picture_likes holds 2 rows. Which meaning of consistency is broken?",
+    "options": [
+      "Consistency in data: the stored data breaks a rule, though nothing crashed",
+      "Consistency in reads: a replica hasn't caught up yet",
+      "Isolation: another transaction read uncommitted data",
+      "Durability: some rows weren't flushed to disk"
+    ],
+    "answer": 0,
+    "why": "The database can only enforce rules you declare. The second meaning, reads seeing the latest write, is about copies."
+  },
+  {
+    "id": "tx-16",
+    "post": "db-acid-transactions",
+    "q": "What has to reach disk before COMMIT returns in Postgres?",
+    "options": [
+      "The WAL records for the transaction, forced there with fsync",
+      "Every data page the transaction changed",
+      "Both the WAL and the data pages, in one write",
+      "Nothing: the OS cache is treated as durable"
+    ],
+    "answer": 0,
+    "why": "Only the log needs to be safe. Data pages are written later, at a checkpoint, and the log can rebuild them."
+  },
+  {
+    "id": "tx-17",
+    "post": "db-acid-transactions",
+    "q": "Why isn't a successful write() call enough for durability?",
+    "options": [
+      "The OS may hold the data in its cache, so power loss can lose it until fsync confirms",
+      "write() is asynchronous and can fail silently without any error",
+      "write() only updates file metadata, not contents",
+      "Disks can't accept writes smaller than one page"
+    ],
+    "answer": 0,
+    "why": "fsync forces the data onto the disk and waits. That wait is the real cost of a commit."
+  },
+  {
+    "id": "tx-18",
+    "post": "db-acid-transactions",
+    "q": "With synchronous_commit=off, a killed server lost 23, 24 and 161 acknowledged commits. What didn't happen?",
+    "options": [
+      "No transaction was left half done: only the most recent commits went missing",
+      "Nothing was lost from before the server started that day",
+      "No commits were lost once the server was restarted cleanly",
+      "No client saw an error at all, either before or after the crash"
+    ],
+    "answer": 0,
+    "why": "The database stays consistent. You lose the last moments of data, bounded by three times wal_writer_delay."
+  },
+  {
+    "id": "tx-19",
+    "post": "db-acid-transactions",
+    "q": "In one run, 1,079 commits were acknowledged and 1,080 rows survived. What does the extra row mean?",
+    "options": [
+      "That commit reached disk, and the server died before the reply got back",
+      "A row was duplicated during crash recovery",
+      "The client's counter was off by one because of a race",
+      "A background process inserted a row during restart"
+    ],
+    "answer": 0,
+    "why": "A client can't tell a lost reply from a lost write. That's why retries need idempotency."
+  },
+  {
+    "id": "tx-20",
+    "post": "db-acid-transactions",
+    "q": "Why can't a container kill test what a power cut does?",
+    "options": [
+      "The OS survives a process kill, so its page cache isn't lost",
+      "Containers write directly to disk, with no cache at all",
+      "Docker takes a snapshot of memory before killing a process",
+      "SIGKILL gives the database time to flush its buffers"
+    ],
+    "answer": 0,
+    "why": "The losses there came from Postgres's own memory. Real power loss would need different hardware to test."
+  },
+  {
+    "id": "tx-21",
+    "post": "db-acid-transactions",
+    "q": "Which phenomenon isn't in the SQL standard's table, yet is perhaps the most dangerous?",
+    "options": [
+      "Lost update",
+      "Dirty read",
+      "Non-repeatable read",
+      "Phantom read"
+    ],
+    "answer": 0,
+    "why": "It was formalised later, in A Critique of ANSI SQL Isolation Levels. It raises no error anywhere."
+  },
+  {
+    "id": "tx-22",
+    "post": "db-acid-transactions",
+    "q": "What does error code 40001 tell an application to do on Postgres?",
+    "options": [
+      "Run the whole transaction again from a fresh read",
+      "Repeat only the statement that failed",
+      "Commit, because the error is only a warning",
+      "Raise the isolation level and carry on"
+    ],
+    "answer": 0,
+    "why": "It's a serialization failure. Retrying only the last statement would reuse a stale view."
+  },
+  {
+    "id": "tx-23",
+    "post": "db-acid-transactions",
+    "q": "A rolled-back INSERT used id 7, so the next row gets id 8. Why?",
+    "options": [
+      "Sequence changes aren't rolled back, so gaps in ids are normal",
+      "Postgres reserves the rolled-back id for later reuse in that session",
+      "The row with id 7 is still in the table, marked as hidden",
+      "The sequence skips numbers to avoid conflicts with replicas"
+    ],
+    "answer": 0,
+    "why": "The docs note this. Making sequences transactional would serialise every insert."
+  },
+  {
+    "id": "tx-24",
+    "post": "db-acid-transactions",
+    "q": "Why does a long read-only transaction cost something, even though it writes nothing?",
+    "options": [
+      "Its snapshot keeps old row versions alive, so they can't be cleaned up",
+      "It holds an exclusive lock on every table it reads",
+      "It stops all writes to the tables it has read",
+      "It forces each commit in the system to wait for it"
+    ],
+    "answer": 0,
+    "why": "VACUUM can't remove versions that an open snapshot might need. Post 14 shows it happening."
+  },
+  {
+    "id": "tx-25",
+    "post": "db-acid-transactions",
+    "q": "What's the difference between REPEATABLE READ and snapshot isolation on Postgres?",
+    "options": [
+      "None: the docs say repeatable read is implemented using snapshot isolation",
+      "Snapshot isolation is stricter, and stops write skew as well",
+      "Repeatable read locks rows, and snapshot isolation doesn't",
+      "Snapshot isolation only applies to read-only transactions"
+    ],
+    "answer": 0,
+    "why": "That's why the course doesn't list it separately. In theory repeatable read means locking rows you read, and Postgres went further."
+  },
+  {
+    "id": "tx-26",
+    "post": "db-locks-and-connection-pools",
+    "q": "A session holds FOR SHARE on a row. What happens to another session's UPDATE of it?",
+    "options": [
+      "It waits until the first session finishes",
+      "It fails at once with a lock error",
+      "It goes through, and the first session's read is invalidated",
+      "It's queued and applied at the next checkpoint"
+    ],
+    "answer": 0,
+    "why": "A blocked statement waits. The lecture said it gets an error, which only happens if you ask for one."
+  },
+  {
+    "id": "tx-27",
+    "post": "db-locks-and-connection-pools",
+    "q": "In Postgres, what row lock does a plain SELECT take?",
+    "options": [
+      "None: it reads a snapshot, so it never blocks and is never blocked by row locks",
+      "A shared lock, released at the end of the statement",
+      "A shared lock, held until the transaction ends",
+      "An exclusive lock on the page it reads"
+    ],
+    "answer": 0,
+    "why": "Readers-block-writers belongs to lock-based designs. You only get it in Postgres by asking for FOR SHARE."
+  },
+  {
+    "id": "tx-28",
+    "post": "db-locks-and-connection-pools",
+    "q": "Where does Postgres record a row lock taken by SELECT ... FOR UPDATE?",
+    "options": [
+      "In the row itself, in xmax, rather than in a lock table",
+      "In a shared hash table of every locked row",
+      "In the WAL, so that it survives a crash",
+      "In the index entry pointing at the row"
+    ],
+    "answer": 0,
+    "why": "So locking many rows doesn't use up memory, and there's no need for lock escalation as in SQL Server."
+  },
+  {
+    "id": "tx-29",
+    "post": "db-locks-and-connection-pools",
+    "q": "When does Postgres look for a deadlock?",
+    "options": [
+      "When a backend has waited deadlock_timeout, 1 second by default, it checks for a cycle",
+      "Continuously, on every lock request",
+      "Once a minute, in a background process",
+      "Only when an administrator runs a check"
+    ],
+    "answer": 0,
+    "why": "The check is relatively expensive, so it only runs if a wait lasts."
+  },
+  {
+    "id": "tx-30",
+    "post": "db-locks-and-connection-pools",
+    "q": "Session A waits first, and B closes the deadlock cycle 150 ms later. Who was aborted in the real run?",
+    "options": [
+      "A, because its one-second check fired after the cycle already existed",
+      "B, because the last one in always fails",
+      "Both, because Postgres aborts everyone in a cycle",
+      "Neither: the first to commit wins, and the other waits"
+    ],
+    "answer": 0,
+    "why": "The victim is whoever's check finds the cycle. 'Last one in' only held when the gap was over a second."
+  },
+  {
+    "id": "tx-31",
+    "post": "db-locks-and-connection-pools",
+    "q": "Session B inserts a key that session A inserted and hasn't committed. What decides B's result?",
+    "options": [
+      "A's outcome: if A rolls back B succeeds, and if A commits B gets a duplicate key error",
+      "The order of their transaction ids: the lower id always wins",
+      "B fails immediately, whatever A does",
+      "B succeeds immediately, and A's commit then fails"
+    ],
+    "answer": 0,
+    "why": "B can't know yet whether the key is free, so it waits for A."
+  },
+  {
+    "id": "tx-32",
+    "post": "db-locks-and-connection-pools",
+    "q": "What's the best way to prevent deadlocks in an application?",
+    "options": [
+      "Take locks in the same order everywhere",
+      "Raise deadlock_timeout to several minutes",
+      "Use SERIALIZABLE for every transaction",
+      "Run all writes on a single connection"
+    ],
+    "answer": 0,
+    "why": "Cycles need opposite orders. Keep a retry for error 40P01 as well, since any transaction can be a victim."
+  },
+  {
+    "id": "tx-33",
+    "post": "db-locks-and-connection-pools",
+    "q": "What does strict two-phase locking mean in practice?",
+    "options": [
+      "A transaction holds all its locks until commit, so nobody reads a value that might roll back",
+      "Every lock is taken twice: once to read and once to write",
+      "Locks are released after each statement, then taken again",
+      "Two transactions take turns holding the same lock"
+    ],
+    "answer": 0,
+    "why": "The rule is to acquire, then release, and never acquire after releasing. Real databases release at the end."
+  },
+  {
+    "id": "tx-34",
+    "post": "db-locks-and-connection-pools",
+    "q": "Ana and Ben both SELECT a free seat, then UPDATE it, with no locks. What's the result?",
+    "options": [
+      "Both are told they have it, and the table shows only the second name",
+      "The second UPDATE fails with a conflict error",
+      "The first UPDATE is rolled back automatically",
+      "The second SELECT waits until the first transaction commits"
+    ],
+    "answer": 0,
+    "why": "A check followed by a write isn't atomic. The second update waited, then overwrote the first."
+  },
+  {
+    "id": "tx-35",
+    "post": "db-locks-and-connection-pools",
+    "q": "Ben's SELECT ... FOR UPDATE waits behind Ana's. What does it return after Ana books the seat?",
+    "options": [
+      "No rows: it re-checks the condition and the seat no longer matches",
+      "The seat as it was when Ben's query began",
+      "A deadlock error, because they wanted the same row",
+      "The seat with Ana's name, and a warning"
+    ],
+    "answer": 0,
+    "why": "The application sees zero rows and tells Ben the seat's gone."
+  },
+  {
+    "id": "tx-36",
+    "post": "db-locks-and-connection-pools",
+    "q": "Why does UPDATE ... WHERE id = 1 AND isbooked = 0 stop double booking at read committed?",
+    "options": [
+      "The waiting UPDATE re-evaluates its WHERE clause on the row the first one committed",
+      "UPDATE statements run one at a time in Postgres",
+      "The WHERE clause takes a table lock for the length of the statement",
+      "Postgres compares both statements and cancels the later one"
+    ],
+    "answer": 0,
+    "why": "So the loser gets UPDATE 0. The docs describe the re-check. It's specific to this level."
+  },
+  {
+    "id": "tx-37",
+    "post": "db-locks-and-connection-pools",
+    "q": "The same UPDATE with the check runs at REPEATABLE READ. What does the second session get?",
+    "options": [
+      "A serialization error, because it can't re-check against a newer row",
+      "UPDATE 0, exactly as at read committed",
+      "UPDATE 1, overwriting the first session's booking",
+      "A deadlock error after one second"
+    ],
+    "answer": 0,
+    "why": "The seat's safe either way, but the code must catch a different thing. That's the 'at the mercy of the implementation' point."
+  },
+  {
+    "id": "tx-38",
+    "post": "db-locks-and-connection-pools",
+    "q": "Which option lets a worker take the next job without waiting for rows others hold?",
+    "options": [
+      "SELECT ... FOR UPDATE SKIP LOCKED",
+      "SELECT ... FOR UPDATE NOWAIT",
+      "SET lock_timeout = '200ms'",
+      "SELECT ... FOR SHARE"
+    ],
+    "answer": 0,
+    "why": "NOWAIT fails at once, and lock_timeout fails after a while. SKIP LOCKED returns the next free row, which is how to build a queue on a table."
+  },
+  {
+    "id": "tx-39",
+    "post": "db-locks-and-connection-pools",
+    "q": "The booking code returns early without release() when a seat is taken. With a pool of 2, what happens on the third request?",
+    "options": [
+      "It times out, or hangs forever by default, because both connections are stuck idle in transaction",
+      "It works, because the pool opens a third connection when needed",
+      "It reuses one of the stuck connections, and inherits its transaction",
+      "The first two requests are cancelled to free their connections"
+    ],
+    "answer": 0,
+    "why": "The real run printed 'timeout exceeded when trying to connect'. Put release() in a finally block."
+  },
+  {
+    "id": "tx-40",
+    "post": "db-locks-and-connection-pools",
+    "q": "Why is idle in transaction worse than idle in pg_stat_activity?",
+    "options": [
+      "The connection holds a transaction open, keeping its locks and stopping VACUUM cleaning up",
+      "It means the server is waiting on a disk that has stopped responding",
+      "It uses far more CPU than an active query",
+      "It means the client has crashed and the server hasn't noticed"
+    ],
+    "answer": 0,
+    "why": "It's the classic sign of a leak or a forgotten COMMIT."
+  },
+  {
+    "id": "tx-41",
+    "post": "db-locks-and-connection-pools",
+    "q": "Why does OFFSET 1000000 LIMIT 10 take so long, even with an index on the sort column?",
+    "options": [
+      "It must produce every skipped row and discard it: the plan shows rows=1000010",
+      "Offsets above a million disable the index",
+      "It sorts the whole table in memory before skipping",
+      "OFFSET takes a table lock while it counts"
+    ],
+    "answer": 0,
+    "why": "An index can't jump to a position. 9,106 pages against 5 for keyset pagination."
+  },
+  {
+    "id": "tx-42",
+    "post": "db-locks-and-connection-pools",
+    "q": "A row is inserted between loading pages 1 and 2 with OFFSET. What does the reader see?",
+    "options": [
+      "The last row of page 1 again at the top of page 2",
+      "An error, because the result set changed",
+      "Nothing changes: offsets are stable within a session",
+      "A gap: one row is skipped and never shown"
+    ],
+    "answer": 0,
+    "why": "Offsets count positions, so everything shifts along. Keyset pagination continues from the last row seen."
+  },
+  {
+    "id": "tx-43",
+    "post": "db-locks-and-connection-pools",
+    "q": "What do you give up with keyset pagination?",
+    "options": [
+      "Jumping straight to an arbitrary page number",
+      "Sorted results",
+      "The use of an index",
+      "Consistency between pages"
+    ],
+    "answer": 0,
+    "why": "You can only move from a known row. Feeds rarely need page 500. Add the primary key as a tie-breaker on non-unique columns."
+  },
+  {
+    "id": "tx-44",
+    "post": "db-locks-and-connection-pools",
+    "q": "Why must a transaction use pool.connect() rather than pool.query() for each statement?",
+    "options": [
+      "pool.query() can pick a different connection each time, and a transaction lives on one",
+      "pool.query() can't run statements that change data",
+      "pool.query() always runs in autocommit, which can't be turned off",
+      "pool.connect() opens a new TCP connection, which transactions need"
+    ],
+    "answer": 0,
+    "why": "BEGIN on one connection and UPDATE on another aren't the same transaction. Take one client, then release it."
+  },
+  {
+    "id": "tx-45",
+    "post": "db-locks-and-connection-pools",
+    "q": "What does connectionTimeoutMillis: 0 mean in node-postgres's Pool?",
+    "options": [
+      "Wait forever for a free connection",
+      "Fail at once if no connection is free",
+      "Close each connection right after use",
+      "Never reuse a connection"
+    ],
+    "answer": 0,
+    "why": "The default turns a connection leak into a hang rather than an error."
+  },
+  {
+    "id": "tx-46",
+    "post": "db-locks-and-connection-pools",
+    "q": "What does a pool remove from each request's cost?",
+    "options": [
+      "The TCP handshake, TLS, authentication, and starting a server process",
+      "The query's execution time on the server",
+      "The time waiting for row locks",
+      "The cost of writing to the WAL"
+    ],
+    "answer": 0,
+    "why": "Measured here: 12.63 ms per lookup with a new connection, against 1.11 ms from a pool."
+  },
+  {
+    "id": "tx-47",
+    "post": "db-locks-and-connection-pools",
+    "q": "Why isn't a bigger pool always better?",
+    "options": [
+      "Real queries compete for CPU and disk, and each Postgres connection is a process",
+      "The driver slows down as the pool grows",
+      "Postgres refuses more than 100 connections from one client",
+      "Larger pools lose transactions under load"
+    ],
+    "answer": 0,
+    "why": "The chart's queries only slept, the best case for a large pool. Past some point more connections just add contention."
+  },
+  {
+    "id": "tx-48",
+    "post": "db-locks-and-connection-pools",
+    "q": "What happens to a transaction id in Postgres during a read-only transaction?",
+    "options": [
+      "None is assigned until the first write",
+      "One is assigned at BEGIN, like any other",
+      "One is assigned for each statement",
+      "It borrows the id of the last committed transaction"
+    ],
+    "answer": 0,
+    "why": "pg_current_xact_id_if_assigned() stayed empty until the INSERT, so reads skip that cost anyway."
+  },
+  {
+    "id": "tx-49",
+    "post": "db-locks-and-connection-pools",
+    "q": "What's the main benefit of BEGIN READ ONLY?",
+    "options": [
+      "Protection: a write inside it fails with an error",
+      "A large speed-up on every query",
+      "It stops other sessions from writing to those tables",
+      "It takes a consistent snapshot that read committed can't give"
+    ],
+    "answer": 0,
+    "why": "The real run printed 'cannot execute INSERT in a read-only transaction'. The optimisation is small, because Postgres already skips the id."
+  },
+  {
+    "id": "tx-50",
+    "post": "db-locks-and-connection-pools",
+    "q": "UPDATE t SET v = v + 1 WHERE id = 1 AND version = 7 returns 0 rows. What does a version column tell you?",
+    "options": [
+      "Someone else changed the row first: this is optimistic control done by the application",
+      "The row was deleted, and can't be updated again",
+      "The transaction was rolled back by a deadlock",
+      "A trigger rejected the update"
+    ],
+    "answer": 0,
+    "why": "No lock was held. You read the version, then detect a conflict at write time, and retry."
+  }
+]

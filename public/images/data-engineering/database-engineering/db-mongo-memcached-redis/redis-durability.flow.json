@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "from": "SET",
+      "to": "memory",
+      "type": "data"
+    },
+    {
+      "from": "memory",
+      "to": "AOF",
+      "type": "data"
+    }
+  ]
+}

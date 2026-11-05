@@ -1,0 +1,1192 @@
+{
+ "theaters": {
+  "create-index-lock": {
+   "title": "CREATE INDEX blocks writes",
+   "alt": "A recorded run on PostgreSQL. Session A creates an index inside a transaction. Session B's reads still work, but its insert waits until session A commits, because CREATE INDEX holds a lock that conflicts with writes.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "tableName": "orders",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "The transaction holds the index build open, so the lock is easy to see. A real build on a big table holds it for as long as the build takes.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "CREATE INDEX orders_total ON orders (total)",
+       "note": "Session A builds an index, which takes a SHARE lock on the table.",
+       "status": "ok",
+       "tag": "CREATE",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "SELECT count(*) FROM orders",
+       "note": "Reads are fine: a SHARE lock doesn't conflict with them.",
+       "status": "ok",
+       "tag": "SELECT",
+       "cols": [
+        "count"
+       ],
+       "rows": [
+        [
+         "1000"
+        ]
+       ],
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "INSERT INTO orders (total) VALUES (1)",
+       "note": "A write isn't. The application's insert now hangs.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       },
+       "resolvedAt": 4,
+       "resolved": {
+        "status": "ok",
+        "tag": "INSERT 1"
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "Only when the build ends does the insert go through. On a table with hundreds of millions of rows, that could be hours.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1001"
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "create-index-concurrently": {
+   "title": "CONCURRENTLY doesn't block, but it does wait",
+   "alt": "A recorded run on PostgreSQL. Session A has a transaction open. Session B starts CREATE INDEX CONCURRENTLY, which waits for that older transaction to finish. Meanwhile a third session's inserts go through without waiting. When session A commits, the index build completes.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "A",
+    "B",
+    "C"
+   ],
+   "tableName": "orders",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "A",
+       "sql": "BEGIN",
+       "note": "Session A opens a transaction and does some work.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "INSERT INTO orders (total) VALUES (2)",
+       "note": "It's still open.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "B",
+       "sql": "CREATE INDEX CONCURRENTLY orders_total ON orders (total)",
+       "note": "The concurrent build can't finish while an older transaction might still change the table, so it waits.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1000"
+         ]
+        ]
+       },
+       "resolvedAt": 4,
+       "resolved": {
+        "status": "ok",
+        "tag": "CREATE"
+       }
+      },
+      {
+       "s": "C",
+       "sql": "INSERT INTO orders (total) VALUES (3)",
+       "note": "But it blocks nobody. A new insert goes straight through.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1001"
+         ]
+        ]
+       }
+      },
+      {
+       "s": "A",
+       "sql": "COMMIT",
+       "note": "Session A finishes. Now the build can complete, and the statement returns.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "rows"
+        ],
+        "rows": [
+         [
+          "1002"
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": {
+  "plan-basics": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "\\d employees",
+     "out": "                            Table \"public.employees\"\n Column |  Type   | Collation | Nullable |                Default                \n--------+---------+-----------+----------+---------------------------------------\n id     | integer |           | not null | nextval('employees_id_seq'::regclass)\n name   | text    |           |          | \nIndexes:\n    \"employees_pkey\" PRIMARY KEY, btree (id)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT id FROM employees WHERE id = 2000;",
+     "out": "                                                            QUERY PLAN                                                            \n----------------------------------------------------------------------------------------------------------------------------------\n Index Only Scan using employees_pkey on employees  (cost=0.42..4.44 rows=1 width=4) (actual time=0.070..0.071 rows=1.00 loops=1)\n   Index Cond: (id = 2000)\n   Heap Fetches: 0\n   Index Searches: 1\n   Buffers: shared hit=4\n Planning:\n   Buffers: shared hit=14\n Planning Time: 0.147 ms\n Execution Time: 0.139 ms\n(9 rows)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT name FROM employees WHERE id = 2000;",
+     "out": "                                                         QUERY PLAN                                                          \n-----------------------------------------------------------------------------------------------------------------------------\n Index Scan using employees_pkey on employees  (cost=0.42..8.44 rows=1 width=6) (actual time=0.006..0.006 rows=1.00 loops=1)\n   Index Cond: (id = 2000)\n   Index Searches: 1\n   Buffers: shared hit=4\n Planning:\n   Buffers: shared hit=3\n Planning Time: 0.033 ms\n Execution Time: 0.026 ms\n(8 rows)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT id FROM employees WHERE name = 'Zs';",
+     "out": "                                                        QUERY PLAN                                                         \n---------------------------------------------------------------------------------------------------------------------------\n Gather  (cost=1000.00..11334.23 rows=9 width=4) (actual time=21.607..27.521 rows=0.00 loops=1)\n   Workers Planned: 2\n   Workers Launched: 2\n   Buffers: shared hit=5125\n   ->  Parallel Seq Scan on employees  (cost=0.00..10333.33 rows=4 width=4) (actual time=15.074..15.076 rows=0.00 loops=3)\n         Filter: (name = 'Zs'::text)\n         Rows Removed by Filter: 333333\n         Buffers: shared hit=5125\n Planning Time: 0.019 ms\n Execution Time: 27.532 ms\n(10 rows)"
+    }
+   ]
+  },
+  "plan-basics-indexed": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT id, name FROM employees WHERE name = 'Zs';",
+     "out": "                                                        QUERY PLAN                                                         \n---------------------------------------------------------------------------------------------------------------------------\n Bitmap Heap Scan on employees  (cost=4.50..43.30 rows=10 width=10) (actual time=0.097..0.098 rows=0.00 loops=1)\n   Recheck Cond: (name = 'Zs'::text)\n   Buffers: shared read=3\n   ->  Bitmap Index Scan on employees_name  (cost=0.00..4.50 rows=10 width=0) (actual time=0.091..0.091 rows=0.00 loops=1)\n         Index Cond: (name = 'Zs'::text)\n         Index Searches: 1\n         Buffers: shared read=3\n Planning:\n   Buffers: shared hit=84 read=1\n Planning Time: 0.997 ms\n Execution Time: 0.177 ms\n(11 rows)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT id, name FROM employees WHERE name LIKE '%Zs%';",
+     "out": "                                                         QUERY PLAN                                                          \n-----------------------------------------------------------------------------------------------------------------------------\n Gather  (cost=1000.00..11341.33 rows=90 width=10) (actual time=19.910..22.957 rows=0.00 loops=1)\n   Workers Planned: 2\n   Workers Launched: 2\n   Buffers: shared hit=5124\n   ->  Parallel Seq Scan on employees  (cost=0.00..10332.33 rows=38 width=10) (actual time=16.356..16.357 rows=0.00 loops=3)\n         Filter: (name ~~ '%Zs%'::text)\n         Rows Removed by Filter: 333333\n         Buffers: shared hit=5124\n Planning:\n   Buffers: shared hit=2\n Planning Time: 0.038 ms\n Execution Time: 22.972 ms\n(12 rows)"
+    }
+   ]
+  },
+  "trigram": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT id, name FROM employees WHERE name LIKE '%abc%';",
+     "out": "                                                            QUERY PLAN                                                             \n-----------------------------------------------------------------------------------------------------------------------------------\n Bitmap Heap Scan on employees  (cost=17.54..342.88 rows=90 width=10) (actual time=0.459..3.241 rows=825.00 loops=1)\n   Recheck Cond: (name ~~ '%abc%'::text)\n   Heap Blocks: exact=773\n   Buffers: shared hit=777\n   ->  Bitmap Index Scan on employees_name_trgm  (cost=0.00..17.52 rows=90 width=0) (actual time=0.400..0.400 rows=825.00 loops=1)\n         Index Cond: (name ~~ '%abc%'::text)\n         Index Searches: 1\n         Buffers: shared hit=4\n Planning:\n   Buffers: shared hit=85\n Planning Time: 1.682 ms\n Execution Time: 3.363 ms\n(12 rows)"
+    }
+   ]
+  },
+  "cost-numbers": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN SELECT * FROM grades;",
+     "out": "                           QUERY PLAN                            \n-----------------------------------------------------------------\n Seq Scan on grades  (cost=0.00..16370.00 rows=1000000 width=22)\n(1 row)"
+    },
+    {
+     "cmd": "EXPLAIN SELECT * FROM grades ORDER BY g;",
+     "out": "                              QUERY PLAN                               \n-----------------------------------------------------------------------\n Sort  (cost=136537.84..139037.84 rows=1000000 width=22)\n   Sort Key: g\n   ->  Seq Scan on grades  (cost=0.00..16370.00 rows=1000000 width=22)\n(3 rows)"
+    },
+    {
+     "cmd": "EXPLAIN SELECT * FROM grades ORDER BY g LIMIT 10;",
+     "out": "                                        QUERY PLAN                                         \n-------------------------------------------------------------------------------------------\n Limit  (cost=20540.71..20541.88 rows=10 width=22)\n   ->  Gather Merge  (cost=20540.71..137007.31 rows=1000001 width=22)\n         Workers Planned: 2\n         ->  Sort  (cost=19540.69..20582.36 rows=416667 width=22)\n               Sort Key: g\n               ->  Parallel Seq Scan on grades  (cost=0.00..10536.67 rows=416667 width=22)\n(6 rows)"
+    }
+   ]
+  },
+  "grades-steps": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT name FROM grades WHERE id = 7;",
+     "out": "                                                       QUERY PLAN                                                       \n------------------------------------------------------------------------------------------------------------------------\n Gather  (cost=1000.00..12578.43 rows=1 width=14) (actual time=0.463..19.323 rows=1.00 loops=1)\n   Workers Planned: 2\n   Workers Launched: 2\n   Buffers: shared hit=6370\n   ->  Parallel Seq Scan on grades  (cost=0.00..11578.33 rows=1 width=14) (actual time=7.286..12.477 rows=0.33 loops=3)\n         Filter: (id = 7)\n         Rows Removed by Filter: 333333\n         Buffers: shared hit=6370\n Planning:\n   Buffers: shared hit=29\n Planning Time: 0.339 ms\n Execution Time: 19.359 ms\n(12 rows)"
+    },
+    {
+     "cmd": "CREATE INDEX id_idx ON grades (id);",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT name FROM grades WHERE id = 7;",
+     "out": "                                                    QUERY PLAN                                                     \n-------------------------------------------------------------------------------------------------------------------\n Index Scan using id_idx on grades  (cost=0.42..8.44 rows=1 width=14) (actual time=0.034..0.035 rows=1.00 loops=1)\n   Index Cond: (id = 7)\n   Index Searches: 1\n   Buffers: shared hit=1 read=3\n Planning:\n   Buffers: shared hit=19 read=1\n Planning Time: 0.954 ms\n Execution Time: 0.055 ms\n(8 rows)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT id FROM grades WHERE id = 7;",
+     "out": "                                                      QUERY PLAN                                                       \n-----------------------------------------------------------------------------------------------------------------------\n Index Only Scan using id_idx on grades  (cost=0.42..4.44 rows=1 width=4) (actual time=0.014..0.014 rows=1.00 loops=1)\n   Index Cond: (id = 7)\n   Heap Fetches: 0\n   Index Searches: 1\n   Buffers: shared hit=4\n Planning Time: 0.018 ms\n Execution Time: 0.018 ms\n(7 rows)"
+    },
+    {
+     "cmd": "DROP INDEX id_idx;",
+     "out": ""
+    },
+    {
+     "cmd": "CREATE INDEX id_idx ON grades (id) INCLUDE (name);",
+     "out": ""
+    },
+    {
+     "cmd": "VACUUM grades;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT name FROM grades WHERE id = 7;",
+     "out": "                                                       QUERY PLAN                                                       \n------------------------------------------------------------------------------------------------------------------------\n Index Only Scan using id_idx on grades  (cost=0.42..4.44 rows=1 width=14) (actual time=0.041..0.041 rows=1.00 loops=1)\n   Index Cond: (id = 7)\n   Heap Fetches: 0\n   Index Searches: 1\n   Buffers: shared hit=1 read=3\n Planning:\n   Buffers: shared hit=3\n Planning Time: 0.100 ms\n Execution Time: 0.059 ms\n(9 rows)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT g FROM grades WHERE id = 7;",
+     "out": "                                                    QUERY PLAN                                                    \n------------------------------------------------------------------------------------------------------------------\n Index Scan using id_idx on grades  (cost=0.42..8.44 rows=1 width=4) (actual time=0.004..0.005 rows=1.00 loops=1)\n   Index Cond: (id = 7)\n   Index Searches: 1\n   Buffers: shared hit=4\n Planning:\n   Buffers: shared hit=3\n Planning Time: 0.032 ms\n Execution Time: 0.009 ms\n(8 rows)"
+    }
+   ]
+  },
+  "students": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS) SELECT id, g FROM students WHERE g > 80 AND g < 95 ORDER BY g;",
+     "out": "                                                              QUERY PLAN                                                               \n---------------------------------------------------------------------------------------------------------------------------------------\n Gather Merge  (cost=36230.17..52443.12 rows=139207 width=8) (actual time=31.281..65.635 rows=140247.00 loops=1)\n   Workers Planned: 2\n   Workers Launched: 2\n   Buffers: shared hit=24465\n   ->  Sort  (cost=35230.15..35375.16 rows=58003 width=8) (actual time=27.976..32.501 rows=46749.00 loops=3)\n         Sort Key: g\n         Sort Method: quicksort  Memory: 2714kB\n         Buffers: shared hit=24465\n         Worker 0:  Sort Method: quicksort  Memory: 2618kB\n         Worker 1:  Sort Method: quicksort  Memory: 2564kB\n         ->  Parallel Seq Scan on students  (cost=0.00..30641.00 rows=58003 width=8) (actual time=0.111..22.746 rows=46749.00 loops=3)\n               Filter: ((g > 80) AND (g < 95))\n               Rows Removed by Filter: 286584\n               Buffers: shared hit=24391\n Planning:\n   Buffers: shared hit=70\n Planning Time: 0.369 ms\n Execution Time: 70.051 ms\n(18 rows)"
+    },
+    {
+     "cmd": "CREATE INDEX students_g ON students (g);",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS) SELECT id, g FROM students WHERE g > 80 AND g < 95 ORDER BY g;",
+     "out": "                                                               QUERY PLAN                                                                \n-----------------------------------------------------------------------------------------------------------------------------------------\n Sort  (cost=42183.46..42531.48 rows=139207 width=8) (actual time=66.713..72.795 rows=140247.00 loops=1)\n   Sort Key: g\n   Sort Method: external merge  Disk: 2480kB\n   Buffers: shared hit=24341 read=121, temp read=310 written=311\n   ->  Bitmap Heap Scan on students  (cost=1907.30..28386.40 rows=139207 width=8) (actual time=7.349..46.980 rows=140247.00 loops=1)\n         Recheck Cond: ((g > 80) AND (g < 95))\n         Heap Blocks: exact=24340\n         Buffers: shared hit=24341 read=121\n         ->  Bitmap Index Scan on students_g  (cost=0.00..1872.49 rows=139207 width=0) (actual time=5.239..5.241 rows=140247.00 loops=1)\n               Index Cond: ((g > 80) AND (g < 95))\n               Index Searches: 1\n               Buffers: shared hit=1 read=121\n Planning:\n   Buffers: shared hit=27 read=6\n Planning Time: 1.091 ms\n Execution Time: 77.020 ms\n(16 rows)"
+    },
+    {
+     "cmd": "DROP INDEX students_g;",
+     "out": ""
+    },
+    {
+     "cmd": "CREATE INDEX students_g ON students (g) INCLUDE (id);",
+     "out": ""
+    },
+    {
+     "cmd": "VACUUM students;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS) SELECT id, g FROM students WHERE g > 80 AND g < 95 ORDER BY g;",
+     "out": "                                                                QUERY PLAN                                                                 \n-------------------------------------------------------------------------------------------------------------------------------------------\n Index Only Scan using students_g on students  (cost=0.42..4316.56 rows=139207 width=8) (actual time=0.012..13.148 rows=140247.00 loops=1)\n   Index Cond: ((g > 80) AND (g < 95))\n   Heap Fetches: 0\n   Index Searches: 1\n   Buffers: shared hit=2 read=386\n Planning:\n   Buffers: shared hit=14 read=5\n Planning Time: 0.107 ms\n Execution Time: 16.885 ms\n(9 rows)"
+    },
+    {
+     "cmd": "SELECT pg_size_pretty(pg_relation_size('students')) AS table_size, pg_size_pretty(pg_relation_size('students_g')) AS index_size;",
+     "out": " table_size | index_size \n------------+------------\n 191 MB     | 21 MB\n(1 row)"
+    }
+   ]
+  },
+  "visibility": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT count(*) FROM fresh WHERE id < 50000;",
+     "out": "                                  QUERY PLAN                                  \n------------------------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=222 read=138\n   ->  Index Only Scan using fresh_id on fresh (actual rows=49999.00 loops=1)\n         Index Cond: (id < 50000)\n         Heap Fetches: 49999\n         Index Searches: 1\n         Buffers: shared hit=222 read=138\n Planning:\n   Buffers: shared hit=67 read=1\n(9 rows)"
+    },
+    {
+     "cmd": "VACUUM fresh;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT count(*) FROM fresh WHERE id < 50000;",
+     "out": "                                  QUERY PLAN                                  \n------------------------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=139\n   ->  Index Only Scan using fresh_id on fresh (actual rows=49999.00 loops=1)\n         Index Cond: (id < 50000)\n         Heap Fetches: 0\n         Index Searches: 1\n         Buffers: shared hit=139\n Planning:\n   Buffers: shared hit=4\n(9 rows)"
+    },
+    {
+     "cmd": "UPDATE fresh SET id = id WHERE id < 5000;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT count(*) FROM fresh WHERE id < 50000;",
+     "out": "                                  QUERY PLAN                                  \n------------------------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   Buffers: shared hit=10152\n   ->  Index Only Scan using fresh_id on fresh (actual rows=49999.00 loops=1)\n         Index Cond: (id < 50000)\n         Heap Fetches: 10197\n         Index Searches: 1\n         Buffers: shared hit=10152\n(7 rows)"
+    }
+   ]
+  },
+  "tiny-table": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN SELECT * FROM tiny WHERE id = 3;",
+     "out": "                     QUERY PLAN                      \n-----------------------------------------------------\n Seq Scan on tiny  (cost=0.00..1.09 rows=1 width=10)\n   Filter: (id = 3)\n(2 rows)"
+    },
+    {
+     "cmd": "SELECT relpages FROM pg_class WHERE relname = 'tiny';",
+     "out": " relpages \n----------\n        1\n(1 row)"
+    }
+   ]
+  },
+  "stale-stats": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT * FROM orders WHERE status = 'shipped';",
+     "out": "                                                          QUERY PLAN                                                           \n-------------------------------------------------------------------------------------------------------------------------------\n Index Scan using orders_status on orders  (cost=0.41..4.43 rows=1 width=8) (actual time=0.033..78.331 rows=999990.00 loops=1)\n   Index Cond: (status = 'shipped'::text)\n   Index Searches: 1\n   Buffers: shared hit=6191\n Planning:\n   Buffers: shared hit=85\n Planning Time: 0.308 ms\n Execution Time: 102.695 ms\n(8 rows)"
+    },
+    {
+     "cmd": "ANALYZE orders;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT * FROM orders WHERE status = 'shipped';",
+     "out": "                                                    QUERY PLAN                                                     \n-------------------------------------------------------------------------------------------------------------------\n Seq Scan on orders  (cost=0.00..17906.04 rows=999970 width=11) (actual time=0.015..73.758 rows=999990.00 loops=1)\n   Filter: (status = 'shipped'::text)\n   Rows Removed by Filter: 13\n   Buffers: shared hit=5406\n Planning:\n   Buffers: shared hit=25\n Planning Time: 0.151 ms\n Execution Time: 98.072 ms\n(8 rows)"
+    },
+    {
+     "cmd": "EXPLAIN ANALYZE SELECT * FROM orders WHERE status = 'held';",
+     "out": "                                                         QUERY PLAN                                                         \n----------------------------------------------------------------------------------------------------------------------------\n Index Scan using orders_status on orders  (cost=0.42..9.00 rows=33 width=11) (actual time=0.018..0.029 rows=10.00 loops=1)\n   Index Cond: (status = 'held'::text)\n   Index Searches: 1\n   Buffers: shared hit=13\n Planning Time: 0.054 ms\n Execution Time: 0.037 ms\n(6 rows)"
+    }
+   ]
+  },
+  "seek-or-scan": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT g FROM grades WHERE id IN (1, 5003, 9000);",
+     "out": "                            QUERY PLAN                             \n-------------------------------------------------------------------\n Index Scan using grades_pkey on grades (actual rows=3.00 loops=1)\n   Index Cond: (id = ANY ('{1,5003,9000}'::integer[]))\n   Index Searches: 3\n   Buffers: shared hit=12\n Planning:\n   Buffers: shared hit=106\n(6 rows)"
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT g FROM grades WHERE id BETWEEN 1 AND 9000;",
+     "out": "                              QUERY PLAN                              \n----------------------------------------------------------------------\n Index Scan using grades_pkey on grades (actual rows=9000.00 loops=1)\n   Index Cond: ((id >= 1) AND (id <= 9000))\n   Index Searches: 1\n   Buffers: shared hit=67\n Planning:\n   Buffers: shared hit=18\n(6 rows)"
+    }
+   ]
+  },
+  "duplicates": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE INDEX unique_ish ON tickets (id);",
+     "out": ""
+    },
+    {
+     "cmd": "CREATE INDEX dedup_on ON tickets (project);",
+     "out": ""
+    },
+    {
+     "cmd": "CREATE INDEX dedup_off ON tickets (project) WITH (deduplicate_items = off);",
+     "out": ""
+    },
+    {
+     "cmd": "SELECT indexrelname AS index, pg_size_pretty(pg_relation_size(indexrelid)) AS size FROM pg_stat_user_indexes ORDER BY pg_relation_size(indexrelid) DESC;",
+     "out": "   index    |  size   \n------------+---------\n dedup_off  | 21 MB\n unique_ish | 21 MB\n dedup_on   | 6800 kB\n(3 rows)"
+    }
+   ]
+  },
+  "invalid-index": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "CREATE UNIQUE INDEX CONCURRENTLY users_email ON users (email);",
+     "out": "ERROR:  could not create unique index \"users_email\"\nDETAIL:  Key (email)=(a@example.com) is duplicated."
+    },
+    {
+     "cmd": "\\d users",
+     "out": "               Table \"public.users\"\n Column |  Type   | Collation | Nullable | Default \n--------+---------+-----------+----------+---------\n id     | integer |           |          | \n email  | text    |           |          | \nIndexes:\n    \"users_email\" UNIQUE, btree (email) INVALID"
+    },
+    {
+     "cmd": "DROP INDEX users_email;",
+     "out": ""
+    }
+   ]
+  },
+  "index-hint-mysql": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN SELECT id FROM t WHERE a = 1 AND b = 1;",
+     "out": "+----+-------------+-------+------------+------+---------------+------+---------+-------+------+----------+-------------+\n| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref   | rows | filtered | Extra       |\n+----+-------------+-------+------------+------+---------------+------+---------+-------+------+----------+-------------+\n|  1 | SIMPLE      | t     | NULL       | ref  | i_a,i_b       | i_b  | 5       | const |    1 |    10.00 | Using where |\n+----+-------------+-------+------------+------+---------------+------+---------+-------+------+----------+-------------+\n1 row in set, 1 warning (0.02 sec)"
+    },
+    {
+     "cmd": "EXPLAIN SELECT id FROM t FORCE INDEX (i_a) WHERE a = 1 AND b = 1;",
+     "out": "+----+-------------+-------+------------+------+---------------+------+---------+-------+------+----------+-------------+\n| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref   | rows | filtered | Extra       |\n+----+-------------+-------+------------+------+---------------+------+---------+-------+------+----------+-------------+\n|  1 | SIMPLE      | t     | NULL       | ref  | i_a           | i_a  | 5       | const |  100 |     0.10 | Using where |\n+----+-------------+-------+------------+------+---------------+------+---------+-------+------+----------+-------------+\n1 row in set, 1 warning (0.00 sec)"
+    }
+   ]
+  },
+  "skew": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SET max_parallel_workers_per_gather = 0;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN SELECT * FROM customers WHERE state = 'California';",
+     "out": "                             QUERY PLAN                             \n--------------------------------------------------------------------\n Seq Scan on customers  (cost=0.00..17906.00 rows=1000000 width=15)\n   Filter: (state = 'California'::text)\n(2 rows)"
+    },
+    {
+     "cmd": "EXPLAIN SELECT * FROM customers WHERE state = 'Florida';",
+     "out": "                                    QUERY PLAN                                    \n----------------------------------------------------------------------------------\n Index Scan using customers_state on customers  (cost=0.42..4.44 rows=1 width=15)\n   Index Cond: (state = 'Florida'::text)\n(2 rows)"
+    },
+    {
+     "cmd": "SELECT most_common_vals, most_common_freqs FROM pg_stats WHERE tablename = 'customers' AND attname = 'state';",
+     "out": " most_common_vals | most_common_freqs \n------------------+-------------------\n {California}     | {1}\n(1 row)"
+    }
+   ]
+  },
+  "skip-scan": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SET max_parallel_workers_per_gather = 0;",
+     "out": ""
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT c FROM few WHERE b = 40;",
+     "out": "                           QUERY PLAN                           \n----------------------------------------------------------------\n Bitmap Heap Scan on few (actual rows=956.00 loops=1)\n   Recheck Cond: (b = 40)\n   Heap Blocks: exact=886\n   Buffers: shared hit=911 read=17\n   ->  Bitmap Index Scan on few_ab (actual rows=956.00 loops=1)\n         Index Cond: (b = 40)\n         Index Searches: 12\n         Buffers: shared hit=25 read=17\n Planning:\n   Buffers: shared hit=73\n(10 rows)"
+    },
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT c FROM many WHERE b = 40;",
+     "out": "                   QUERY PLAN                   \n------------------------------------------------\n Seq Scan on many (actual rows=1030.00 loops=1)\n   Filter: (b = 40)\n   Rows Removed by Filter: 998970\n   Buffers: shared hit=5406\n Planning:\n   Buffers: shared hit=28\n(6 rows)"
+    }
+   ]
+  }
+ },
+ "charts": {
+  "plan-cost": {
+   "engine": "PostgreSQL 18.6",
+   "title": "What the planner expects each plan to cost",
+   "alt": "The planner's estimated cost of three plans for one query as the share of matching rows grows from 0.001% to 100% of a million-row table. Index Scan is cheapest for very few rows, Bitmap Heap Scan takes over in the middle, and Seq Scan is flat and becomes cheapest once a large share matches.",
+   "x": {
+    "label": "% of rows matching",
+    "log": true,
+    "format": "pct"
+   },
+   "y": {
+    "label": "estimated cost",
+    "log": true
+   },
+   "series": [
+    {
+     "name": "Index Scan",
+     "points": [
+      [
+       0.001,
+       32.57
+      ],
+      [
+       0.01,
+       366.23
+      ],
+      [
+       0.1,
+       3587.01
+      ],
+      [
+       0.5,
+       15341.59
+      ],
+      [
+       1,
+       25954.81
+      ],
+      [
+       2,
+       41273.63
+      ],
+      [
+       5,
+       42736.67
+      ],
+      [
+       10,
+       44272.61
+      ],
+      [
+       20,
+       47200.77
+      ],
+      [
+       30,
+       50133.43
+      ],
+      [
+       50,
+       55975.13
+      ],
+      [
+       75,
+       63414.67
+      ],
+      [
+       100,
+       70872.39
+      ]
+     ]
+    },
+    {
+     "name": "Bitmap Heap Scan",
+     "points": [
+      [
+       0.001,
+       32.05,
+       "the planner's pick"
+      ],
+      [
+       0.01,
+       341.26,
+       "the planner's pick"
+      ],
+      [
+       0.1,
+       2806.42,
+       "the planner's pick"
+      ],
+      [
+       0.5,
+       8433.43,
+       "the planner's pick"
+      ],
+      [
+       1,
+       10785.71,
+       "the planner's pick"
+      ],
+      [
+       2,
+       11031.13,
+       "the planner's pick"
+      ],
+      [
+       5,
+       11945.31,
+       "the planner's pick"
+      ],
+      [
+       10,
+       13623.69,
+       "the planner's pick"
+      ],
+      [
+       20,
+       16823.57,
+       "the planner's pick"
+      ],
+      [
+       30,
+       20028.57,
+       "the planner's pick"
+      ],
+      [
+       50,
+       26412.26
+      ],
+      [
+       75,
+       34542.53
+      ],
+      [
+       100,
+       42692.39
+      ]
+     ]
+    },
+    {
+     "name": "Seq Scan",
+     "points": [
+      [
+       0.001,
+       22810.03
+      ],
+      [
+       0.01,
+       22810.23
+      ],
+      [
+       0.1,
+       22812.33
+      ],
+      [
+       0.5,
+       22821.65
+      ],
+      [
+       1,
+       22833.31
+      ],
+      [
+       2,
+       22860.16
+      ],
+      [
+       5,
+       22936.04
+      ],
+      [
+       10,
+       23065.53
+      ],
+      [
+       20,
+       23312.55
+      ],
+      [
+       30,
+       23560.13
+      ],
+      [
+       50,
+       24052.85,
+       "the planner's pick"
+      ],
+      [
+       75,
+       24680.79,
+       "the planner's pick"
+      ],
+      [
+       100,
+       25310,
+       "the planner's pick"
+      ]
+     ]
+    }
+   ]
+  },
+  "plan-time": {
+   "engine": "PostgreSQL 18.6",
+   "title": "What each plan really took, from a warm cache",
+   "alt": "Measured time of the same three plans on the same query from a warm cache. The lines cross at different places from the planner's estimates, because the planner's default costs assume random page reads are four times as slow as sequential ones.",
+   "x": {
+    "label": "% of rows matching",
+    "log": true,
+    "format": "pct"
+   },
+   "y": {
+    "label": "execution time",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "Index Scan",
+     "points": [
+      [
+       0.001,
+       0.02
+      ],
+      [
+       0.01,
+       0.04
+      ],
+      [
+       0.1,
+       0.47
+      ],
+      [
+       0.5,
+       3.76
+      ],
+      [
+       1,
+       10.03
+      ],
+      [
+       2,
+       12.23
+      ],
+      [
+       5,
+       36.84
+      ],
+      [
+       10,
+       58.15
+      ],
+      [
+       20,
+       98.47
+      ],
+      [
+       30,
+       155.99
+      ],
+      [
+       50,
+       233.62
+      ],
+      [
+       75,
+       365.2
+      ],
+      [
+       100,
+       428.39
+      ]
+     ]
+    },
+    {
+     "name": "Bitmap Heap Scan",
+     "points": [
+      [
+       0.001,
+       0.02,
+       "the planner's pick"
+      ],
+      [
+       0.01,
+       0.05,
+       "the planner's pick"
+      ],
+      [
+       0.1,
+       0.96,
+       "the planner's pick"
+      ],
+      [
+       0.5,
+       3,
+       "the planner's pick"
+      ],
+      [
+       1,
+       7.06,
+       "the planner's pick"
+      ],
+      [
+       2,
+       7.78,
+       "the planner's pick"
+      ],
+      [
+       5,
+       14.66,
+       "the planner's pick"
+      ],
+      [
+       10,
+       19.02,
+       "the planner's pick"
+      ],
+      [
+       20,
+       31.65,
+       "the planner's pick"
+      ],
+      [
+       30,
+       40.65,
+       "the planner's pick"
+      ],
+      [
+       50,
+       56.43
+      ],
+      [
+       75,
+       73.7
+      ],
+      [
+       100,
+       87.06
+      ]
+     ]
+    },
+    {
+     "name": "Seq Scan",
+     "points": [
+      [
+       0.001,
+       32.97
+      ],
+      [
+       0.01,
+       33.52
+      ],
+      [
+       0.1,
+       29.58
+      ],
+      [
+       0.5,
+       29.85
+      ],
+      [
+       1,
+       33.78
+      ],
+      [
+       2,
+       31.69
+      ],
+      [
+       5,
+       42.13
+      ],
+      [
+       10,
+       33.81
+      ],
+      [
+       20,
+       36.68
+      ],
+      [
+       30,
+       39.9
+      ],
+      [
+       50,
+       47.29,
+       "the planner's pick"
+      ],
+      [
+       75,
+       51.13,
+       "the planner's pick"
+      ],
+      [
+       100,
+       55.6,
+       "the planner's pick"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {
+  "matrix": {
+   "engine": "PostgreSQL 18.6",
+   "configs": [
+    {
+     "label": "Separate: (a), (b)",
+     "rows": [
+      {
+       "name": "a only",
+       "sql": "SELECT c FROM test WHERE a = 70",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_a"
+       ],
+       "buffers": 4545,
+       "rows": 10092,
+       "ms": 3.4,
+       "text": "Bitmap Heap Scan on test  (cost=112.89..5752.94 rows=9867 width=4) (actual rows=10092.00 loops=1)\n  Recheck Cond: (a = 70)\n  Heap Blocks: exact=4534\n  Buffers: shared hit=4545\n  ->  Bitmap Index Scan on i_a  (cost=0.00..110.43 rows=9867 width=0) (actual rows=10092.00 loops=1)\n        Index Cond: (a = 70)\n        Index Searches: 1\n        Buffers: shared hit=11\nExecution Time: 3.968 ms"
+      },
+      {
+       "name": "a only, LIMIT 2",
+       "sql": "SELECT c FROM test WHERE a = 70 LIMIT 2",
+       "nodes": [
+        "Seq Scan"
+       ],
+       "buffers": 2,
+       "rows": 2,
+       "ms": 0,
+       "text": "Limit  (cost=0.00..3.63 rows=2 width=4) (actual rows=2.00 loops=1)\n  Buffers: shared hit=2\n  ->  Seq Scan on test  (cost=0.00..17906.00 rows=9867 width=4) (actual rows=2.00 loops=1)\n        Filter: (a = 70)\n        Rows Removed by Filter: 98\n        Buffers: shared hit=2\nExecution Time: 0.020 ms"
+      },
+      {
+       "name": "b only",
+       "sql": "SELECT c FROM test WHERE b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_b"
+       ],
+       "buffers": 4614,
+       "rows": 10148,
+       "ms": 3.9,
+       "text": "Bitmap Heap Scan on test  (cost=109.79..5786.16 rows=9467 width=4) (actual rows=10148.00 loops=1)\n  Recheck Cond: (b = 40)\n  Heap Blocks: exact=4603\n  Buffers: shared hit=4614\n  ->  Bitmap Index Scan on i_b  (cost=0.00..107.43 rows=9467 width=0) (actual rows=10148.00 loops=1)\n        Index Cond: (b = 40)\n        Index Searches: 1\n        Buffers: shared hit=11\nExecution Time: 4.186 ms"
+      },
+      {
+       "name": "a AND b",
+       "sql": "SELECT c FROM test WHERE a = 70 AND b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "BitmapAnd",
+        "Bitmap Index Scan i_b",
+        "Bitmap Index Scan i_a"
+       ],
+       "buffers": 126,
+       "rows": 105,
+       "ms": 0.8,
+       "text": "Bitmap Heap Scan on test  (cost=218.15..554.95 rows=93 width=4) (actual rows=105.00 loops=1)\n  Recheck Cond: ((b = 40) AND (a = 70))\n  Heap Blocks: exact=104\n  Buffers: shared hit=126\n  ->  BitmapAnd  (cost=218.15..218.15 rows=93 width=0) (actual rows=0.00 loops=1)\n        Buffers: shared hit=22\n        ->  Bitmap Index Scan on i_b  (cost=0.00..107.43 rows=9467 width=0) (actual rows=10148.00 loops=1)\n              Index Cond: (b = 40)\n              Index Searches: 1\n              Buffers: shared hit=11\n        ->  Bitmap Index Scan on i_a  (cost=0.00..110.43 rows=9867 width=0) (actual rows=10092.00 loops=1)\n              Index Cond: (a = 70)\n              Index Searches: 1\n              Buffers: shared hit=11\nExecution Time: 0.852 ms"
+      },
+      {
+       "name": "a OR b",
+       "sql": "SELECT c FROM test WHERE a = 70 OR b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "BitmapOr",
+        "Bitmap Index Scan i_a",
+        "Bitmap Index Scan i_b"
+       ],
+       "buffers": 5305,
+       "rows": 20135,
+       "ms": 5.7,
+       "text": "Bitmap Heap Scan on test  (cost=227.47..5923.47 rows=19240 width=4) (actual rows=20135.00 loops=1)\n  Recheck Cond: ((a = 70) OR (b = 40))\n  Heap Blocks: exact=5283\n  Buffers: shared hit=5305\n  ->  BitmapOr  (cost=227.47..227.47 rows=19333 width=0) (actual rows=0.00 loops=1)\n        Buffers: shared hit=22\n        ->  Bitmap Index Scan on i_a  (cost=0.00..110.43 rows=9867 width=0) (actual rows=10092.00 loops=1)\n              Index Cond: (a = 70)\n              Index Searches: 1\n              Buffers: shared hit=11\n        ->  Bitmap Index Scan on i_b  (cost=0.00..107.43 rows=9467 width=0) (actual rows=10148.00 loops=1)\n              Index Cond: (b = 40)\n              Index Searches: 1\n              Buffers: shared hit=11\nExecution Time: 6.231 ms"
+      }
+     ]
+    },
+    {
+     "label": "Composite: (a, b)",
+     "rows": [
+      {
+       "name": "a only",
+       "sql": "SELECT c FROM test WHERE a = 70",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_ab"
+       ],
+       "buffers": 4545,
+       "rows": 10092,
+       "ms": 3.9,
+       "text": "Bitmap Heap Scan on test  (cost=113.15..5750.02 rows=9900 width=4) (actual rows=10092.00 loops=1)\n  Recheck Cond: (a = 70)\n  Heap Blocks: exact=4534\n  Buffers: shared hit=4545\n  ->  Bitmap Index Scan on i_ab  (cost=0.00..110.67 rows=9900 width=0) (actual rows=10092.00 loops=1)\n        Index Cond: (a = 70)\n        Index Searches: 1\n        Buffers: shared hit=11\nExecution Time: 4.335 ms"
+      },
+      {
+       "name": "a only, LIMIT 2",
+       "sql": "SELECT c FROM test WHERE a = 70 LIMIT 2",
+       "nodes": [
+        "Seq Scan"
+       ],
+       "buffers": 2,
+       "rows": 2,
+       "ms": 0,
+       "text": "Limit  (cost=0.00..3.62 rows=2 width=4) (actual rows=2.00 loops=1)\n  Buffers: shared hit=2\n  ->  Seq Scan on test  (cost=0.00..17906.00 rows=9900 width=4) (actual rows=2.00 loops=1)\n        Filter: (a = 70)\n        Rows Removed by Filter: 98\n        Buffers: shared hit=2\nExecution Time: 0.011 ms"
+      },
+      {
+       "name": "b only",
+       "sql": "SELECT c FROM test WHERE b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_ab"
+       ],
+       "buffers": 4912,
+       "rows": 10148,
+       "ms": 3.8,
+       "text": "Bitmap Heap Scan on test  (cost=515.93..6058.18 rows=10900 width=4) (actual rows=10148.00 loops=1)\n  Recheck Cond: (b = 40)\n  Heap Blocks: exact=4603\n  Buffers: shared hit=4912\n  ->  Bitmap Index Scan on i_ab  (cost=0.00..513.21 rows=10900 width=0) (actual rows=10148.00 loops=1)\n        Index Cond: (b = 40)\n        Index Searches: 103\n        Buffers: shared hit=309\nExecution Time: 3.918 ms"
+      },
+      {
+       "name": "a AND b",
+       "sql": "SELECT c FROM test WHERE a = 70 AND b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_ab"
+       ],
+       "buffers": 107,
+       "rows": 105,
+       "ms": 0.1,
+       "text": "Bitmap Heap Scan on test  (cost=5.53..389.99 rows=108 width=4) (actual rows=105.00 loops=1)\n  Recheck Cond: ((a = 70) AND (b = 40))\n  Heap Blocks: exact=104\n  Buffers: shared hit=107\n  ->  Bitmap Index Scan on i_ab  (cost=0.00..5.50 rows=108 width=0) (actual rows=105.00 loops=1)\n        Index Cond: ((a = 70) AND (b = 40))\n        Index Searches: 1\n        Buffers: shared hit=3\nExecution Time: 0.114 ms"
+      },
+      {
+       "name": "a OR b",
+       "sql": "SELECT c FROM test WHERE a = 70 OR b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "BitmapOr",
+        "Bitmap Index Scan i_ab",
+        "Bitmap Index Scan i_ab"
+       ],
+       "buffers": 5603,
+       "rows": 20135,
+       "ms": 5.8,
+       "text": "Bitmap Heap Scan on test  (cost=634.23..6352.23 rows=20692 width=4) (actual rows=20135.00 loops=1)\n  Recheck Cond: ((a = 70) OR (b = 40))\n  Heap Blocks: exact=5283\n  Buffers: shared hit=5603\n  ->  BitmapOr  (cost=634.23..634.23 rows=20800 width=0) (actual rows=0.00 loops=1)\n        Buffers: shared hit=320\n        ->  Bitmap Index Scan on i_ab  (cost=0.00..110.67 rows=9900 width=0) (actual rows=10092.00 loops=1)\n              Index Cond: (a = 70)\n              Index Searches: 1\n              Buffers: shared hit=11\n        ->  Bitmap Index Scan on i_ab  (cost=0.00..513.21 rows=10900 width=0) (actual rows=10148.00 loops=1)\n              Index Cond: (b = 40)\n              Index Searches: 103\n              Buffers: shared hit=309\nExecution Time: 7.310 ms"
+      }
+     ]
+    },
+    {
+     "label": "Composite plus (b)",
+     "rows": [
+      {
+       "name": "a only",
+       "sql": "SELECT c FROM test WHERE a = 70",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_ab"
+       ],
+       "buffers": 4545,
+       "rows": 10092,
+       "ms": 3.9,
+       "text": "Bitmap Heap Scan on test  (cost=125.67..5669.18 rows=11000 width=4) (actual rows=10092.00 loops=1)\n  Recheck Cond: (a = 70)\n  Heap Blocks: exact=4534\n  Buffers: shared hit=4545\n  ->  Bitmap Index Scan on i_ab  (cost=0.00..122.92 rows=11000 width=0) (actual rows=10092.00 loops=1)\n        Index Cond: (a = 70)\n        Index Searches: 1\n        Buffers: shared hit=11\nExecution Time: 4.125 ms"
+      },
+      {
+       "name": "a only, LIMIT 2",
+       "sql": "SELECT c FROM test WHERE a = 70 LIMIT 2",
+       "nodes": [
+        "Seq Scan"
+       ],
+       "buffers": 2,
+       "rows": 2,
+       "ms": 0,
+       "text": "Limit  (cost=0.00..3.26 rows=2 width=4) (actual rows=2.00 loops=1)\n  Buffers: shared hit=2\n  ->  Seq Scan on test  (cost=0.00..17906.00 rows=11000 width=4) (actual rows=2.00 loops=1)\n        Filter: (a = 70)\n        Rows Removed by Filter: 98\n        Buffers: shared hit=2\nExecution Time: 0.011 ms"
+      },
+      {
+       "name": "b only",
+       "sql": "SELECT c FROM test WHERE b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_b"
+       ],
+       "buffers": 4614,
+       "rows": 10148,
+       "ms": 4.2,
+       "text": "Bitmap Heap Scan on test  (cost=115.99..5715.79 rows=10267 width=4) (actual rows=10148.00 loops=1)\n  Recheck Cond: (b = 40)\n  Heap Blocks: exact=4603\n  Buffers: shared hit=4614\n  ->  Bitmap Index Scan on i_b  (cost=0.00..113.43 rows=10267 width=0) (actual rows=10148.00 loops=1)\n        Index Cond: (b = 40)\n        Index Searches: 1\n        Buffers: shared hit=11\nExecution Time: 3.705 ms"
+      },
+      {
+       "name": "a AND b",
+       "sql": "SELECT c FROM test WHERE a = 70 AND b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan i_ab"
+       ],
+       "buffers": 107,
+       "rows": 105,
+       "ms": 0.1,
+       "text": "Bitmap Heap Scan on test  (cost=5.58..406.92 rows=113 width=4) (actual rows=105.00 loops=1)\n  Recheck Cond: ((a = 70) AND (b = 40))\n  Heap Blocks: exact=104\n  Buffers: shared hit=107\n  ->  Bitmap Index Scan on i_ab  (cost=0.00..5.55 rows=113 width=0) (actual rows=105.00 loops=1)\n        Index Cond: ((a = 70) AND (b = 40))\n        Index Searches: 1\n        Buffers: shared hit=3\nExecution Time: 0.084 ms"
+      },
+      {
+       "name": "a OR b",
+       "sql": "SELECT c FROM test WHERE a = 70 OR b = 40",
+       "nodes": [
+        "Bitmap Heap Scan",
+        "BitmapOr",
+        "Bitmap Index Scan i_ab",
+        "Bitmap Index Scan i_b"
+       ],
+       "buffers": 5305,
+       "rows": 20135,
+       "ms": 6.1,
+       "text": "Bitmap Heap Scan on test  (cost=246.93..5971.93 rows=21154 width=4) (actual rows=20135.00 loops=1)\n  Recheck Cond: ((a = 70) OR (b = 40))\n  Heap Blocks: exact=5283\n  Buffers: shared hit=5305\n  ->  BitmapOr  (cost=246.93..246.93 rows=21267 width=0) (actual rows=0.00 loops=1)\n        Buffers: shared hit=22\n        ->  Bitmap Index Scan on i_ab  (cost=0.00..122.92 rows=11000 width=0) (actual rows=10092.00 loops=1)\n              Index Cond: (a = 70)\n              Index Searches: 1\n              Buffers: shared hit=11\n        ->  Bitmap Index Scan on i_b  (cost=0.00..113.43 rows=10267 width=0) (actual rows=10148.00 loops=1)\n              Index Cond: (b = 40)\n              Index Searches: 1\n              Buffers: shared hit=11\nExecution Time: 5.837 ms"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "playgrounds": {
+  "plans": {
+   "title": "Watch the plan change",
+   "hint": "100,000 rows with an index on x. Each preset asks for a different share of the table. Read the top line of each plan.",
+   "setup": "CREATE TABLE t (id serial PRIMARY KEY, x int, name text);\nINSERT INTO t (x, name) SELECT (random() * 100000)::int, 'row ' || g FROM generate_series(1, 100000) g;\nCREATE INDEX t_x ON t (x);\nVACUUM ANALYZE t;",
+   "query": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT name FROM t WHERE x = 500;",
+   "presets": [
+    {
+     "label": "1 row: index scan",
+     "sql": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT name FROM t WHERE id = 500;"
+    },
+    {
+     "label": "2% of rows: bitmap",
+     "sql": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT name FROM t WHERE x < 2000;"
+    },
+    {
+     "label": "50% of rows: seq scan",
+     "sql": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT name FROM t WHERE x < 50000;"
+    },
+    {
+     "label": "Index only",
+     "sql": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT x FROM t WHERE x < 500;"
+    },
+    {
+     "label": "Function on the column",
+     "sql": "EXPLAIN (COSTS OFF)\nSELECT name FROM t WHERE x + 1 = 501;"
+    }
+   ]
+  },
+  "composite": {
+   "title": "The leftmost column rule",
+   "hint": "A composite index on (a, b). Which of these can use it? Edit the WHERE clause, or create another index and run them again.",
+   "setup": "CREATE TABLE test (a int, b int, c int);\nINSERT INTO test SELECT (random() * 100)::int, (random() * 100)::int, g FROM generate_series(1, 100000) g;\nCREATE INDEX i_ab ON test (a, b);\nVACUUM ANALYZE test;",
+   "query": "EXPLAIN (COSTS OFF) SELECT c FROM test WHERE a = 70;",
+   "presets": [
+    {
+     "label": "b alone",
+     "sql": "EXPLAIN (COSTS OFF) SELECT c FROM test WHERE b = 40;"
+    },
+    {
+     "label": "a AND b",
+     "sql": "EXPLAIN (COSTS OFF) SELECT c FROM test WHERE a = 70 AND b = 40;"
+    },
+    {
+     "label": "a OR b",
+     "sql": "EXPLAIN (COSTS OFF) SELECT c FROM test WHERE a = 70 OR b = 40;"
+    },
+    {
+     "label": "Add an index on b",
+     "sql": "CREATE INDEX IF NOT EXISTS i_b ON test (b);\nEXPLAIN (COSTS OFF) SELECT c FROM test WHERE a = 70 OR b = 40;"
+    }
+   ]
+  }
+ }
+}

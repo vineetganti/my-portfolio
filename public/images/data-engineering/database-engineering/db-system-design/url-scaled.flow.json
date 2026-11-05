@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "from": "clients",
+      "to": "reverse proxy",
+      "type": "request"
+    },
+    {
+      "from": "reverse proxy",
+      "to": "readers",
+      "type": "request"
+    },
+    {
+      "from": "readers",
+      "to": "read replicas",
+      "type": "data"
+    },
+    {
+      "from": "primary",
+      "to": "read replicas",
+      "label": "replication",
+      "type": "metadata"
+    }
+  ]
+}

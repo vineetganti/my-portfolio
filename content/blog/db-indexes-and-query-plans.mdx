@@ -1,0 +1,472 @@
+---
+title: "Indexes and Query Plans: Reading EXPLAIN the Way the Planner Thinks"
+description: "What an index really buys you, how to read EXPLAIN, why the planner flips between index, bitmap and sequential scans, how composite indexes work, and why the course's leftmost-column rule changed in Postgres 18. Every plan here came from a real run."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 3
+tags: ["Databases", "PostgreSQL", "Indexing", "Performance"]
+---
+
+[Post 2](/blog/db-how-data-sits-on-disk) ended with a number worth remembering: one row by primary key touched 3 pages, and a sum over the same table touched 934. An index is the difference between those two. This post is about what indexes really do, how to read the plan a database chooses, and how to tell when an index won't help.
+
+It's also where re-running the course paid off the most. Two rules I'd copied into my notes turned out to be out of date on Postgres 18, and one index in the course's own demo made a query slower.
+
+<Callout type="note" title="TL;DR">
+
+- An index is a separate sorted structure that lets the database read fewer pages. It costs space, and every write has to maintain it.
+- `EXPLAIN` shows the plan and estimated cost, in arbitrary units rather than milliseconds. `EXPLAIN ANALYZE` runs the query and shows the truth. Compare estimated and actual rows first.
+- The planner chooses by how much of the table matches: **Index Scan** for a few rows, **Bitmap Heap Scan** for a moderate share, **Seq Scan** for most of it. In my test Seq Scan took over at 30 to 50% of the table.
+- An **index-only scan** never reads the table, if the visibility map allows it. Run `VACUUM` to make that true. `INCLUDE` lets an index carry extra columns.
+- A composite index on `(a, b)` serves `a` and `a AND b`. On Postgres 18 it can now serve `b` alone too, with a **skip scan**, when `a` has few distinct values.
+- Plain `CREATE INDEX` blocks writes. In production use `CREATE INDEX CONCURRENTLY`, which waits for transactions instead of blocking them, and can fail and leave an invalid index behind.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. **03 · Indexes and query plans** (this post): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## What an index is
+
+An index is a structure, separate from the table, that's sorted by the columns you chose and stores a pointer to each row. Think of the index at the back of a textbook: you find the word, then go straight to the page.
+
+![An index compared with the phone book. Finding a name in the table without an index means reading every page. With an index, a small sorted structure points straight to the row's page, and only that page is read.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/index-as-a-book.svg)
+
+Most indexes are B-trees, covered in [post 5](/blog/db-btrees-and-bplus-trees). For now it's enough that a B-tree finds a value in a few page reads, however large the table.
+
+The course starts with a table of a million employees with random names. Postgres creates an index for the primary key automatically, so `id` has one and `name` doesn't. Here's the difference, with the first plans of the series:
+
+<Ran src="indexing/plan-basics" title="one million rows" />
+
+Three queries and three different plans:
+
+1. **`SELECT id ... WHERE id = 2000`** is an **Index Only Scan**: the answer is in the index, and the table was never touched.
+2. **`SELECT name ... WHERE id = 2000`** is an **Index Scan**: the index found the row, then one trip to the heap fetched `name`.
+3. **`... WHERE name = 'Zs'`** has no index to use, so it's a **Parallel Seq Scan**: three processes read all 5,125 pages between them, to find nothing. That took 27 ms instead of 0.1 ms.
+
+Now index `name`, and also try a pattern:
+
+<Ran src="indexing/plan-basics-indexed" />
+
+The exact match fell from 27 ms to 0.2 ms. `LIKE '%Zs%'` went back to scanning everything, even with the index in place, because the index is sorted from the first character. A pattern that starts with a wildcard gives it nowhere to start. There's a way out for this particular problem, which the course doesn't reach: a trigram index breaks strings into three-letter pieces, so any substring can be looked up.
+
+<Ran src="indexing/trigram" />
+
+## Reading EXPLAIN
+
+`EXPLAIN` shows the plan without running the query. `EXPLAIN ANALYZE` runs it and adds what really happened. This is one line of a plan:
+
+```text
+Seq Scan on grades  (cost=0.00..16370.00 rows=1000000 width=22)
+                          │       │          │           └ average bytes per row
+                          │       │          └ rows the planner expects
+                          │       └ estimated cost to return all rows
+                          └ estimated cost before the first row
+```
+
+The two cost numbers matter, and the first is easy to overlook. It's the **startup cost**: the work done before the first row can come out. A sort has to read everything before it can output anything, so its startup cost is huge:
+
+<Ran src="indexing/cost-numbers" />
+
+A plain scan can start at once (`0.00`). The `ORDER BY` pushed startup to 136,537, nearly the whole total. With `LIMIT 10` the plan changed shape entirely, because keeping the top 10 is far cheaper than sorting a million rows.
+
+<Callout type="warn" title="Correcting the lecture">
+
+In one lecture cost is read as milliseconds, and a later Q&A corrects it. The [docs](https://www.postgresql.org/docs/current/using-explain.html) say costs are in arbitrary units, traditionally counted in page fetches. Only `actual time` is in milliseconds, and the two are unlikely to match.
+
+</Callout>
+
+What to look for in a plan, in order:
+
+| Look at | Why |
+| --- | --- |
+| Estimated `rows` against `actual rows` | A big gap means stale or misleading statistics, and everything planned on top of it may be wrong |
+| The scan type at the bottom | The biggest single decision the planner made |
+| `Buffers: shared hit=… read=…` | Pages touched, the most honest measure of work |
+| `Rows Removed by Filter` | Rows read and thrown away, a sign an index could help |
+| `Heap Fetches` | Index-only scans that weren't really index-only |
+
+Ignore tiny differences in time. The course keeps repeating this and it's right: timings depend on caches and hardware. Plans and pages are what to compare.
+
+## Three ways to read a table
+
+The planner's main decision is how to get the rows. Think of it as a spectrum:
+
+![The three scans on a spectrum of how much of the table matches. Few rows: an index scan, with one random heap visit per row. A moderate share: a bitmap scan, visiting each page once in physical order. Most of the table: a sequential scan, reading every page in order.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/scan-spectrum.svg)
+
+An **Index Scan** follows each pointer as it finds it. If matching rows are scattered, that's a jump to a different page for every row, and the same page may be read many times.
+
+A **Bitmap Heap Scan** fixes that with a two-phase plan:
+
+![How a bitmap scan works. Phase one walks the index and sets a bit for each heap page that holds a match, without touching the table. Phase two reads only the marked pages, in order, each one once, and rechecks the condition, because a page holds other rows too.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/bitmap-scan.svg)
+
+A **Seq Scan** reads every page in order. That sounds like the bad option, but sequential reading is fast and needs no index pages at all. If you want most of the table anyway, jumping through an index is pure overhead.
+
+### Watching the plan flip
+
+I wanted to see the switch-over points rather than take them on trust. So I ran one query on a million-row table with an index on a randomly ordered column, and widened its `WHERE` clause from 0.001% of rows to 100%. At each width I turned off the other plans to force each of the three, and asked the planner for its estimate:
+
+<LabChart src="indexing/plan-cost" />
+
+The lowest line at any point is what the planner picks. Index Scan and Bitmap are nearly tied at the far left, Bitmap wins through the middle, and Seq Scan is almost flat, because it reads the same pages however many rows match. It wins somewhere between 30% and 50% here.
+
+Estimates are only half the story. Here's what each forced plan really took:
+
+<LabChart src="indexing/plan-time" />
+
+The shape matches, with one big difference: the Index Scan is much worse than the bitmap at higher shares, reaching 428 ms where a Seq Scan takes 56 ms. That's one random page jump per row, a million times.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes said a table scan wins past "5–10%" of the table. In this test it took 30% or more. There's no fixed number: it depends on row width, how the data is ordered, what's cached, and settings like `random_page_cost`, which tells the planner that random reads are 4 times as costly as sequential ones. That default was chosen for spinning disks.
+
+</Callout>
+
+The box below is real Postgres, in your browser, with 100,000 rows. Run each preset and read the first line of the plan:
+
+<PgPlayground src="indexing/plans" />
+
+The last preset shows a classic mistake: `x + 1 = 501` can't use the index on `x`, because the index stores `x`, not `x + 1`. Write `x = 500` instead.
+
+### When an index isn't worth it
+
+A student found that a query on a 7-row table ignored its index:
+
+<Ran src="indexing/tiny-table" />
+
+The whole table is **one page**. An index lookup would read at least one index page and then that same heap page. The Seq Scan reads just the one, so it's the right plan, and it's a good reminder that "Seq Scan" isn't a bug by itself.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The Q&A explains this by saying the database would have to "build the B-tree in memory". An index isn't rebuilt per query. It's already on disk, in pages. The reason is simply that reading it costs more than reading the one page of table.
+
+</Callout>
+
+## Index scans, index-only scans and INCLUDE
+
+The course builds this up one step at a time on a `grades` table. I ran the same steps on a million rows:
+
+<Ran src="indexing/grades-steps" title="from no index to a covering index" />
+
+Follow the plans in order:
+
+1. No index: Parallel Seq Scan, 6,370 pages, 19 ms.
+2. Index on `id`: an Index Scan at 0.06 ms, because `name` still needs a trip to the heap.
+3. Asking only for `id`: an Index Only Scan. Fast, and a slightly silly query, since you already knew the answer.
+4. `INCLUDE (name)`: now `name` lives in the index too, and the useful query is index-only.
+5. Asking for `g`: back to an Index Scan, because `g` isn't in the index.
+
+In `CREATE INDEX ... (id) INCLUDE (name)`, `id` is a **key column**: the tree is sorted by it, and you can search by it. `name` is a **non-key column**: it's only carried along in the leaf pages, so you can't search by it. It makes the index larger, which means more pages to read, so include a column only when you know the queries that need it.
+
+### The index that made things worse
+
+The course's `students` demo has a wide table, and a query on a range of grades. Its result surprised me, so here's the whole thing:
+
+<Ran src="indexing/students" title="a wide table, one million rows" />
+
+| Setup | Plan | Pages | Time |
+| --- | --- | --- | --- |
+| No index | Parallel Seq Scan, then sort | 24,465 | 70 ms |
+| Index on `g` | Bitmap Heap Scan, then sort | 24,462 | 77 ms |
+| Index on `g` `INCLUDE (id)` | Index Only Scan | 388 | 17 ms |
+
+The plain index made this query **slower**. Rows with grades from 81 to 94 are 14% of the table, spread evenly, so nearly every page holds one: the bitmap had to visit 24,340 of them anyway. It also lost parallelism, and its sort spilled to disk (`external merge Disk: 2480kB`). The course saw a small win here (21 s down to 17 s) on a bigger table, and I saw a small loss. Either way the index barely mattered, because the query still had to read the table. The covering index won because it didn't: 388 pages of a 21 MB index, instead of a 191 MB table.
+
+The real lesson is to measure work rather than assume. An index only helps if it reduces the pages you read.
+
+### Why an index-only scan can still read the table
+
+An index entry doesn't say whether its row version is visible to your transaction. That information is in the row, because of MVCC. Without help, an index-only scan would have to check the heap for every row.
+
+The help is the [visibility map](https://www.postgresql.org/docs/current/indexes-index-only-scans.html): one bit per heap page, meaning "every row here is visible to everyone".
+
+![An index-only scan. The index has the value, but it doesn't know whether that row version is visible to this transaction. So it checks the visibility map, one bit per heap page. If the page is all-visible the answer comes straight from the index. If not, the scan visits the heap, and EXPLAIN counts that as a heap fetch.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/index-only.svg)
+
+This explains a question that came up in the Q&A: why doesn't a query go index-only right after a big insert? Because nothing has set those bits yet. `VACUUM` sets them, and any write clears them. Here it is with autovacuum turned off, so the effect is clean:
+
+<Ran src="indexing/visibility" />
+
+Look at `Heap Fetches`: **49,999** before `VACUUM`, **0** after, and **10,197** once I'd touched 4,999 rows, since each update cleared the bit for its page. The plan's name said Index Only Scan the whole time, so this line is the one to trust. (In the lecture the planner chose a bitmap scan here. Plans differ by version and data, and the Q&A says so. The reason doesn't change.)
+
+## Combining indexes
+
+Real queries filter on more than one column. The course tests three index layouts against the query shapes a backend actually sends. Here are the real results, on a million rows. Pick a layout, then click a query to read its plan:
+
+<PlanMatrix src="indexing/matrix" />
+
+With separate indexes, an `AND` query scans both and combines the bitmaps before touching the table:
+
+![Combining two indexes. A bitmap from the index on a and a bitmap from the index on b are combined before the table is read. AND keeps pages marked in both, which leaves very few. OR keeps pages marked in either, which leaves many more.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/bitmap-and-or.svg)
+
+A composite index does better on `a AND b`: one descent to the right place, 107 pages, and 0.1 ms. It's the best layout if your queries filter on both columns together.
+
+### The leftmost-column rule, and what changed
+
+A composite index is sorted by the first column, then by the second within each value of the first, like a phone book sorted by surname, then first name.
+
+![A composite index on a and b is sorted by a, then by b within each a. Rows with a equal to 1 sit together, in b order, so a search on a is one range, and a search on a and b is a single point. A search on b alone has no single range: matching entries are scattered across every value of a.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/composite-order.svg)
+
+So a search on `a` is a range, and `a AND b` is a point. The rule I copied from the lecture is that a search on `b` alone can't use the index at all, and falls back to a full scan, as does `a OR b`.
+
+<Callout type="warn" title="Correcting the lecture">
+
+That's out of date. In the table above, on the **Composite: (a, b)** tab, `b only` used the index, and `a OR b` did too. Open the `b only` plan and look at `Index Searches: 103`. That's a **skip scan**, [new in Postgres 18](https://www.postgresql.org/docs/18/release-18.html): the index is searched once per distinct value of `a`, jumping over the rest. The course ran an older version, where this plan didn't exist.
+
+</Callout>
+
+There's a condition. The [docs](https://www.postgresql.org/docs/current/indexes-multicolumn.html) say this is chosen only when the leading column has few distinct values. Here's the same query on two tables, one with 10 values of `a`, and one with a million:
+
+<Ran src="indexing/skip-scan" />
+
+With 10 distinct values: `Index Searches: 12`, using the index. With a million distinct values it's a Seq Scan, exactly as the old rule says. So the practical advice survives: put the column you filter on most at the left, and don't rely on skip scan for a column with many values.
+
+Try the rule yourself. The last preset adds the separate index on `b`, which is the course's final layout:
+
+<PgPlayground src="indexing/composite" />
+
+The last layout is the engineering compromise: if some queries filter on `b` alone, `(a, b)` plus `(b)` serves every shape. Each extra index slows every write, so build this for queries you really run.
+
+## How the planner decides
+
+The planner doesn't look at your data when it plans. It reads **statistics**: approximate counts and common values, gathered by `ANALYZE`. Those give three broad options for a query with two conditions:
+
+| Option | Chosen when |
+| --- | --- |
+| Use both indexes, combine the results | Both match a medium number of rows |
+| Use one index, filter the rest on the fetched rows | One is far more selective, and the condition is `AND` |
+| Use no index, scan and filter | Together they match a large share of the table |
+
+Searching an index isn't free, so a second index has to earn its cost. With a primary key in an `AND`, the database nearly always uses just that.
+
+### Selectivity depends on the value
+
+An index's usefulness isn't a property of the column alone. A table where nearly every customer lives in California, and one lives in Florida:
+
+<Ran src="indexing/skew" />
+
+Same column, same index, opposite plans. The statistics at the end show why: Postgres knows `California` covers almost everything, so it scans, and treats anything else as rare, so it uses the index. A column with few distinct values is a poor index candidate only when you search for the common ones.
+
+### Stale statistics
+
+The course's war story: load millions of rows into a fresh table, query it at once, and the planner still believes the table holds 3 rows, so it does something foolish. To test it, I gathered statistics on 3 rows, loaded a million, and queried before `ANALYZE`:
+
+<Ran src="indexing/stale-stats" />
+
+The first plan expected **1** row and got **999,990**. That's the trap, but it went the other way from the story, which says the planner would do a full scan. Here it chose an **Index Scan**, because it believed few rows matched. On this data the damage was small, since the rows were in index order and in memory. After `ANALYZE` the estimates were right, and it chose a Seq Scan for `shipped` and the index for `held`.
+
+The direction doesn't matter much. When estimates are wrong, plans are wrong. After a bulk load, run `ANALYZE` yourself instead of waiting for autovacuum.
+
+### Hints
+
+Some databases let you overrule the planner. MySQL's `FORCE INDEX` does it here, and notice how the estimate worsens from 1 row to 100:
+
+<Ran src="indexing/index-hint-mysql" />
+
+Oracle and SQL Server have hints too. 📘 Postgres has no built-in hints. The [pg_hint_plan](https://github.com/ossc-db/pg_hint_plan) extension adds them. Use them only if you know something the statistics can't, because a hint stays in the code long after the data has changed.
+
+## Seek or scan?
+
+One article in the course is about two operations on the same index, in SQL Server's terms. A **seek** starts at the root and walks down to a value. A **scan** walks along the leaf pages. Fetching three distant ids is three seeks, and fetching a range is one seek followed by a scan. Postgres 18 finally shows this directly in `Index Searches`:
+
+<Ran src="indexing/seek-or-scan" />
+
+Three ids: 3 searches and 12 pages. A range of 9,000 ids: 1 search and 67 pages. Neither is better in general. If values are far apart, separate seeks avoid reading pages in between. If they're close, one seek plus a scan avoids starting again from the root.
+
+## What a non-unique index stores
+
+A student asked how an index stores duplicates, for example a `project` column with 10 distinct values across a million rows. The simple answer is one entry per row, with the value repeated. The course mentions that newer versions avoid repeating it, which is easy to measure:
+
+<Ran src="indexing/duplicates" />
+
+With deduplication off, the index on 10 distinct values is as big as an index on unique ids: 21 MB. With the default, added in Postgres 13, each value is stored once followed by a list of row addresses: 6.8 MB.
+
+## Indexes aren't free
+
+Every index slows every write. An `INSERT` must update all of them, and an `UPDATE` can too, which [post 14](/blog/db-postgres-mysql-internals) measures. Indexes also compete for memory: an index that fits in the buffer pool is fast, and one that doesn't means more I/O.
+
+A student asked whether to create and drop indexes with non-key columns for short-term use. The course's answer is that non-key indexes are common in production, and that each should be judged by how often its query runs against what it costs to keep. For a report that runs once, build the index and then drop it. Building it on a big table is itself a heavy operation, though, as the next section shows.
+
+## Adding an index to a live table
+
+Can you write to a table while an index is being built? On Postgres, by default, no:
+
+<TxnTheater src="indexing/create-index-lock" />
+
+The build reads the whole table, and a row changed behind it would be missed, so `CREATE INDEX` takes a lock that blocks writes. Reads continue. On a production table that means an outage lasting as long as the build. The answer is `CREATE INDEX CONCURRENTLY`:
+
+<TxnTheater src="indexing/create-index-concurrently" />
+
+Writers aren't blocked. Instead the build waits for them, and does more work. The [docs](https://www.postgresql.org/docs/current/sql-createindex.html) describe the phases:
+
+![The phases of CREATE INDEX CONCURRENTLY. First the index is registered as invalid, so writes begin to maintain it. Then one table scan builds it, and a second scan adds what changed during the first. Between phases it waits for older transactions. Only then is it marked valid. A failure leaves an invalid index behind.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/concurrent-build.svg)
+
+The course sketches how it would build this itself, as a thought experiment, and gets the idea right: build from a snapshot, then catch up. It can also fail, and that leaves something behind:
+
+<Ran src="indexing/invalid-index" title="a failed concurrent build" />
+
+The statement failed, yet `\d` shows the index, marked `INVALID`. It isn't used for reads, it still slows writes, and it must be dropped by hand. Also, `CONCURRENTLY` can't run inside a transaction block, which matters if your migration tool wraps everything in one.
+
+## Why isn't my index being used?
+
+| Cause | Example | Fix |
+| --- | --- | --- |
+| Most of the table matches | `WHERE active = true` | It may be the right plan. Look at the numbers |
+| The table is tiny | A few pages | The right plan again |
+| A function on the column | `WHERE lower(email) = 'a'` | An index on the expression |
+| A leading wildcard | `LIKE '%abc'` | A trigram index |
+| Stale statistics | After a bulk load | `ANALYZE` |
+| Wrong composite order | `(a, b)` for `b`, with many `a` values | Another index |
+| A type mismatch | Comparing `text` to a number | Match the types |
+
+And the cleanup commands from the course, since they've all appeared here:
+
+| Command | What it does | Cost |
+| --- | --- | --- |
+| `VACUUM` | Marks dead rows reusable, sets the visibility map | Light, runs alongside normal work |
+| `ANALYZE` | Refreshes planner statistics | Light |
+| `VACUUM (VERBOSE)` | The same, and reports progress | Light |
+| `VACUUM FULL` | Rewrites the table to return space to the operating system | Exclusive lock, blocks everything |
+
+## Things that can trip you up
+
+- **Reading cost as time.** It's an arbitrary unit, and only `actual time` is real.
+- **Comparing timings between runs.** The first run reads the disk and the second reads the cache. Compare buffers.
+- **Believing "Index Only Scan".** Check `Heap Fetches`. If it's large, run `VACUUM`.
+- **Adding an index that doesn't reduce pages read.** If matches are spread over every page, you still read every page.
+- **`EXPLAIN ANALYZE` runs the query.** On an `UPDATE` or `DELETE`, wrap it in a transaction and roll back.
+- **Plans differ by version and data.** The course says this itself, and this post is the proof: two of its plans changed.
+- **`CONCURRENTLY` waiting forever.** One long-running transaction holds up the build.
+- **Too many indexes.** Check `pg_stat_user_indexes` for ones that are never scanned.
+
+## Reproduce this yourself
+
+Use the `pgacid` container from [post 1](/blog/db-acid-transactions#reproduce-this-yourself), or any Postgres 18.
+
+1. ✅ Build the tables. These are the ones I used, at a million rows where the course has 10 to 50 million:
+   ```sql
+   CREATE TABLE employees (id serial PRIMARY KEY, name text);
+   INSERT INTO employees (name)
+   SELECT substr(md5(random()::text), 1, 1 + (random() * 9)::int)
+   FROM generate_series(1, 1000000);
+   VACUUM ANALYZE employees;
+   ```
+2. ✅ Run each `EXPLAIN` above. Your timings will differ. Plans should match, apart from small cost differences from `random()`.
+3. ✅ To force a plan for the sweep, turn off the others in your session: `SET enable_seqscan = off;`. Those settings are for experiments, not production.
+4. ✅ For the skip scan, you need Postgres 18. On 17 the same query should fall back to a sequential scan. 📘 I didn't run 17.
+5. ✅ For the concurrent build, open three `psql` sessions and follow the replay.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Planner (optimizer)** | The part of the database that chooses how to run a query |
+| **Startup cost, total cost** | Estimated work before the first row, and for all rows |
+| **Index Scan** | Walks the index and visits the heap for each match |
+| **Bitmap Heap Scan** | Notes the pages first, then reads each one once |
+| **Seq Scan** | Reads every page of the table in order |
+| **Index Only Scan** | Answers from the index, with the visibility map's help |
+| **Key column, non-key column** | Searchable and sorted, or just carried in the index |
+| **Covering index** | An index holding every column a query needs |
+| **Composite index** | An index on several columns, sorted left to right |
+| **Skip scan** | Using a composite index without its leading column, by searching once per leading value |
+| **Selectivity** | The share of rows a condition matches |
+| **Statistics** | The planner's approximate picture of the data, refreshed by `ANALYZE` |
+| **Visibility map** | One bit per heap page: are all its rows visible to everyone? |
+| **Heap fetch** | An index-only scan having to visit the table after all |
+
+## Summary
+
+An index helps by reducing the pages a query reads, and nothing else. The planner estimates that from statistics, and flips between index, bitmap and sequential scans as the share of matching rows grows. Those plans are visible in `EXPLAIN`, and buffers are a better measure than time. Index-only scans depend on the visibility map, so `VACUUM` matters. Composite indexes are sorted left to right, and Postgres 18's skip scan softens that rule when the leading column has few values. Every index costs writes, and building one on a live table needs `CONCURRENTLY`.
+
+![A map of this post in four columns. Reading plans: cost is estimated in arbitrary units, startup then total, and rows estimated against actual. Scans: index, bitmap, sequential, index-only. Designing indexes: key and include columns, composite order, selectivity. Living with them: statistics, visibility, write cost, building without blocking.](/images/data-engineering/database-engineering/db-indexes-and-query-plans/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **`EXPLAIN ANALYZE`** | The plan, plus what really happened | The main tool for query work |
+| **Cost** | An arbitrary unit, startup then total | It isn't time |
+| **Buffers** | Pages touched | The most honest measure of work |
+| **Scan choice** | Depends on the share of rows matching | Explains why an index gets ignored |
+| **Bitmap AND, OR** | Combine indexes before touching the table | Two indexes, one heap trip |
+| **Covering index** | `INCLUDE` the columns you select | Skips the table entirely |
+| **Visibility map** | Set by `VACUUM`, cleared by writes | Decides `Heap Fetches` |
+| **Leftmost prefix** | Composite indexes sort left to right | Column order decides what's served |
+| **Skip scan** | Postgres 18 can skip a low-cardinality leading column | The old rule has an exception |
+| **Selectivity** | Depends on the value, not only the column | Same index, opposite plans |
+| **Stale statistics** | Plans built on old numbers | Run `ANALYZE` after bulk loads |
+| **`CONCURRENTLY`** | Builds without blocking writes | How to index in production |
+
+### Test yourself
+
+<details>
+<summary>A plan shows cost=136537.84..139037.84 on a Sort node. What do the two numbers mean, and why is the first so high?</summary>
+
+The first is the startup cost, the work before the first row can come out. The second is the total. A sort must read all its input before emitting anything, so nearly all its cost is startup. They're in arbitrary units, not milliseconds.
+
+</details>
+
+<details>
+<summary>You add an index on g, and a query with a range on g gets slower. How can that be?</summary>
+
+If the matching rows are spread across nearly every page, the query still reads almost the whole table, so the index saves nothing and adds work. In the run above the bitmap scan visited 24,340 pages and also lost parallelism. Fewer pages only came from a covering index, which avoided the table altogether.
+
+</details>
+
+<details>
+<summary>EXPLAIN says Index Only Scan, but it's slow, and Heap Fetches is large. What's going on, and what's the fix?</summary>
+
+The visibility map bits for those pages aren't set, so each row's visibility had to be checked in the heap. That's common after a bulk load or heavy updates. `VACUUM` sets the bits.
+
+</details>
+
+<details>
+<summary>With a composite index on (a, b), can Postgres serve WHERE b = 40?</summary>
+
+On versions before 18 it's generally no, and it falls back to a sequential scan. On 18 a skip scan can use the index if `a` has few distinct values: it searches once per value of `a`, and `Index Searches` shows how many. With many distinct values it still scans the table.
+
+</details>
+
+<details>
+<summary>Why doesn't CREATE INDEX CONCURRENTLY block writers, and what can go wrong with it?</summary>
+
+It builds from a snapshot, then scans again to catch changes made in the meantime, waiting between phases for older transactions to finish. It's slower, can be held up by one long transaction, can't run inside a transaction block, and if it fails it leaves an `INVALID` index that you must drop.
+
+</details>
+
+## Open questions and gaps
+
+- The crossover points in the charts are for one table shape, from a warm cache. Cold reads would look different, and I didn't test them.
+- 🎓 The course's timings came from 10 to 50 million rows. I used a million, so absolute numbers aren't comparable. I kept the plans, and said where they differ.
+- The course's `a only, LIMIT 2` plan was a plain Index Scan. Mine is a Seq Scan, which finds two matches in the first couple of pages when 1% of rows match. Both avoid building a bitmap, which was the lecture's point.
+- 📘 I didn't test `pg_hint_plan`, or Oracle or SQL Server hints.
+- 📘 I didn't run Postgres 17 to confirm the skip scan difference. The release notes and the course's output are the evidence.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/), and his article on index seeks and scans
+- PostgreSQL docs: [Using EXPLAIN](https://www.postgresql.org/docs/current/using-explain.html), [Multicolumn Indexes](https://www.postgresql.org/docs/current/indexes-multicolumn.html), [Index-Only Scans and Covering Indexes](https://www.postgresql.org/docs/current/indexes-index-only-scans.html), [CREATE INDEX](https://www.postgresql.org/docs/current/sql-createindex.html), [Release 18](https://www.postgresql.org/docs/18/release-18.html), [pg_trgm](https://www.postgresql.org/docs/current/pgtrgm.html)
+- [pg_hint_plan](https://github.com/ossc-db/pg_hint_plan), a third-party extension
+- Markus Winand, [Use The Index, Luke](https://use-the-index-luke.com), which the course recommends

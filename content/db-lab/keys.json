@@ -1,0 +1,610 @@
+{
+ "theaters": {
+  "idempotency": {
+   "title": "The same payment, sent twice",
+   "alt": "A recorded run on PostgreSQL. Two sessions send the same payment with one idempotency key, as a retry would. The second insert waits for the first to commit, then inserts nothing, so the customer is charged once.",
+   "engine": "PostgreSQL 18.6",
+   "sessions": [
+    "First try",
+    "Retry"
+   ],
+   "tableName": "payments",
+   "variants": [
+    {
+     "label": "",
+     "summary": "",
+     "steps": [
+      {
+       "s": "First try",
+       "sql": "BEGIN",
+       "note": "A client sends a payment, with a key it generated.",
+       "status": "ok",
+       "tag": "BEGIN",
+       "table": {
+        "cols": [
+         "rows",
+         "charged"
+        ],
+        "rows": [
+         [
+          "0",
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "First try",
+       "sql": "INSERT INTO payments VALUES ('019a0000-0000-7000-8000-000000000001', 100) ON CONFLICT DO NOTHING",
+       "note": "The row is in, but not committed yet.",
+       "status": "ok",
+       "tag": "INSERT 1",
+       "table": {
+        "cols": [
+         "rows",
+         "charged"
+        ],
+        "rows": [
+         [
+          "0",
+          null
+         ]
+        ]
+       }
+      },
+      {
+       "s": "Retry",
+       "sql": "INSERT INTO payments VALUES ('019a0000-0000-7000-8000-000000000001', 100) ON CONFLICT DO NOTHING",
+       "note": "The client timed out and retried with the same key. The database can't tell yet whether the first try will commit, so it waits.",
+       "status": "blocked",
+       "table": {
+        "cols": [
+         "rows",
+         "charged"
+        ],
+        "rows": [
+         [
+          "0",
+          null
+         ]
+        ]
+       },
+       "resolvedAt": 3,
+       "resolved": {
+        "status": "ok",
+        "tag": "INSERT 0"
+       }
+      },
+      {
+       "s": "First try",
+       "sql": "COMMIT",
+       "note": "The first try commits. The retry's insert returns having inserted nothing.",
+       "status": "ok",
+       "tag": "COMMIT",
+       "table": {
+        "cols": [
+         "rows",
+         "charged"
+        ],
+        "rows": [
+         [
+          "1",
+          "100"
+         ]
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": {
+  "redis-bloom": {
+   "engine": "Redis 8.0.6",
+   "blocks": [
+    {
+     "cmd": "> BF.RESERVE usernames 0.01 1000",
+     "out": "OK"
+    },
+    {
+     "cmd": "> BF.ADD usernames jack",
+     "out": "(integer) 1"
+    },
+    {
+     "cmd": "> BF.ADD usernames paul",
+     "out": "(integer) 1"
+    },
+    {
+     "cmd": "> BF.EXISTS usernames jack",
+     "out": "(integer) 1"
+    },
+    {
+     "cmd": "> BF.EXISTS usernames sara",
+     "out": "(integer) 0"
+    },
+    {
+     "cmd": "> BF.INFO usernames",
+     "out": " 1) Capacity\n 2) (integer) 1000\n 3) Size\n 4) (integer) 1480\n 5) Number of filters\n 6) (integer) 1\n 7) Number of items inserted\n 8) (integer) 2\n 9) Expansion rate\n10) (integer) 2"
+    }
+   ]
+  },
+  "uuid-shapes": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT gen_random_uuid() AS uuid_v4 FROM generate_series(1, 3);",
+     "out": "               uuid_v4                \n--------------------------------------\n f6d3401e-e320-4be9-bffc-5ab781c501a8\n b4ca9e70-caad-44a8-8e57-94d1bfb3bebc\n dc556721-ebc0-4994-8216-472d3fafdfc2\n(3 rows)"
+    },
+    {
+     "cmd": "SELECT uuidv7() AS uuid_v7 FROM generate_series(1, 3);",
+     "out": "               uuid_v7                \n--------------------------------------\n 01a1a80f-200b-7eb7-9339-6bbff68aeda0\n 01a1a80f-200b-7eeb-871b-8e4394a5509f\n 01a1a80f-200b-7ef3-9c29-03b2ec7a81a8\n(3 rows)"
+    },
+    {
+     "cmd": "SELECT uuid_extract_version(uuidv7()) AS version, uuid_extract_timestamp(uuidv7()) AS made_at;",
+     "out": " version |          made_at           \n---------+----------------------------\n       7 | 2026-11-04 19:35:25.964+00\n(1 row)"
+    }
+   ]
+  },
+  "race-postgres": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- after inserting 3,000,000 rows with each kind of key",
+     "out": "bigint   index   64 MB  leaf pages   8197  90.04% full  WAL written 566 MB\nUUIDv7   index   90 MB  leaf pages  11495  89.98% full  WAL written 606 MB\nUUIDv4   index  118 MB  leaf pages  14965   69.2% full  WAL written 716 MB"
+    }
+   ]
+  },
+  "race-mysql": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "-- after inserting 2,000,000 rows with each kind of key",
+     "out": "bigint            table on disk 0 MB\nordered 16 bytes  table on disk 0 MB\nrandom 16 bytes   table on disk 309 MB"
+    }
+   ]
+  }
+ },
+ "charts": {
+  "follower-cost": {
+   "engine": "PostgreSQL 18.6",
+   "title": "The cost of one new follower",
+   "alt": "Time to record one new follower as a user's follower count grows from a thousand to a million. Inserting a row into a follows table stays flat at under a millisecond. Appending to a JSON array on the profile row grows with the size of the list, because the whole row is rewritten.",
+   "x": {
+    "label": "followers already",
+    "log": true
+   },
+   "y": {
+    "label": "ms per follow",
+    "log": true,
+    "unit": "ms"
+   },
+   "series": [
+    {
+     "name": "JSON list",
+     "points": [
+      [
+       1000,
+       4.25
+      ],
+      [
+       10000,
+       12.1
+      ],
+      [
+       100000,
+       46.23
+      ],
+      [
+       1000000,
+       374.94
+      ]
+     ]
+    },
+    {
+     "name": "follows table",
+     "points": [
+      [
+       1000,
+       3.24
+      ],
+      [
+       10000,
+       3.38
+      ],
+      [
+       100000,
+       3.11
+      ],
+      [
+       1000000,
+       3.33
+      ]
+     ]
+    }
+   ]
+  },
+  "race-postgres": {
+   "engine": "PostgreSQL 18.6",
+   "title": "Insert speed by primary key: Postgres",
+   "alt": "Rows inserted per second into a Postgres table with three kinds of primary key, as the table grows to three million rows. Sequential integers and UUIDv7 keep their speed. Random UUIDv4 falls behind as the index outgrows memory.",
+   "x": {
+    "label": "rows already in the table"
+   },
+   "y": {
+    "label": "rows inserted per second",
+    "unit": "rows/s"
+   },
+   "series": [
+    {
+     "name": "bigint",
+     "points": [
+      [
+       250000,
+       422913
+      ],
+      [
+       500000,
+       382662
+      ],
+      [
+       750000,
+       291989
+      ],
+      [
+       1000000,
+       388410
+      ],
+      [
+       1250000,
+       276351
+      ],
+      [
+       1500000,
+       278267
+      ],
+      [
+       1750000,
+       349346
+      ],
+      [
+       2000000,
+       333404
+      ],
+      [
+       2250000,
+       390757
+      ],
+      [
+       2500000,
+       398905
+      ],
+      [
+       2750000,
+       347893
+      ],
+      [
+       3000000,
+       294799
+      ]
+     ]
+    },
+    {
+     "name": "UUIDv7",
+     "points": [
+      [
+       250000,
+       287131
+      ],
+      [
+       500000,
+       246887
+      ],
+      [
+       750000,
+       245761
+      ],
+      [
+       1000000,
+       365470
+      ],
+      [
+       1250000,
+       354404
+      ],
+      [
+       1500000,
+       367867
+      ],
+      [
+       1750000,
+       364832
+      ],
+      [
+       2000000,
+       350285
+      ],
+      [
+       2250000,
+       361000
+      ],
+      [
+       2500000,
+       359556
+      ],
+      [
+       2750000,
+       338925
+      ],
+      [
+       3000000,
+       298512
+      ]
+     ]
+    },
+    {
+     "name": "UUIDv4",
+     "points": [
+      [
+       250000,
+       242370
+      ],
+      [
+       500000,
+       232443
+      ],
+      [
+       750000,
+       235299
+      ],
+      [
+       1000000,
+       212190
+      ],
+      [
+       1250000,
+       206969
+      ],
+      [
+       1500000,
+       205463
+      ],
+      [
+       1750000,
+       184817
+      ],
+      [
+       2000000,
+       193421
+      ],
+      [
+       2250000,
+       190258
+      ],
+      [
+       2500000,
+       149717
+      ],
+      [
+       2750000,
+       201918
+      ],
+      [
+       3000000,
+       191768
+      ]
+     ]
+    }
+   ]
+  },
+  "race-mysql": {
+   "engine": "MySQL 8.4.13",
+   "title": "Insert speed by primary key: InnoDB",
+   "alt": "Rows inserted per second into an InnoDB table with three kinds of primary key, as the table grows to two million rows. Because the table is stored in primary key order, random keys fall far behind, while ordered keys hold their speed.",
+   "x": {
+    "label": "rows already in the table"
+   },
+   "y": {
+    "label": "rows inserted per second",
+    "unit": "rows/s"
+   },
+   "series": [
+    {
+     "name": "bigint",
+     "points": [
+      [
+       200000,
+       171287
+      ],
+      [
+       400000,
+       274455
+      ],
+      [
+       600000,
+       303095
+      ],
+      [
+       800000,
+       288704
+      ],
+      [
+       1000000,
+       320081
+      ],
+      [
+       1200000,
+       317396
+      ],
+      [
+       1400000,
+       296184
+      ],
+      [
+       1600000,
+       353497
+      ],
+      [
+       1800000,
+       318114
+      ],
+      [
+       2000000,
+       295582
+      ]
+     ]
+    },
+    {
+     "name": "ordered 16 bytes",
+     "points": [
+      [
+       200000,
+       164990
+      ],
+      [
+       400000,
+       250696
+      ],
+      [
+       600000,
+       254847
+      ],
+      [
+       800000,
+       289709
+      ],
+      [
+       1000000,
+       267380
+      ],
+      [
+       1200000,
+       246827
+      ],
+      [
+       1400000,
+       226228
+      ],
+      [
+       1600000,
+       243297
+      ],
+      [
+       1800000,
+       284893
+      ],
+      [
+       2000000,
+       246593
+      ]
+     ]
+    },
+    {
+     "name": "random 16 bytes",
+     "points": [
+      [
+       200000,
+       121290
+      ],
+      [
+       400000,
+       106547
+      ],
+      [
+       600000,
+       89454
+      ],
+      [
+       800000,
+       98390
+      ],
+      [
+       1000000,
+       19910
+      ],
+      [
+       1200000,
+       7716
+      ],
+      [
+       1400000,
+       5776
+      ],
+      [
+       1600000,
+       4538
+      ],
+      [
+       1800000,
+       3911
+      ],
+      [
+       2000000,
+       3550
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {
+  "follower-wal": {
+   "size": [
+    [
+     1000,
+     4,
+     0
+    ],
+    [
+     10000,
+     37,
+     0
+    ],
+    [
+     100000,
+     364,
+     0
+    ],
+    [
+     1000000,
+     3641,
+     0
+    ]
+   ]
+  }
+ },
+ "playgrounds": {
+  "bloom-index": {
+   "title": "Postgres has a Bloom index too",
+   "hint": "One signature per row, from any of the indexed columns. It answers equality on any combination of them, and false positives are rechecked against the table.",
+   "setup": "CREATE TABLE products (id int, color int, size int, brand int);\nINSERT INTO products SELECT g, (random() * 50)::int, (random() * 50)::int, (random() * 50)::int FROM generate_series(1, 50000) g;\nCREATE INDEX products_bloom ON products USING bloom (color, size, brand);\nVACUUM ANALYZE products;",
+   "query": "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)\nSELECT * FROM products WHERE size = 7 AND brand = 12;",
+   "presets": [
+    {
+     "label": "Compare sizes",
+     "sql": "SELECT pg_size_pretty(pg_relation_size('products')) AS table_size,\n       pg_size_pretty(pg_relation_size('products_bloom')) AS bloom_index;"
+    },
+    {
+     "label": "A btree of the same columns",
+     "sql": "CREATE INDEX IF NOT EXISTS products_btree ON products (color, size, brand);\nSELECT pg_size_pretty(pg_relation_size('products_bloom')) AS bloom,\n       pg_size_pretty(pg_relation_size('products_btree')) AS btree;"
+    }
+   ]
+  },
+  "uuids": {
+   "title": "Random keys, ordered keys",
+   "hint": "Sort these by value. A UUIDv7 sorts in creation order, and a UUIDv4 doesn't.",
+   "setup": "CREATE TABLE ids (n int, v4 uuid DEFAULT gen_random_uuid(), v7 uuid DEFAULT uuidv7());\nINSERT INTO ids (n) SELECT generate_series(1, 10);",
+   "query": "SELECT n, v7 FROM ids ORDER BY v7;",
+   "presets": [
+    {
+     "label": "Sort the v4 column",
+     "sql": "SELECT n, v4 FROM ids ORDER BY v4;"
+    },
+    {
+     "label": "When was it made?",
+     "sql": "SELECT n, uuid_extract_timestamp(v7) AS made_at FROM ids ORDER BY v7 LIMIT 3;"
+    }
+   ]
+  }
+ }
+}

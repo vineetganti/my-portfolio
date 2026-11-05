@@ -1,0 +1,259 @@
+---
+title: "Sharding and Consistent Hashing: Splitting Data Across Servers"
+description: "What sharding is, how a hash ring decides where a key lives, why plain modulo moves nearly everything when a server is added, and what you give up: a real transfer across two shards lost 100 when one server died. With a working ring you can drive."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 7
+tags: ["Databases", "PostgreSQL", "Sharding", "Distributed Systems"]
+---
+
+[Partitioning](/blog/db-partitioning) splits a table within one database. Sharding goes further: each piece lives on a separate server. That removes the ceiling of a single machine, and it also removes things you've come to rely on.
+
+This post builds the course's sharded URL shortener on three real Postgres servers, and explains the hash ring that routes keys to them. Then it does what the course only describes, and breaks a transaction across two shards. The money really did go missing.
+
+<Callout type="note" title="TL;DR">
+
+- **Sharding** splits one table's rows across separate database servers. Each holds a subset, with smaller indexes, and a query must go to the right server.
+- Choose the shard by **range**, **list**, or **hash**. Strings usually need a hash.
+- `hash % N` is simple, and adding a server moved **67 to 94%** of keys in my test. A **hash ring** moved about 1 key in N + 1.
+- Each server needs many points on the ring, or the load is uneven: with one point each, the busiest of five servers held **3.6 times** its fair share.
+- You lose **cross-shard transactions and joins**. A transfer across two shards, with one server killed between the commits, left the total at 500 instead of 600.
+- Shard last. Partition, cache and replicate first. **Vitess** can hide sharding from clients at the cost of another system to run.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. **07 · Sharding and consistent hashing** (this post): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## What sharding is
+
+One server has one set of limits: memory, CPU, disk and connections. As a table grows, so do its indexes, and queries slow down. Sharding splits the rows across servers by a **shard key**. Each server holds a unique subset, so each has a smaller table and smaller indexes.
+
+The layers stack, and that's how very large systems get a query down to something small:
+
+![How the layers stack. A billion rows are spread over shards on separate servers. Within each shard the table is partitioned, and within each partition an index narrows the search further, until a query only looks at a few thousand rows.](/images/data-engineering/database-engineering/db-sharding/partition-layers.svg)
+
+The new question is the one partitioning never had: **given a key, which server has it?**
+
+| Strategy | Example | Good for |
+| --- | --- | --- |
+| **Range** | Users 1 to 500M on server 1 | Ordered numeric keys |
+| **List** | West coast zip codes on one shard | Geography and tenants |
+| **Hash** | `hash(key)` picks a server | Keys with no natural order, like a short code |
+
+## A sharded URL shortener
+
+The course's demo: three Postgres servers, each with the same `url_table`, and a small Node server in front. To shorten a URL, hash it with SHA-256, keep the first five characters as the code, run that code through a **hash ring** to pick a server, and insert the row there. Reads run the same code through the same ring.
+
+![The write path of the sharded URL shortener. A client posts a long URL. The server hashes it with SHA-256 and keeps the first five characters as the short code. The hash ring maps that code to one of three Postgres servers, and the row is inserted there.](/images/data-engineering/database-engineering/db-sharding/write-path.svg)
+
+I ran this on three real containers, with 10,000 URLs:
+
+<Ran src="sharding/shortener" title="three real servers" />
+
+The first block shows the spread across servers. The second shows the rule: the right server has the row, and the wrong one has nothing. The third shows the cost of a query that doesn't use the shard key: it has to ask every server and add up the answers.
+
+The course also records a dead end worth keeping. The first consistent-hashing library it tried gave different servers for the same key, which broke reads. It switched libraries. The lesson is to verify that a mapping is stable before trusting it with data.
+
+## From modulo to a ring
+
+### Why `hash % N` isn't enough
+
+The obvious way to pick a server is `hash(key) % N`. It's simple and spreads keys well. The problem appears when `N` changes: nearly every key's remainder changes too, so nearly every key now maps to a different server. To stay correct you'd have to move almost all your data.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes describe consistent hashing as "convert the string to a number, modulo N". That's the thing consistent hashing **replaces**. The course's later video on the topic explains the difference properly, and it's what follows here.
+
+</Callout>
+
+### The ring
+
+Picture the hash space as a circle. Hash each **server** onto it, and each **key** too. A key belongs to the next server clockwise.
+
+Adding a server now only claims the keys in the arc just before it. Everything else stays put, and only one neighbour has to hand data over. Here's a working one, with real hashes. Add a server in each mode and compare the red dots:
+
+<HashRing />
+
+Measured on 100,000 keys, adding one server:
+
+<LabChart src="sharding/movement" />
+
+With modulo, 67% of keys moved going from 2 to 3 servers, and 94% going from 16 to 17, so the bigger your cluster, the worse it gets. With a ring the share falls as the cluster grows, to about 1 in N + 1, which is the fair share for the new server to take.
+
+### Points per server
+
+One point per server doesn't spread keys evenly, because the arcs between hashed points vary a lot. Try the slider in the ring above, then see it measured:
+
+<LabChart src="sharding/evenness" />
+
+With one point each, the busiest of five servers held 263% more than its fair share. With 64 or more points the worst server is only a few percent over. These extra points are usually called **virtual nodes**. They also spread a departing server's keys across many neighbours, rather than dumping them all on one.
+
+The ring doesn't make resharding free. The course is clear about that: moving a server still means copying its arc's data, and a crash gives you no time to copy anything, which is why shards also need replicas. Consistent hashing was introduced in 1997, and systems like [Cassandra](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) use it. The arithmetic is simple enough to try in SQL:
+
+<PgPlayground src="sharding/shard-routing" />
+
+The last preset shows Postgres's own hash partitioning, which is `hash % N` inside one server, where the same rule applies if you change the modulus.
+
+## What you give up
+
+| | Partitioning | Sharding |
+| --- | --- | --- |
+| Where | One database | Many servers |
+| Client | Doesn't know | Must know, or use a proxy |
+| Table name | Differs behind the scenes | Same on each server |
+| Transactions | Work | Not across shards |
+| Joins | Work | Not across shards |
+
+### Transactions
+
+Each shard is a separate database, so nothing makes two commits atomic. To see what that means, I moved 100 between accounts on two real shards, and killed the second server between the two commits:
+
+<Ran src="sharding/half-transfer" title="a transfer across two shards" />
+
+The total fell from 600 to 500. Shard 1 committed, shard 2 never did, and neither knows about the other. Everything [post 1](/blog/db-acid-transactions) promised was per server. Two-phase commit and sagas are the usual answers, and [post 14](/blog/db-postgres-mysql-internals#distributed-transactions) runs one.
+
+### Everything else
+
+- **Client complexity.** The app is coupled to the shard layout, and the course's line for it is that software needs social distancing.
+- **Joins.** Cross-shard joins are extremely hard, which is a strong reason to prefer partitioning if you need them.
+- **Schema changes** have to go to every shard, and missing one is a risky failure.
+- **Queries off the shard key** hit all shards, as the demo showed.
+
+## When to shard
+
+The course's answer is: as late as you possibly can. Find the real bottleneck first.
+
+![What to try before sharding, in order. Partition the table, cache hot reads, replicate to serve reads from copies, use multi-region replication, and only then shard. Each step adds complexity, and reads are far easier to scale than writes.](/images/data-engineering/database-engineering/db-sharding/escalation.svg)
+
+Reads scale easily, because copies don't conflict. Writes are the hard case, and they're the usual reason to shard at all. Its benefits are real: resources that scale past one machine, smaller indexes, and a way to isolate sensitive data on its own shard.
+
+🎓 The course's example is YouTube, which ran MySQL with these techniques and only sharded at the application level when writes became unmanageable. That created painful coupling. Changing the shard size meant changing every client. The answer was **[Vitess](https://vitess.io)**, which sits in front of MySQL, parses SQL, and routes it to the right shard, so clients don't have to know. As with everything here, it's one more system to run.
+
+## Things that can trip you up
+
+- **Picking a shard key you can't query by.** Everything else becomes a scatter across all shards.
+- **Hot shards.** A hash spreads keys, but a single very popular key still lands on one server.
+- **Using modulo and then adding a server.** Nearly everything moves. Plan for growth first.
+- **One point per server on a ring.** The load will be badly uneven.
+- **Assuming a client library is stable.** The course's first one wasn't. Test that a key always maps to the same server.
+- **Generating ids per shard.** `serial` restarts on each server, so ids aren't unique across shards. Use UUIDs or a key that includes the shard.
+- **Cross-shard transactions.** There aren't any, unless you build them.
+
+## Reproduce this yourself
+
+1. ✅ Start three servers, on different ports:
+   ```bash
+   docker run -d --name shard1 -p 5441:5432 -e POSTGRES_PASSWORD=postgres postgres:18
+   docker run -d --name shard2 -p 5442:5432 -e POSTGRES_PASSWORD=postgres postgres:18
+   docker run -d --name shard3 -p 5443:5432 -e POSTGRES_PASSWORD=postgres postgres:18
+   ```
+2. ✅ Create the same `url_table` on each: `id serial PRIMARY KEY, url text, url_id char(5) UNIQUE`.
+3. ✅ In Node, I used my own small ring: `md5` of `server#n` for 64 points per server, sorted, then a binary search for the first point at or above `md5(key)`. 📘 The course uses the [`hashring`](https://www.npmjs.com/package/hashring) package, which I didn't use.
+4. ✅ For the failed transfer, `BEGIN` and update on both servers, `COMMIT` on the first, then `docker kill -s KILL shard2`.
+5. 📘 The course's auto-init trick, copying an `init.sql` into `/docker-entrypoint-initdb.d/`, is [documented for the Postgres image](https://hub.docker.com/_/postgres). I created the tables from the client instead.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Shard** | A server holding a subset of a table's rows |
+| **Shard key** | The column that decides a row's shard |
+| **Hash ring** | Servers and keys placed on a circle, each key owned by the next server clockwise |
+| **Consistent hashing** | Hashing where adding a server moves only a small share of keys |
+| **Virtual node** | One of many ring positions for a single server |
+| **Resharding** | Moving data to a new shard layout |
+| **Vitess** | Middleware that routes SQL to MySQL shards |
+
+## Summary
+
+Sharding splits rows across servers, which raises every limit of a single machine, and makes routing your problem. A hash ring keeps that routing stable as servers come and go, moving about one key in N + 1 where modulo moves nearly all of them, as long as each server has many points on the ring. In exchange you lose joins and transactions across shards, which a real crash showed by losing 100 from a transfer. So it's the last step, after partitioning, caching and replication.
+
+![A map of this post in three columns. Routing: a shard key, then range, list or hash, and the client must know. Hashing: modulo moves most keys when servers change, while a ring moves about one share, and virtual nodes even out the load. The cost: no cross-shard transactions or joins, and schema changes on every server.](/images/data-engineering/database-engineering/db-sharding/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Shard key** | Decides where each row lives | Queries off it hit every server |
+| **`hash % N`** | Simple, and fragile | Changing N moves most keys |
+| **Hash ring** | Next server clockwise owns a key | Only one arc moves |
+| **Virtual nodes** | Many ring points per server | Even load, gentler failures |
+| **Lost atomicity** | Each shard commits alone | Transfers can half-happen |
+| **Scatter query** | Ask everyone, then add up | The price of an off-key filter |
+| **Vitess** | A proxy that hides shards | Trades coupling for another system |
+
+### Test yourself
+
+<details>
+<summary>You have 10 servers using hash % N and add an eleventh. Roughly what share of keys move, and why?</summary>
+
+About 91%. A key stays put only if its remainder is the same for 10 and 11, which is rare. Nearly every key lands on a new server, and all that data has to move.
+
+</details>
+
+<details>
+<summary>How does a hash ring limit what moves when a server is added?</summary>
+
+A new server takes only the keys in the arc before it, which all came from one neighbour. Every other key still maps to the same server, because its next-clockwise server hasn't changed.
+
+</details>
+
+<details>
+<summary>Why do real rings give each server many points?</summary>
+
+With one point each, arc lengths vary a lot, so some servers get far more keys. Many points average that out. It also means a departing server's keys spread across many others.
+
+</details>
+
+<details>
+<summary>A transfer updates rows on two shards, and the second server dies after the first commits. What happens, and why can't the database stop it?</summary>
+
+The first shard keeps its change, and the second loses its own, so the data is now wrong. Each shard is a separate database with its own commit, and nothing ties them together unless you add a protocol like two-phase commit or a saga.
+
+</details>
+
+<details>
+<summary>What should you try before sharding?</summary>
+
+Partitioning, caching, read replicas, and multi-region replication, in roughly that order, after finding the real bottleneck. Reads are easy to scale, so sharding is mainly for write load that one server can't take.
+
+</details>
+
+## Open questions and gaps
+
+- I used my own ring rather than the course's `hashring` package, so I didn't see its behaviour or the buggy library it replaced.
+- The servers shared one laptop, so this shows correctness and data movement, not speedup.
+- 🎓 The YouTube story comes from the course. I didn't check it against a primary source.
+- 📘 Vitess is described, not run.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/), including the talks on hash tables and consistent hashing
+- Karger et al., *Consistent Hashing and Random Trees* (1997)
+- Apache Cassandra docs: [Dynamo architecture](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html)
+- [Vitess](https://vitess.io)
+- PostgreSQL docs: [Table Partitioning](https://www.postgresql.org/docs/current/ddl-partitioning.html)

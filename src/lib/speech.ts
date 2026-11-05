@@ -23,7 +23,7 @@ const SKIPPED: Record<string, string> = {
   DETAILS: "Recall questions skipped.",
 };
 
-const SKIP_CONTAINERS = "pre,table,details";
+const SKIP_CONTAINERS = "pre,table,details,.diagram";
 /** `.diagram` is an inlined SVG diagram; it is read like an image. */
 const READ_SELECTOR = "h2,h3,h4,p,li,pre,table,img,.diagram,details";
 /** Browsers cut off very long utterances, so keep each one short. */

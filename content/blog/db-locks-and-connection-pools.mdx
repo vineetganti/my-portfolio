@@ -1,0 +1,322 @@
+---
+title: "Locks, Deadlocks, Double Bookings and Connection Pools"
+description: "How databases keep concurrent work safe: shared and exclusive locks, who really dies in a deadlock, four ways to stop a double booking, why OFFSET gets slower with every page, and a connection leak reproduced for real."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 8
+tags: ["Databases", "PostgreSQL", "Concurrency", "Backend"]
+---
+
+[Post 1](/blog/db-acid-transactions) described what isolation promises. This post is about the machinery that keeps those promises, and the mistakes applications make around it.
+
+The course's lectures here are the most practical in the series: locks, a deadlock, a seat-booking app, pagination and connection pools. Re-running them turned up several claims that need adjusting, including who dies in a deadlock, and a bug in the course's own booking code, which I reproduced to see what it does.
+
+<Callout type="note" title="TL;DR">
+
+- A **shared lock** lets others read and blocks writers. An **exclusive lock** blocks everyone. In Postgres a plain `SELECT` takes neither, and a blocked statement **waits**. It doesn't get an error.
+- A **deadlock** is a cycle of waits. Postgres checks after `deadlock_timeout` (1 second), and the backend whose check finds the cycle dies. So it isn't always the last one in: I got either session to die by changing the timing.
+- **Double booking** comes from checking and then writing. Fix it with `SELECT ... FOR UPDATE`, or put the check in the `UPDATE` itself and read the row count.
+- `lock_timeout`, `NOWAIT` and `SKIP LOCKED` all exist, so a lock wait needn't be forever.
+- `OFFSET` reads and discards every skipped row. At a depth of a million it read 9,106 pages where keyset pagination read 5.
+- A **connection pool** made lookups 11 times faster here. An early `return` that skips `release()` leaks a connection, and with a pool of 2 the third request timed out.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. **08 · Locks, deadlocks and connection pools** (this post): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## Shared and exclusive locks
+
+A lock is how a transaction says "this is mine for now". There are two basic kinds:
+
+![Which row locks conflict. A shared lock is compatible with another shared lock, so many readers can hold it together. A shared lock conflicts with an exclusive lock, and an exclusive lock conflicts with both. In Postgres a plain SELECT takes neither.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/lock-matrix.svg)
+
+An **exclusive lock** says nobody else may touch this. A **shared lock** says this mustn't change while I read it, and anyone else can do the same. The course's example is a bank report: while it runs, writers wait, which is why a bank's site might grey out features at midnight.
+
+Here's the real behaviour on Postgres:
+
+<TxnTheater src="concurrency/shared-lock" />
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture's timeline shows a writer failing when a reader holds a shared lock, and says it gets an error. Two corrections. First, a plain `SELECT` in Postgres takes no row lock, thanks to MVCC, so ordinary readers never block writers: you only get this behaviour by asking for `FOR SHARE`. Second, the waiter **waits**, as step 7 shows. It only gets an error if it has asked for one, which we'll see below.
+
+</Callout>
+
+Locks also come at different sizes. Row locks are the fine-grained ones. A table lock covers everything, and `ALTER TABLE` needs the strongest of them. SQL Server has **lock escalation**, where a query touching thousands of rows trades them for one table lock to save memory. Try this box to see what different statements hold. The last preset shows something the course points out: in Postgres a row lock lives in the row itself, in `xmax`, and not in a lock table.
+
+<PgPlayground src="concurrency/locks" />
+
+## Deadlocks
+
+Two sessions each hold something the other wants:
+
+![A deadlock. Session A holds row 20 and waits for row 21. Session B holds row 21 and waits for row 20. Each is waiting for the other, so neither can move until the database aborts one.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/deadlock-cycle.svg)
+
+Neither can continue, so the database has to kill one. The course says the last one entering the deadlock fails. I wanted to test that, because the [docs](https://www.postgresql.org/docs/current/runtime-config-locks.html) describe something else: a backend that has waited `deadlock_timeout` (1 second by default) runs a deadlock check, and if it finds a cycle, it aborts **itself**. So who dies should depend on whose check finds the cycle first.
+
+Here are the same statements with different timing. Compare the tabs:
+
+<TxnTheater src="concurrency/deadlock" />
+
+In the first tab, A waited for over a second, its check found no cycle, and then B closed the loop and died a second later. That's what the course saw. In the second tab, B closed the loop within A's first second, so A's check fired first, found the cycle, and **A** died, although A entered the wait first.
+
+So "last in" is usually true when people type by hand, since they're slower than a second. Your application should treat any transaction as a possible victim, catch error `40P01`, and retry. The best prevention is to take locks in the same order everywhere.
+
+### Waiting on an uncommitted key
+
+A related case from the same lecture: inserting a key that another transaction has inserted and not committed. The database can't tell yet whether your key is free.
+
+<TxnTheater src="concurrency/duplicate-wait" />
+
+The waiter's fate depends entirely on the other transaction.
+
+## Two-phase locking
+
+**Two-phase locking** is a rule: a transaction first acquires locks, then releases them, and it never acquires one after releasing one.
+
+![Two-phase locking. In the first phase a transaction only acquires locks, and the number it holds rises. In the second it only releases them. In strict two-phase locking, as in real databases, all locks are held until commit and released together.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/two-phase-locking.svg)
+
+Real databases use the strict form and hold everything until commit. The course uses it to introduce a classic problem.
+
+## The double booking problem
+
+Two people look at a seat, both see it free, and both book it. A check followed by a write isn't atomic: anything can happen between them. The course builds this as an Express app, with a debugger pausing between the `SELECT` and the `UPDATE` to force the race. Here's the same race directly, with each fix on its own tab:
+
+<TxnTheater src="concurrency/double-booking" />
+
+| Approach | What happens | Good when |
+| --- | --- | --- |
+| **No lock** | Both succeed, and the last write wins | Never |
+| **`SELECT ... FOR UPDATE`** | The second waits, then finds nothing | Several steps depend on the check |
+| **`UPDATE ... WHERE isbooked = 0`** | The second gets `UPDATE 0` | One statement can do it all |
+
+The third row is elegant, and the course's second lecture on it raises a fair worry: why does this work at all? The [docs](https://www.postgresql.org/docs/current/transaction-iso.html) explain: at read committed, a waiting `UPDATE` re-evaluates its `WHERE` clause against the row version the first transaction committed. The course calls this being at the mercy of the implementation. The fourth tab proves the point: raise the level to repeatable read, and the same statement fails with a serialization error instead. So it's safe either way, but your code must handle what happens. The course prefers `FOR UPDATE` for being explicit, and that's a reasonable default.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture says a plain `SELECT` can get stuck behind `FOR UPDATE`. As the **No lock** and **FOR UPDATE** tabs show, plain reads never wait: only locking reads do. It also says Postgres has no way to time out a lock wait, comparing it with Oracle's `WAIT n`. It has three.
+
+</Callout>
+
+<TxnTheater src="concurrency/no-waiting" />
+
+`SKIP LOCKED` is more useful than it looks. It's how you build a job queue on a table: each worker takes the next row nobody holds.
+
+### A bug in the booking app
+
+The course's `index.mjs` has a subtle bug that's worth more than the demo itself. It takes a client from the pool, begins a transaction, and if the seat is taken, returns early, without a rollback or a `release()`. I reproduced that with a pool of 2:
+
+<Ran src="concurrency/leak" title="what the early return does" />
+
+Two requests for a taken seat used up the pool, and the third timed out. On the server those connections are `idle in transaction`, which is worse than idle: each holds a transaction open, stopping `VACUUM` from cleaning up and holding any locks it took. With the default of no timeout, the third request would simply hang forever.
+
+The fix is `try ... finally`, with `release()` in the `finally`.
+
+## Optimistic and pessimistic control
+
+The course keeps coming back to this choice, which [post 1](/blog/db-acid-transactions#write-skew-when-no-row-is-in-conflict) met as `SERIALIZABLE` against `FOR UPDATE`:
+
+![Two approaches to concurrency. Pessimistic control locks first, so a second transaction waits and then proceeds: never a failure, less concurrency. Optimistic control lets both run and checks at the end, so one may fail and retry: more concurrency, and the application needs retry logic.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/pessimistic-optimistic.svg)
+
+Locks cost memory and queueing, which is why some systems go lock-free and detect conflicts instead. A common application-level form is a **version column**: `UPDATE ... SET v = v + 1 WHERE id = 1 AND v = 7`, and a row count of 0 means someone got there first. Neither is better. It depends on how often conflicts really happen.
+
+### Read-only transactions
+
+A student asked what `BEGIN READ ONLY` buys. The course's answer: mostly protection, with a small amount of optimisation.
+
+<Ran src="concurrency/read-only" />
+
+The first half is the protection. The second half shows the optimisation is mostly automatic: Postgres doesn't even assign a transaction id until the first write, so a read-only transaction skips that cost anyway.
+
+## Why OFFSET gets slower
+
+The obvious pagination is `LIMIT 10 OFFSET n`. The trap is what `OFFSET` does: the database can't jump to the 100,000th row. It has to produce all of them and throw them away.
+
+![Two ways to fetch page 1,000 of a list. OFFSET walks past 10,000 rows, reading each, and throws them away before returning ten. Keyset pagination uses the last id seen to jump straight to the right place in the index and reads only ten rows.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/offset-vs-keyset.svg)
+
+The fix is **keyset pagination**: instead of a position, ask for what comes after the last row you saw. That's one index descent, at any depth:
+
+<Ran src="concurrency/offset-plans" />
+
+The plans say it all: `rows=1000010` against `rows=10`, and 9,106 pages against 5. Over a range of depths:
+
+<LabChart src="concurrency/pagination" />
+
+Try it on 200,000 rows:
+
+<PgPlayground src="concurrency/paging" />
+
+Speed isn't the only problem. Offsets count positions, so a row inserted between two page loads shifts everything along:
+
+<TxnTheater src="concurrency/duplicate-page" />
+
+Story 8 appears on both pages. With keyset pagination, step 4 carried on correctly. The trade-off is that you can't jump to page 500 directly, which most feeds don't need.
+
+## Connection pooling
+
+Opening a database connection means a TCP handshake, maybe TLS, authentication, and on Postgres a new process. A stateless route that does all that for each request pays that cost every time. A **pool** keeps connections open and lends them out.
+
+![A connection pool. Requests borrow a ready connection, run a query and return it, so the TCP and authentication cost is paid once. When all connections are busy, new requests wait in a queue. A request that never returns its connection shrinks the pool.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/pool-lifecycle.svg)
+
+The course measures this from an Express app and sees about a 50% saving. Measuring the database part alone, against a local container, the gap was bigger:
+
+<Ran src="concurrency/pool-bench" />
+
+Sizing matters too. Here are 200 requests arriving at once, each query taking 20 ms:
+
+<LabChart src="concurrency/pool-sizes" />
+
+With one connection, the slowest requests waited over 4 seconds. Fifty brought that under 100 ms. That's the best case, because these queries only sleep on the server. Real queries compete for CPU and disk, so past some point more connections only add contention, and every Postgres connection is a process. Bigger isn't automatically better.
+
+The `pg` driver's [settings](https://node-postgres.com/apis/pool) are the ones to know:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `max` | 10 | The most connections the pool will open |
+| `connectionTimeoutMillis` | 0 | How long to wait for a free one. 0 means forever |
+| `idleTimeoutMillis` | 10,000 | How long an idle connection stays open |
+
+And two usage rules:
+
+- `pool.query()` borrows and returns a connection for you, and is fine for single statements.
+- For a **transaction** you need `pool.connect()`, so that every statement runs on the same connection, then `release()`.
+
+A student asked why one connection can't serve many queries at once. The course's answer is that the protocol is strictly request and response on a connection, so a second query must wait for the first. A pool gives you real concurrency by having several connections.
+
+## Things that can trip you up
+
+- **Taking locks in different orders.** That's where most deadlocks come from.
+- **Not retrying.** Any transaction can be the deadlock victim, so handle `40P01` and `40001`.
+- **A check, then a write.** Without a lock or a single statement, this is a race, however fast it is.
+- **Long transactions.** Locks are held until commit, so do slow work, such as calling an API, outside the transaction.
+- **`idle in transaction`.** Look for it in `pg_stat_activity`. It usually means a leak.
+- **`connectionTimeoutMillis: 0`.** A leak then hangs requests rather than failing them.
+- **`OFFSET` on big tables.** It looks fine in development, where pages are shallow.
+- **Keyset on a non-unique column.** Include the primary key as a tie-breaker, or rows can be skipped.
+
+## Reproduce this yourself
+
+1. ✅ Open two `psql` sessions on any Postgres, and follow each replay step by step, in the order shown.
+2. ✅ For the deadlock timing, type slowly for the first tab, and paste the two statements within a second for the second tab. You can also set `deadlock_timeout` higher to make the window wider.
+3. ✅ To reproduce the leak in Node:
+   ```js
+   const pool = new pg.Pool({ max: 2, connectionTimeoutMillis: 1500 });
+   const book = async () => {
+     const c = await pool.connect();
+     await c.query("BEGIN");
+     const r = await c.query("SELECT * FROM seats WHERE id = 1 AND isbooked = 0 FOR UPDATE");
+     if (r.rowCount === 0) return "seat already booked"; // no ROLLBACK, no release
+     c.release();
+   };
+   ```
+4. ✅ Check for leaks with `SELECT state, count(*) FROM pg_stat_activity GROUP BY state;`.
+5. 🎓 The course's Express app and its browser benchmark aren't reproduced here. I measured the database calls directly.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Shared lock** | Lets others read, stops writers |
+| **Exclusive lock** | Stops everyone else |
+| **Deadlock** | Transactions each waiting for the other |
+| **`deadlock_timeout`** | How long to wait before checking for a deadlock |
+| **Two-phase locking** | All locks are acquired before any is released |
+| **`FOR UPDATE`, `FOR SHARE`** | Locking reads |
+| **`NOWAIT`, `SKIP LOCKED`** | Fail at once, or skip rows that are locked |
+| **Keyset pagination** | Asking for rows after the last one seen |
+| **Connection pool** | A set of open connections lent to requests |
+| **Lock escalation** | Trading many row locks for one table lock |
+
+## Summary
+
+Locks are the pessimistic side of concurrency control: shared for readers who need stability, exclusive for writers, and in Postgres neither for ordinary reads. Cycles of waits become deadlocks, and timing decides the victim, so applications must be ready to retry. A check followed by a write is a race, fixed by locking the read or by putting the check in the write. `OFFSET` reads everything it skips, so keyset pagination wins at any depth. Pools remove the cost of connecting, as long as every code path gives the connection back.
+
+![A map of this post in four columns. Locks: shared and exclusive, held until commit, plain reads take none in Postgres. Deadlocks: a cycle of waits, detected after a second, and the victim depends on timing. Double booking: lock the read, or put the check in the update. Pagination and pools: keyset beats offset, and pools need a release on every path.](/images/data-engineering/database-engineering/db-locks-and-connection-pools/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Lock compatibility** | Shared with shared, nothing with exclusive | Predicts who waits |
+| **Plain read** | Takes no row lock in Postgres | MVCC keeps readers out of the way |
+| **Deadlock victim** | Whoever's check finds the cycle | Any transaction can be aborted |
+| **`FOR UPDATE`** | Locks the rows it reads | Makes check-then-write safe |
+| **Check in the `UPDATE`** | One atomic statement, read the row count | No separate lock needed |
+| **`SKIP LOCKED`** | Take what's free | A job queue on a table |
+| **Keyset pagination** | Continue from the last row seen | Flat cost, no duplicates |
+| **Pool** | Reuse connections | Removes the cost of connecting |
+| **`release()` in `finally`** | Every path gives it back | Stops pool exhaustion |
+
+### Test yourself
+
+<details>
+<summary>In Postgres, session A holds FOR SHARE on a row. What happens to a plain SELECT, another FOR SHARE, and an UPDATE from session B?</summary>
+
+The plain `SELECT` runs, since it takes no row lock. Another `FOR SHARE` runs, since shared locks are compatible. The `UPDATE` waits until A finishes. It isn't given an error.
+
+</details>
+
+<details>
+<summary>Two sessions deadlock. Which one does Postgres abort?</summary>
+
+The one whose deadlock check finds the cycle. Each backend checks once it has waited `deadlock_timeout`. If the cycle closes after the first session's check ran, the second one dies. If it closes before, the first one does.
+
+</details>
+
+<details>
+<summary>Why does UPDATE seats SET ... WHERE id = 1 AND isbooked = 0 stop a double booking at read committed?</summary>
+
+The second `UPDATE` waits for the row lock, then re-evaluates its `WHERE` clause against the committed row. It no longer matches, so it updates 0 rows, and the application sees that count.
+
+</details>
+
+<details>
+<summary>Why does fetching page 100,000 with OFFSET take so long, even with an index?</summary>
+
+`OFFSET` has to produce every skipped row and discard it. The plan shows it reading a million rows to return 10. Keyset pagination starts at the right place in the index instead.
+
+</details>
+
+<details>
+<summary>A pool of 10 connections, and requests start hanging. Nothing's wrong with the database. What do you check first?</summary>
+
+Look for leaks: code paths that take a client and don't release it, often an early return. `pg_stat_activity` showing `idle in transaction` is the usual sign. Then check `connectionTimeoutMillis`, because 0 hangs forever.
+
+</details>
+
+## Open questions and gaps
+
+- I measured the pool from a Node script, not through the course's Express app, so the absolute numbers differ, and the 11 times figure is against a local container.
+- The pool-size chart uses queries that only sleep, so it shows queueing and not contention.
+- 🎓 SQL Server's lock escalation is from the course and not run here.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- PostgreSQL docs: [Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html), [Lock Management](https://www.postgresql.org/docs/current/runtime-config-locks.html), [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html), [SELECT](https://www.postgresql.org/docs/current/sql-select.html)
+- node-postgres docs: [Pool](https://node-postgres.com/apis/pool)
+- Markus Winand, [Use The Index, Luke: Paging Through Results](https://use-the-index-luke.com/sql/partial-results/fetch-next-page)

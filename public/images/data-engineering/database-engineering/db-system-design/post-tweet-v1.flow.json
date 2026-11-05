@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {
+      "from": "client",
+      "to": "server",
+      "label": "HTTP",
+      "type": "request"
+    },
+    {
+      "from": "server",
+      "to": "database",
+      "label": "SQL",
+      "type": "data"
+    },
+    {
+      "from": "database",
+      "to": "server",
+      "label": "SQL",
+      "type": "metadata"
+    },
+    {
+      "from": "server",
+      "to": "client",
+      "label": "HTTP",
+      "type": "metadata"
+    }
+  ]
+}

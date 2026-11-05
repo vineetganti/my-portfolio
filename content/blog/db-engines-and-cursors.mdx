@@ -1,0 +1,312 @@
+---
+title: "Database Engines and Cursors: MyISAM, InnoDB, LSM Trees and Reading Results in Pieces"
+description: "What a storage engine is, how MyISAM and InnoDB really differ, why LSM trees write so fast, and when a cursor beats fetching everything, with real MySQL, SQLite and LevelDB, a working LSM tree, and a server crashed on purpose."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 11
+tags: ["Databases", "MySQL", "PostgreSQL", "LSM Trees", "Storage Engines"]
+---
+
+So far "the database" has meant one thing. Underneath, there's a layer that does the plain work of putting bytes on disk and finding them again, and in some databases you can swap it. That layer is the **storage engine**.
+
+This post covers the course's tour of engines, then its section on cursors. I ran the claims I could: the same transaction on two MySQL engines, a server crashed during writes, a real single-writer SQLite, and real LevelDB, where deleting everything made the files bigger.
+
+<Callout type="note" title="TL;DR">
+
+- A **storage engine** handles reading and writing rows on disk. MySQL lets you pick one per table. Postgres has one table access method, with an API for others.
+- **MyISAM** has no transactions. `ROLLBACK` is accepted and does nothing, and a `CHECK TABLE` after a crash warned that the table wasn't closed properly. **InnoDB** gives ACID, row locks and crash recovery.
+- **LSM trees** turn random writes into sequential ones: log, memtable, sorted files, compaction. Real LevelDB took 232,800 writes a second.
+- In an LSM tree a delete is a new entry. After deleting all 200,000 keys, LevelDB's files **grew**, from 2.9 MB to 4.3 MB, until compaction took them to zero.
+- A **cursor** reads a result in pieces. Fetching 2 million rows took 1.5 seconds and 365 MB of client memory. A server-side cursor returned its first 50 in about 1 ms, at the cost of holding a transaction open.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. **11 · Engines and cursors** (this post): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## What a storage engine is
+
+A database server does a lot: it accepts connections, parses SQL, plans queries and replicates. Underneath all that is a library that stores rows and gets them back. Separating the two means one server can offer several engines, and one engine can be reused by many servers.
+
+![A database management system is layers. Client connections, SQL parsing, planning and replication sit on top. The storage engine underneath handles the low-level job of putting rows on disk and getting them back. MySQL lets you swap that bottom layer, per table.](/images/data-engineering/database-engineering/db-engines-and-cursors/engine-layer.svg)
+
+MySQL is the classic example. Here are the engines in a stock `mysql:8.4`:
+
+<Ran src="engines/show-engines" />
+
+Only one of them supports transactions, and that's the default.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The lecture says Postgres can't change its engine and always uses a B-tree. That's out of date. Postgres has had a [table access method interface](https://www.postgresql.org/docs/current/tableam.html) since version 12, though only `heap` ships with it, and several index types besides B-tree:
+
+</Callout>
+
+<Ran src="engines/pg-access-methods" />
+
+## MyISAM and InnoDB
+
+These are the two engines the course compares, and the difference is the whole of [post 1](/blog/db-acid-transactions) and [post 2](/blog/db-how-data-sits-on-disk) in one table.
+
+![How the two MySQL engines find a row. In MyISAM, indexes point straight to a byte offset in a data file, and locks cover the whole table. In InnoDB, the table is stored in the primary key's tree, secondary indexes hold the primary key, and locks cover single rows.](/images/data-engineering/database-engineering/db-engines-and-cursors/myisam-vs-innodb.svg)
+
+| | MyISAM | InnoDB |
+| --- | --- | --- |
+| Transactions | None | Full ACID |
+| Locks | Table | Row |
+| Index points to | A byte offset in the data file | The primary key |
+| Primary key | Optional | Always, hidden if you don't define one |
+| Foreign keys | No | Yes |
+| After a crash | The table may need repair | Automatic recovery |
+
+The course's demo inserts a row inside a transaction on each engine, and looks from a second connection:
+
+<TxnTheater src="engines/myisam-vs-innodb" />
+
+On MyISAM, `START TRANSACTION` and `ROLLBACK` both returned OK and did nothing at all. That's the dangerous part: nothing warns you.
+
+Locks show the other big difference. Here a long read holds up a write to a different row entirely:
+
+<TxnTheater src="engines/table-lock" />
+
+InnoDB always has a clustered key, as the course says. If you don't give it one, it invents one:
+
+<Ran src="engines/hidden-key" />
+
+### Crashing both
+
+The course says a crash can corrupt a MyISAM table. I inserted into a table on each engine from two clients and killed the server with `SIGKILL`:
+
+<Ran src="engines/myisam-crash" title="kill -9 during writes" />
+
+InnoDB's row count exactly matched what the client had seen committed, which is recovery doing its job. MyISAM's `CHECK TABLE` warned that the table hadn't been closed properly, and a repair was needed to clear that. In this run its data turned out fine, so I can't say I saw corruption. This was a process kill, where the operating system's cache survives, as [post 1 explained](/blog/db-acid-transactions#killing-the-server-for-real). The point stands that InnoDB proves its state with a log, and MyISAM has no log to prove anything with.
+
+<Callout type="warn" title="Correcting the lecture">
+
+A few history slips from the talk. MySQL AB was the Swedish company behind MySQL. Sleepycat, which it names, made Berkeley DB. XtraDB is [Percona's](https://www.percona.com/software/mysql-database/percona-server/xtradb) fork of InnoDB, not Monty's. And the claim that updates in MyISAM shift offsets for all the rows after it is overstated: a row that outgrows its slot moves or fragments, and it's that row's index entries that need changing.
+
+</Callout>
+
+## The engine family
+
+The course's talk covers many engines, which fall into two families:
+
+![A family tree of database engines. B-tree engines include MyISAM, Aria, InnoDB, XtraDB, SQLite and Berkeley DB. LSM engines include LevelDB, its fork RocksDB, and the MyRocks engine for MySQL, which is built on RocksDB.](/images/data-engineering/database-engineering/db-engines-and-cursors/engine-family.svg)
+
+- **Aria**: MyISAM with crash safety, from MariaDB, used for its system tables.
+- **XtraDB**: a fork of InnoDB, which MariaDB used by default until 10.2 switched back to InnoDB.
+- **Berkeley DB**: a key-value library from 1994, now Oracle's, used by early Bitcoin Core.
+- **SQLite**: a whole database in a library, from Richard Hipp, in 2000.
+- **LevelDB** and **RocksDB**: LSM key-value stores. **MyRocks** plugs RocksDB into MySQL.
+
+### SQLite: one writer at a time
+
+The talk says SQLite uses table-level locks and can write in parallel. Neither matched what I found: it's a database-level write lock. This is the real library, opened twice:
+
+<Ran src="engines/sqlite" />
+
+Connection B couldn't write, even to another row, because a writer holds the whole database. In [WAL mode](https://www.sqlite.org/wal.html) readers and a writer don't block each other, and the docs are explicit: there can still be only one writer at a time. That's fine for what SQLite is for, and it's why it's everywhere. (The talk also mentions Web SQL, which [browsers have removed](https://developer.chrome.com/blog/deprecating-web-sql).)
+
+## LSM trees
+
+B-trees update pages in place. An insert may rewrite a whole page for one row, in a random place, and that's what the SSD discussion in [post 2](/blog/db-how-data-sits-on-disk#whats-under-the-page) was about. A **log-structured merge tree** never updates anything in place.
+
+![An LSM tree's write path. A write goes to a log on disk and a sorted memtable in memory, and returns. When the memtable fills it's flushed to an immutable sorted file at level 0. Background compaction merges files into larger sorted runs at lower levels.](/images/data-engineering/database-engineering/db-engines-and-cursors/lsm-write-path.svg)
+
+1. A write is appended to a log, and added to a sorted **memtable** in memory. That's all, so writes are fast.
+2. A full memtable is written out as an immutable, sorted file, an **SSTable**, at level 0.
+3. **Compaction** merges files down the levels, keeping only the newest version of each key.
+4. A read checks the memtable, then files from newest to oldest, which is why engines keep [Bloom filters](/blog/db-bloom-filters-and-uuids) on them.
+
+Here's a working one, with tiny limits so that you can see every step. Write some keys, delete one, compact, and crash it:
+
+<LsmLab />
+
+Watch three things. A **delete** adds a tombstone, so the entry count goes up. **Write amplification** climbs as compaction rewrites data. And a **crash** loses the memtable, and the log puts it back.
+
+Now the real thing. LevelDB, with 200,000 writes, then 200,000 deletes:
+
+<Ran src="engines/leveldb" title="real LevelDB" />
+
+Three results stand out. 232,800 writes a second, on one thread. Deleting every key left zero keys, and **more** disk used than before, because deletes are new entries. And `compactRange` then reclaimed everything.
+
+<Callout type="warn" title="Correcting the lecture">
+
+The talk says nothing is ever deleted in an LSM tree. As the run shows, compaction is exactly how it's removed. It also says LevelDB has no transactions, but [LevelDB's own README](https://github.com/google/leveldb) lists atomic batches and snapshots, though not full multi-statement transactions. And it says MongoDB switched to RocksDB. MongoRocks was a third-party engine, and [WiredTiger](/blog/db-mongo-memcached-redis) is MongoDB's default.
+
+</Callout>
+
+The trade-off is worth stating plainly. An LSM tree exchanges write cost now for read cost and background work later: a read may check several files, and compaction uses disk bandwidth. B-trees suit read-heavy work, and LSM trees suit write-heavy work. Cassandra, HBase, RocksDB and Bigtable are all in this family, the last being the design LevelDB came from.
+
+## Cursors
+
+Now a different problem. A query matches 2 million rows. Where do they go?
+
+![A client-side cursor against a server-side cursor. Client-side: the server runs the query and sends every row, and the client holds them all in memory. Server-side: the server keeps the query open in a transaction and sends a batch when asked, so the client uses little memory, and the server holds state.](/images/data-engineering/database-engineering/db-engines-and-cursors/cursor-kinds.svg)
+
+By default the driver fetches everything into client memory. A **server-side cursor** keeps the query open on the server, and hands out rows when asked. In SQL:
+
+<Ran src="engines/cursor-sql" />
+
+The course compares the two in Python. I did the same in Node:
+
+<Ran src="engines/cursors" title="the same 2,000,000 rows, two ways" />
+
+The first row of the cursor arrived in about 2 ms, against 1.5 seconds and 365 MB for everything. Note the last line: `FETCH LAST` took 37 ms, because the server has to work through all the rows to get there. Cursors don't make the total work smaller. They spread it out.
+
+Try it. This box keeps its transaction open between runs, as a real client would:
+
+<PgPlayground src="engines/cursor" />
+
+### What a cursor costs
+
+| | Client-side | Server-side |
+| --- | --- | --- |
+| First row | After all the rows arrive | At once |
+| Client memory | Holds everything | One batch |
+| Server | Done, and free | Holds a transaction and state |
+| Connection | Any, and it's stateless | Stuck to one server |
+| Failure | Simple to retry | State is lost |
+
+The cost is on the last row of that table's middle: an open cursor is an open transaction. It holds locks, and it keeps old row versions alive. Here it blocks a schema change for as long as a client takes to page through:
+
+<TxnTheater src="engines/cursor-hold" />
+
+Stateful connections also fight with [pools](/blog/db-locks-and-connection-pools#connection-pooling) and horizontal scaling. The course's own preference is client-side fetching with a `LIMIT`, or [keyset pagination](/blog/db-locks-and-connection-pools#why-offset-gets-slower), and using a cursor only for jobs that really stream.
+
+📘 The course also includes Microsoft's reference on SQL Server cursors, which offers four types:
+
+| Type | What it sees | Cost |
+| --- | --- | --- |
+| `STATIC` | A copy made at open | Uses `tempdb`, sees no later changes |
+| `KEYSET` | Fixed rows and order, with current values | Keys stored in `tempdb` |
+| `DYNAMIC` | Every change as you scroll | The most expensive |
+| `FAST_FORWARD` | Forward-only, read-only | The cheapest |
+
+## Things that can trip you up
+
+- **MyISAM accepts `BEGIN`.** Your code looks transactional and isn't. Check `SHOW TABLE STATUS` on older schemas.
+- **`SELECT` from a MyISAM table can block writes.** Locks are per table.
+- **Assuming a default engine.** It's per table in MySQL, and old dumps may specify MyISAM.
+- **SQLite with many writers.** Expect `database is locked`. Set a busy timeout, and keep write transactions short.
+- **Deleting to free space on an LSM store.** Space comes back only after compaction, and may rise first.
+- **Forgetting a cursor is in a transaction.** Long-lived cursors hold back `VACUUM`, and block DDL.
+- **Cursors with connection pools.** A cursor needs the same connection for its whole life.
+
+## Reproduce this yourself
+
+1. ✅ Start MySQL: `docker run --name ms1 -d -e MYSQL_ROOT_PASSWORD=password mysql:8.4`, then create a table with `ENGINE = MyISAM` and another with `ENGINE = InnoDB`, and follow the replay in two sessions. The course's Node version is in [its repository](https://github.com/hnasr/javascript_playground/tree/master/mysql_transaction_myisam_innodb).
+2. ✅ For the crash, insert in a loop on both tables, run `docker kill -s KILL ms1`, start it again, and use `CHECK TABLE`.
+3. ✅ For SQLite I used Node's built-in `node:sqlite` with two connections to one file. Any two `sqlite3` shells work.
+4. ✅ For LevelDB, `npm install classic-level`, then `put`, `del` and `compactRange`, and watch the folder.
+5. ✅ For cursors, `BEGIN; DECLARE c CURSOR FOR ...; FETCH 50 FROM c;`. 🎓 The course's Python version uses a named `psycopg2` cursor.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Storage engine** | The layer that stores and fetches rows |
+| **Table access method** | Postgres's interface for table storage |
+| **LSM tree** | Writes go to a log and memtable, then sorted files that merge in the background |
+| **Memtable** | The sorted in-memory part of an LSM tree |
+| **SSTable** | An immutable sorted file |
+| **Compaction** | Merging files, keeping the newest version of each key |
+| **Tombstone** | An entry that marks a key as deleted |
+| **Write amplification** | Physical writes exceeding the logical ones |
+| **Cursor** | A handle for reading a result a piece at a time |
+
+## Summary
+
+A storage engine is the layer that actually stores rows, and MySQL's choice of engines makes the differences easy to see: MyISAM's speed comes from having no transactions, no row locks and no recovery, and InnoDB has all three. LSM trees take another path, trading in-place updates for appends, flushes and compaction, which gives very fast writes and moves the cost into the background. Cursors solve a different problem: a client that can't take everything at once. They give a fast first row and low memory, in exchange for a transaction held open on the server.
+
+![A map of this post in three columns. Engines: a swappable layer that stores rows, MyISAM against InnoDB. LSM trees: append, flush, compact, with real LevelDB. Cursors: client-side holds everything, server-side streams and keeps state.](/images/data-engineering/database-engineering/db-engines-and-cursors/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Pluggable engine** | MySQL picks one per table | The same SQL can behave differently |
+| **MyISAM** | Offsets, table locks, no transactions | `ROLLBACK` silently does nothing |
+| **InnoDB** | Clustered, row locks, recovery | The safe default |
+| **SQLite** | One writer for the whole database | Simple, and limited by design |
+| **Memtable and log** | The whole write path | Why LSM writes are fast |
+| **Tombstone** | Deleting adds an entry | Space comes back at compaction |
+| **Compaction** | Rewrites data in the background | The bill for fast writes |
+| **Server-side cursor** | Rows on demand | Low memory, held transaction |
+
+### Test yourself
+
+<details>
+<summary>A MyISAM table is used inside BEGIN ... ROLLBACK, and no error appears. What happened to the row?</summary>
+
+It stayed. MyISAM has no transactions, so the insert took effect at once and was visible to other sessions, and `ROLLBACK` had nothing to undo. No warning appeared in this run.
+
+</details>
+
+<details>
+<summary>In an LSM tree, why can deleting data make the files bigger?</summary>
+
+A delete is a new entry, a tombstone, that hides older values. Those values and the tombstone all stay on disk until compaction merges them away. In real LevelDB the files grew from 2.9 MB to 4.3 MB before compaction reclaimed everything.
+
+</details>
+
+<details>
+<summary>Why are LSM writes so fast, and what pays for it?</summary>
+
+A write is a log append and a memtable insert, with no random page rewrites. It's paid for by reads that may check several files, and by compaction, which rewrites data in the background.
+
+</details>
+
+<details>
+<summary>Connection B can't write to a SQLite database while connection A has a write transaction open, even for a different row. What does WAL mode change?</summary>
+
+Readers no longer block on the writer, and the writer doesn't block readers. There's still only one writer at a time, so B's write fails with `database is locked`, as the run showed.
+
+</details>
+
+<details>
+<summary>What's the main risk of a server-side cursor in a busy system?</summary>
+
+It's an open transaction. It holds locks that can block DDL, keeps old row versions from being cleaned up, and ties the client to one connection, so it fits badly with pools and scaling out.
+
+</details>
+
+## Open questions and gaps
+
+- I saw the MyISAM crash warning, not real corruption, since a process kill leaves the operating system cache intact.
+- 🎓 Aria, XtraDB, Berkeley DB, RocksDB and MyRocks are described from the course, with history corrected against sources. I ran none of them.
+- The cursor comparison used Node, and the course used Python and `psycopg2`, so the numbers differ, and the 365 MB depends on the client.
+- 📘 The SQL Server cursor table is from Microsoft's documentation, summarised.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- MySQL 8.4 docs: [Alternative Storage Engines](https://dev.mysql.com/doc/refman/8.4/en/storage-engines.html), [The InnoDB Storage Engine](https://dev.mysql.com/doc/refman/8.4/en/innodb-storage-engine.html)
+- PostgreSQL docs: [Table Access Method Interface](https://www.postgresql.org/docs/current/tableam.html), [DECLARE](https://www.postgresql.org/docs/current/sql-declare.html)
+- SQLite docs: [Write-Ahead Logging](https://www.sqlite.org/wal.html)
+- [LevelDB](https://github.com/google/leveldb), and [classic-level](https://github.com/Level/classic-level) for Node
+- Microsoft: [DECLARE CURSOR](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/declare-cursor-transact-sql)
+- Chrome for Developers: [Deprecating and removing Web SQL](https://developer.chrome.com/blog/deprecating-web-sql)

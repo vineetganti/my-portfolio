@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The PGlite runtime, copied from node_modules by scripts/copy-pglite.mjs:
+    "public/pglite/**",
   ]),
 ]);
 

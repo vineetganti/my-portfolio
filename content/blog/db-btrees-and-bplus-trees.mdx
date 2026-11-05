@@ -1,0 +1,274 @@
+---
+title: "B-Trees and B+Trees: The Structure Under Nearly Every Index"
+description: "Why databases don't use plain B-Trees, how a B+Tree makes ranges cheap, what real tree pages hold when you open them, and how much a wide key costs. With a working tree you can drive, and a real walk from root to row."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 5
+tags: ["Databases", "PostgreSQL", "MySQL", "Indexing", "Data Structures"]
+---
+
+[Post 3](/blog/db-indexes-and-query-plans) treated an index as a box that finds rows fast. This post opens the box. Nearly every index you'll meet is a **B+Tree**, a structure built around one goal: find anything with very few page reads.
+
+It's easy to learn this from textbook pictures, with two keys in a node, and come away with the wrong sense of scale. So besides a tree you can drive, this post walks a real index on a million rows, page by page. It took three pages to reach any row.
+
+<Callout type="note" title="TL;DR">
+
+- A **full table scan** reads every page. A **B-Tree** cuts the search down level by level, with one node per page.
+- In a B-Tree every node holds keys **and** values. That wastes space on the way down and makes ranges slow, because neighbouring keys can be far apart in the tree.
+- A **B+Tree** keeps values only in the leaves and links the leaves together. Internal pages hold far more keys, and a range is one walk along the leaves.
+- In a real Postgres index, a million ints fit in **3 levels**: a root with 10 entries, internal pages of 286, leaves of 367. Any key is three page reads away.
+- Key size sets the fanout. A 36-character text key made the index over 2.5 times larger than an int key. In InnoDB a wide primary key is also copied into every secondary index: the same `email` index doubled from 18.6 MB to 36.7 MB.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. **05 · B-Trees and B+Trees** (this post): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. [10 · System design from the database up](/blog/db-system-design): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## Why not just scan?
+
+A table is a file of pages, as [post 2](/blog/db-how-data-sits-on-disk) showed. A full table scan pulls pages one by one and checks each row. It costs as many I/Os as there are pages, and the row you want may be on the last one. Databases soften this with parallel workers, but it's still reading everything.
+
+What we need is a way to rule out most of the table without reading it. That's what the **B-Tree** does. It comes from a paper by Bayer and McCreight, written in 1970.
+
+## The B-Tree
+
+A B-Tree is a balanced tree of nodes:
+
+- A tree of **degree M** has nodes with at most M children.
+- A node with M children holds M − 1 **elements**, each a key and a value.
+- The **value** is a pointer to the data.
+- The top node is the **root**, the bottom ones are **leaves**, and the rest are **internal** nodes.
+
+The practical rule that makes it fit a database is simple: **one node is one page**. A single I/O brings in a whole node.
+
+![One B-tree node is one disk page. The page holds keys, each with its value, and pointers down to child pages. A node with three children holds two elements. The search rule: go left of a key for smaller values, right for larger.](/images/data-engineering/database-engineering/db-btrees-and-bplus-trees/node-is-a-page.svg)
+
+To search, read the root and pick the child whose range contains your key. Each level costs about one page read. Because the tree is balanced, every leaf is the same distance from the root, so there's no unlucky key.
+
+When a page is full, an insert **splits** it, pushing the middle key up to the parent. If the parent is full it splits too, and if the root splits, the tree grows a level. So a B-Tree grows from the top, which is what keeps it balanced. [Post 4](/blog/db-bloom-filters-and-uuids#page-splits) showed why splits are expensive, and why random keys cause so many.
+
+### Two limitations
+
+**Values in every node waste space.** While walking down you only use the keys, but each internal node also carries values you don't want. Fewer elements fit in a page, so the tree needs more pages and more levels.
+
+**Ranges are slow.** Keys 4 through 9 are next to each other in sorted order, but they can be scattered across levels. A range scan has to climb back up to a parent between children, reading the same pages again.
+
+## The B+Tree
+
+A B+Tree makes two changes:
+
+1. **Internal pages hold only keys.** All values live in the leaves.
+2. **Leaves are linked** to their neighbours.
+
+![The same keys in both structures. In a B-tree every node holds keys and values, so internal pages carry values that a search only passes through. In a B+tree internal pages hold keys alone and fit many more per page, while all the values sit in the leaves, which are linked to each other.](/images/data-engineering/database-engineering/db-btrees-and-bplus-trees/btree-vs-bplus.svg)
+
+The price is that some keys appear twice, once to route and once in a leaf. That's a small cost. The rule for navigating changes a little as well: at a key equal to yours, go **right**, because the value is in a leaf on that side.
+
+Here are both, working. Each page holds a few keys so that you can see them. A real page holds hundreds. Try this sequence:
+
+1. Press **Fill with ordered keys**.
+2. Set the range from 20 to 60 and press **Scan range**. Note the page reads.
+3. Switch to **B-Tree**, and scan the same range. It reads far more pages, because it keeps returning to parents.
+4. Try **Fill with random keys**, and compare the splits and how full the pages are.
+
+<BPlusTreeLab />
+
+| | B-Tree | B+Tree |
+| --- | --- | --- |
+| Values live in | Every node | Leaves only |
+| Keys per internal page | Fewer | Many more |
+| Height for the same data | Taller | Shorter |
+| Duplicate keys | No | Some, in internal pages |
+| Finding one key | Can stop early | Always goes to a leaf |
+| Range scan | Hops around the tree | Walks the leaf chain |
+
+Nearly all relational databases use the B+Tree. The course points out why the two get confused: the original paper's figures drew only keys, every book copied them, and the difference disappeared.
+
+## A real tree, opened up
+
+Time to leave the toy version. Postgres's [`pageinspect`](https://www.postgresql.org/docs/current/pageinspect.html) extension can read index pages directly. Here's a walk through the primary key of a million-row table, from the root to one row, done the way an index scan does it:
+
+<Ran src="btree/walk" title="root to row, on real pages" />
+
+Three index pages out of 2,745, then one heap page. The numbers show how flat a real tree is:
+
+- The **root** has 10 entries.
+- Each **internal** page has about 286 entries.
+- Each **leaf** has 367 entries.
+
+Multiply them: 10 × 286 × 367 is about a million. A fourth level would reach hundreds of millions. That's why the depth barely changes as tables grow, and why even a huge index is only a handful of reads away.
+
+The last line of the output is the link to the table: the leaf's value is the heap address `(3799,185)`, and the row is exactly there. The leaf also has neighbours, on both sides. The [docs](https://www.postgresql.org/docs/current/btree.html) describe each level of the tree as a doubly linked list, not only the leaves.
+
+<Callout type="warn" title="Correcting my notes">
+
+My notes say real nodes hold "thousands of elements". On an 8 KB page it's hundreds, as the walk shows: 367 for an int key. The lecture's other figure, 400 to 500, is closer. I also noted that the course counts a data pointer as 32 or 64 bits. A Postgres heap address is 6 bytes.
+
+</Callout>
+
+The leaf chain pays off on a range. 5,001 consecutive ids:
+
+<Ran src="btree/range-leaves" />
+
+18 pages: down the tree once, then along about 14 leaf pages, each holding hundreds of the rows you want. The plan says `Index Searches: 1`, so the tree was descended once. It's the same walk the simulator showed.
+
+Try it yourself. This box has a real B+Tree in your browser. The last preset follows the leaf links:
+
+<PgPlayground src="btree/pages" />
+
+## What a key costs
+
+The number of entries per page is the tree's **fanout**, and the key's size sets it. Here's the same million rows with four kinds of key:
+
+<Ran src="btree/key-types" />
+
+Two things stand out.
+
+**`int` and `bigint` came out identical.** 367 entries a page and 21 MB each. Index entries are padded to 8-byte boundaries, so a 4-byte key saves nothing. If you were tempted to use `int` to keep an index small, the padding has already eaten the saving.
+
+**A text UUID is expensive.** The 36-character form fits 141 per leaf where an int fits 367, and the index is 56 MB against 21 MB. The binary `uuid` type is much better at 30 MB. All four are still 3 levels high at a million rows, so lookups cost the same. The difference is memory: a larger index competes for the buffer pool, as [the race in post 4](/blog/db-bloom-filters-and-uuids#the-race) showed.
+
+## What the leaves point to
+
+Here's where engines differ most. The leaf has to lead to the row, and each design does that differently:
+
+![What a leaf entry holds in each design. A Postgres index leaf holds the key and a 6-byte heap address. An InnoDB secondary index leaf holds the key and the whole primary key. An InnoDB primary key leaf holds the key and the entire row. So a wide primary key inflates every secondary index in InnoDB.](/images/data-engineering/database-engineering/db-btrees-and-bplus-trees/leaf-contents.svg)
+
+In **Postgres** every index points straight at the row. Reads are direct, and the leaf entry stays small. The cost comes when a row moves: every index may need updating, which is the heart of the Uber story in [post 14](/blog/db-postgres-mysql-internals).
+
+In **InnoDB** the table is the primary key's tree, and every secondary index holds the primary key. Rows can move freely without touching secondary indexes. The cost is a second tree walk on each lookup, and a key that's copied everywhere. Here's that second cost measured: two tables with the same rows and the same `email` index, one with an int primary key and one with a text UUID:
+
+<Ran src="btree/pk-bloat-mysql" />
+
+The `email` index doubled, from 18.6 MB to 36.7 MB, without its own column changing. That's what the course means when it says a primary key choice poisons everything in InnoDB. Every further secondary index pays again.
+
+The course's mitigation is to store UUIDs in binary (16 bytes rather than 36), which helps but stays much bigger than an int.
+
+## Implementation notes
+
+- **Most engines link their leaves**, including InnoDB, Postgres and SQL Server. 🎓 The course says MongoDB's WiredTiger omits the links because Mongo doesn't favour key ranges. The [WiredTiger docs](https://source.wiredtiger.com/develop/arch-btree.html) confirm it's a B-Tree with keys in internal pages and values in leaves, and I couldn't confirm the part about links either way.
+- 🎓 The course also says WiredTiger has an LSM variant. That's about the library rather than MongoDB, which has only used its B-Tree. I couldn't verify its current status, so treat it as unconfirmed.
+- **Memory is the real constraint.** Internal pages are few and hot, so they usually stay cached, leaving only leaves to be read from disk. With 2,745 pages here, the internal levels are about a dozen pages.
+- 🎓 **Trees have to be safe for many threads.** The course's last lecture covers how MySQL 8 made InnoDB's B+Tree more concurrent. In 5.6 a structure change locked the whole index, blocking readers. Newer versions added an intent-style `SX` lock, so that readers can continue while a page split is prepared. I didn't reproduce this, since it needs a contention test.
+
+## Things that can trip you up
+
+- **Tiny diagrams mislead.** A real page holds hundreds of entries, so a real tree is very wide and very shallow.
+- **`bigint` doesn't double an index.** Padding means `int` and `bigint` index entries are the same size here.
+- **Index width affects everything above it.** A wider key means more pages, and a bigger cache footprint.
+- **Never index a blob.** Long keys cut the fanout, and Postgres limits an index entry to about a third of a page.
+- **Don't choose a text UUID as an InnoDB primary key lightly.** It's copied into every secondary index.
+- **The planner may still skip your index.** A shallow tree doesn't make a million heap visits cheap, as [post 3](/blog/db-indexes-and-query-plans#watching-the-plan-flip) showed.
+
+## Reproduce this yourself
+
+1. ✅ Open any index with `pageinspect`, on Postgres 18:
+   ```sql
+   CREATE EXTENSION pageinspect;
+   SELECT root, level FROM bt_metap('t_pkey');
+   SELECT itemoffset, ctid, data FROM bt_page_items('t_pkey', 412) LIMIT 5;
+   ```
+   On an internal page, the first number in `ctid` is the child page. On a leaf it's the heap page.
+2. ✅ To walk by hand: start at `root`, find the last entry whose key is at or below yours, and follow it. The `data` column shows the key as little-endian hex bytes.
+3. ✅ For key sizes, build the same table with `int`, `bigint`, `uuid` and `text` keys, and compare `pg_relation_size` and `bt_page_stats`.
+4. ✅ For the InnoDB test, compare sizes in `mysql.innodb_index_stats` after `ANALYZE TABLE`. Each `stat_value` of `size` is a count of 16 KB pages.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **B-Tree** | A balanced tree with keys and values in every node |
+| **B+Tree** | A B-Tree with values only in leaves, and linked leaves |
+| **Degree** | The most children a node can have |
+| **Root, internal, leaf** | The top node, the middle nodes, the bottom nodes |
+| **Fanout** | How many children a page has, which decides the height |
+| **Page split** | Dividing a full page and promoting a key to the parent |
+| **Data pointer** | What a leaf uses to reach the row |
+| **Latch** | A very short lock protecting an in-memory structure |
+
+## Summary
+
+A B-Tree cuts the search space level by level, with one node per page and every leaf at the same depth. Keeping values in every node wastes space and makes ranges slow, so databases use the B+Tree, where internal pages only route and linked leaves hold everything. Real trees are very flat: a million rows took three levels. Key size sets the fanout, so it decides how much memory an index needs, and InnoDB multiplies that cost across every secondary index.
+
+![A map of this post in three columns. B-Trees: balanced, one node per page, values at every level, weak at ranges. B+Trees: keys route, values in leaves, leaves linked, so ranges are cheap. In practice: fanout depends on key size, a real tree is three or four pages tall, and InnoDB's primary key travels into every secondary index.](/images/data-engineering/database-engineering/db-btrees-and-bplus-trees/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **One node, one page** | A node read is one I/O | Why tree height is the number that counts |
+| **Balance** | Every leaf at the same depth | No unlucky keys |
+| **Split** | A full page divides and pushes a key up | The expensive part of inserting |
+| **Internal pages** | Keys only, in a B+Tree | More fanout, shorter tree |
+| **Linked leaves** | Each leaf knows its neighbours | Ranges become a walk |
+| **Fanout** | Entries per page | Set by key size |
+| **Heap address** | What a Postgres leaf stores | Direct reads, but moves are costly |
+| **Primary key in the leaf** | What an InnoDB secondary stores | Moves are cheap, wide keys aren't |
+
+### Test yourself
+
+<details>
+<summary>In the real index, why did a million rows need only three levels?</summary>
+
+Each level multiplies the reach by the fanout. With a root of 10 entries, internal pages of about 286 and leaves of 367, three levels cover about a million keys. A fourth multiplies that by hundreds again.
+
+</details>
+
+<details>
+<summary>Why is a range scan faster on a B+Tree than on a B-Tree?</summary>
+
+Keys sit in linked leaves in sorted order, so after finding the first key the scan walks sideways. In a B-Tree adjacent keys can be on different levels, so the scan keeps climbing back through parents and re-reading pages.
+
+</details>
+
+<details>
+<summary>What does a B+Tree give up to get those benefits?</summary>
+
+Some keys are stored twice, once in an internal page and once in a leaf, the leaf links take a little space, and a search always goes to a leaf rather than stopping early. All of those are small next to fitting far more keys per page.
+
+</details>
+
+<details>
+<summary>Why did an index on email double in size when only the primary key's type changed?</summary>
+
+In InnoDB each secondary index entry contains the primary key. Changing the primary key from an int to a 36-character string put that string in every entry of the email index.
+
+</details>
+
+## Open questions and gaps
+
+- I read Postgres pages directly, but InnoDB's tree only from size statistics and the docs. I didn't open an `.ibd` file.
+- I couldn't verify whether WiredTiger links its leaves, or the status of its LSM variant.
+- 🎓 The lecture on MySQL 8's B+Tree latching is reported, not reproduced.
+- The paper is usually dated 1970, when it appeared as a report. It was published in a journal in 1972.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/)
+- Bayer and McCreight, *Organization and Maintenance of Large Ordered Indices* (1970)
+- PostgreSQL docs: [B-Tree Indexes](https://www.postgresql.org/docs/current/btree.html), [pageinspect](https://www.postgresql.org/docs/current/pageinspect.html)
+- MySQL 8.4 docs: [Clustered and Secondary Indexes](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html)
+- WiredTiger docs: [B-Tree architecture](https://source.wiredtiger.com/develop/arch-btree.html)

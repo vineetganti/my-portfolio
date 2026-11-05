@@ -1,0 +1,287 @@
+---
+title: "System Design from the Database Up: A Twitter Feature and a URL Shortener"
+description: "The course's system design sessions, with the tables built and the trade-offs measured: how a tweet gets stored, what a follow button costs, why short codes collide, and the home timeline the course never got to."
+date: "2026-11-05"
+section: "data-engineering"
+series: "database-engineering"
+seriesOrder: 10
+tags: ["Databases", "System Design", "PostgreSQL", "Backend"]
+---
+
+System design tends to get taught as a set of diagrams to memorise. The course does the opposite. It talks through a Twitter clone and a URL shortener with no prepared answer, starting from the simplest thing and asking what breaks. Its repeated line is that there's no perfect design, only trade-offs you can explain.
+
+The sessions are mostly talk and whiteboard, so there was less to re-run here. What I could do is build the tables they describe and measure the claims. I also added the one big piece the course never reached: the home timeline.
+
+<Callout type="note" title="TL;DR">
+
+- Start with the simple version, ask what fails, and add a component only to fix a real failure. Each box has a cost.
+- A **queue** between server and database absorbs spikes and retries failed writes. A **load balancer** at layer 4 forwards packets, and at layer 7 it reads requests, and holds your TLS keys.
+- A **follows table** with an index in each direction is cheap to insert into. Counting a celebrity's million followers took 47 ms, and the "am I following?" check took 0.2 ms, so store the count and load the rest later.
+- A **home timeline** can be built at read time or write time. Reading 5,000 accounts took 53 ms. Writing one tweet to a million timelines took 1.2 seconds. Real systems mix both.
+- A **URL shortener** can use generated ids (simple and guessable) or hash prefixes (random, and they collide). Five characters gave 436 clashes in a million URLs, and eight gave none.
+- Reads outnumber writes, so split the paths: writes to the primary, reads to replicas near users.
+
+</Callout>
+
+{/* series:start */}
+
+<Callout type="info" title="The Database Engineering series">
+
+1. [01 · Transactions and ACID](/blog/db-acid-transactions): what a database promises, and how isolation levels bend it.
+2. [02 · How data sits on disk](/blog/db-how-data-sits-on-disk): pages, heaps, row and column stores, clustered tables.
+3. [03 · Indexes and query plans](/blog/db-indexes-and-query-plans): reading EXPLAIN the way the planner thinks.
+4. [04 · Bloom filters, billion-row tables and UUIDs](/blog/db-bloom-filters-and-uuids): skipping work, and the keys that hurt.
+5. [05 · B-Trees and B+Trees](/blog/db-btrees-and-bplus-trees): the structure under nearly every index.
+6. [06 · Partitioning](/blog/db-partitioning): one logical table, many physical ones.
+7. [07 · Sharding and consistent hashing](/blog/db-sharding): splitting data across servers.
+8. [08 · Locks, deadlocks and connection pools](/blog/db-locks-and-connection-pools): double bookings, pagination and pools.
+9. [09 · Replication and CAP](/blog/db-replication-and-cap): copies, lag and what you give up.
+10. **10 · System design from the database up** (this post): a Twitter feature and a URL shortener.
+11. [11 · Engines and cursors](/blog/db-engines-and-cursors): MyISAM, InnoDB, LSM trees, and reading results in pieces.
+12. [12 · Inside MongoDB, Memcached and Redis](/blog/db-mongo-memcached-redis): how the NoSQL engines store things.
+13. [13 · Database security](/blog/db-security): TLS, the wire protocol, least privilege, homomorphic encryption.
+14. [14 · Inside Postgres and MySQL](/blog/db-postgres-mysql-internals): processes, WAL, MVCC, and why Uber moved.
+
+Notes from Hussein Nasser's course [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/). The structure is the course's; the explanations and examples are rewritten, every demo is re-run for real, and the labels say what was verified: [how to read this series](/blog/db-acid-transactions#how-to-read-this-series).
+
+</Callout>
+
+{/* series:end */}
+
+## How the course designs things
+
+The method is more useful than either answer. It goes like this:
+
+1. **Write down the features.** For Twitter: post a tweet, follow someone, see a home timeline.
+2. **Draw the simplest thing that could work.**
+3. **Ask what fails**, and at what scale.
+4. **Add a component only for a reason** you can state. "Let's not introduce complicated things unless we absolutely have a problem."
+
+And a warning that I found refreshing: don't watch videos that present one final design. There's no such thing. A team with different constraints would draw something else, and be right.
+
+## Part 1: posting a tweet
+
+The simplest design is a client, a server and a database:
+
+![The simplest design for posting a tweet. The client sends an HTTP POST to a server, which inserts a row in the database and replies.](/images/data-engineering/database-engineering/db-system-design/post-tweet-v1.svg)
+
+HTTP is chosen for a dull, good reason: everything speaks it, so the client and server can be anything. Now ask what fails.
+
+**The insert fails.** The server can retry, but then the client waits, and the server holds memory for each one in flight.
+
+**A burst arrives.** Each request needs a database connection, and connections are limited.
+
+**The server is the limit.** One machine can't take it all.
+
+Each answer adds a box:
+
+![The design after asking what fails. A load balancer spreads clients over servers, which hold pools of ready database connections. A queue between the servers and the database absorbs spikes and retries failed writes. Workers drain the queue into the database.](/images/data-engineering/database-engineering/db-system-design/post-tweet-v2.svg)
+
+- A **connection pool** on each server, because opening connections is slow. [Post 8](/blog/db-locks-and-connection-pools#connection-pooling) measured that at 11 times slower per request.
+- A **queue** such as Kafka or RabbitMQ, so a spike or a slow database doesn't reach the client. The price: "posted" now means "accepted", and the tweet appears a little later.
+- A **load balancer** to spread clients over servers.
+- Retries need care. If the client retries after a timeout, a tweet may post twice, which is what [idempotency keys](/blog/db-bloom-filters-and-uuids#idempotency-keys) are for.
+
+### Load balancing
+
+The course spends a while here, because the choice has real consequences:
+
+![Two kinds of load balancer. A layer 4 balancer forwards TCP connections without reading them, so one client connection maps to one backend connection. A layer 7 balancer terminates the connection, reads HTTP, and can route each request separately, but it holds the TLS keys and two connections per request.](/images/data-engineering/database-engineering/db-system-design/l4-vs-l7.svg)
+
+| | Layer 4 | Layer 7 |
+| --- | --- | --- |
+| Sees | TCP packets | HTTP requests |
+| TLS | Passes through | Terminates, so it holds certificates and keys |
+| Routing | Per connection | Per request: by URL, header, version |
+| Connections | One path | Two: client to balancer, balancer to server |
+| Features | Few, and very fast | Caching, retries, blue-green releases |
+
+🎓 There's a third option: no balancer at all. The client holds a list of servers and picks one, which the course says Netflix has done to avoid an extra hop. It makes clients more complex, and you lose the ability to shift traffic centrally. The course also likes HTTP/2 end to end, since many requests share one connection, which saves the memory that per-request connections would cost.
+
+## Part 2: the follow feature
+
+A follow is one row: who follows whom. The course considers a list field on the profile and backs away, for reasons [post 4 measured](/blog/db-bloom-filters-and-uuids#testing-the-redesign). I built its table with a million-follower celebrity and 100,000 ordinary users:
+
+```sql
+CREATE TABLE follows (follower bigint NOT NULL, followee bigint NOT NULL, PRIMARY KEY (follower, followee));
+CREATE INDEX follows_followee ON follows (followee, follower);
+```
+
+The primary key answers "who do I follow?", and the second index answers "who follows me?". The course's reasoning for accepting two indexes is that reads far outnumber follows. Here are the three queries a profile page needs:
+
+<Ran src="design/follow-queries" title="the queries behind a profile" />
+
+Looking at those numbers as a designer:
+
+- **"Am I following?"** takes 4 pages and 0.2 ms. It runs on every profile view to set the button, and that's fine.
+- **Counting followers** took 47 ms for the celebrity. The planner chose a parallel table scan, since she's a third of the table. That's too slow to run on every view, so keep a counter, and accept that it can lag. As the course says of likes: 3.2 million against 3.1 million doesn't matter.
+- **Listing followers** must be paged, for the reasons in [post 8](/blog/db-locks-and-connection-pools#why-offset-gets-slower). You never send 4 million rows.
+
+The course also makes a design point about the page itself: send the profile first, and load the counts and the button state in separate requests, so a user sees something straight away. Each is a separate small query, and the slow one can't hold up the rest.
+
+Try the table yourself:
+
+<PgPlayground src="design/follows" />
+
+## The part the course never reached
+
+The course plans three features and covers two: I confirmed that the home timeline never arrives in these sessions. It's the most interesting one, so here's the classic trade-off, measured.
+
+![Two ways to build a home timeline. Pull: on each read, look up everyone you follow and merge their latest tweets, so reads are expensive and writes are cheap. Push: on each tweet, copy it into every follower's timeline, so reads are cheap and a celebrity's tweet means millions of writes.](/images/data-engineering/database-engineering/db-system-design/fan-out.svg)
+
+**Pull** builds the timeline when you open the app. On a table of two million tweets, with an index on author and id:
+
+<LabChart src="design/timeline-pull" />
+
+**Push** copies each tweet into a per-user timeline table, so reading is one index range:
+
+<LabChart src="design/timeline-push" />
+
+The numbers show the shape of the problem. Pull costs in proportion to how many accounts you follow, for every read. Push costs in proportion to your followers, once per tweet: trivial for most people, and over a second of writes for a million-follower account. At real scale that's hundreds of millions of rows for one tweet.
+
+So the usual answer is a mix: push for ordinary accounts, pull for celebrities, and merge them when reading. I'm describing that from general knowledge, not from the course or a test, so treat it as 📘 a well-known pattern rather than something proven here.
+
+## Part 3: a URL shortener
+
+### Design one: generated ids
+
+A table with a serial id and a long URL. The short URL is the id:
+
+<Ran src="design/url-v1" />
+
+This is simple and fast. The primary key is the only index, and sequential inserts are the best case for it. The drawback is that short URLs are guessable. Anyone can walk through ids and find everything anyone has shortened.
+
+### Design two: hash codes
+
+To get unguessable codes, hash the long URL and keep the first few characters. The primary key on the code catches clashes, and `ON CONFLICT` handles a repeat:
+
+<Ran src="design/url-v2" />
+
+The third statement printed nothing and did nothing, which is what you want for a URL shortened twice. But a different URL can land on the same prefix too, and then you need a salt and a retry. How often that happens depends entirely on the length. I hashed a million real URLs:
+
+<LabChart src="design/collisions" />
+
+| Code length | Possible codes | Clashes in a million URLs |
+| --- | --- | --- |
+| 4 | About 17 million | 29,032 |
+| 5 | About 1 billion | 436 |
+| 6 | About 69 billion | 8 |
+| 8 | About 281 trillion | 0 |
+
+This is the birthday problem: clashes arrive far sooner than the number of codes suggests. The course's 8 characters is a safe choice at this size, and the 5 characters in the sharding demo would need that salt loop quite soon. A random code also makes inserts scatter across the index, as [post 4 showed](/blog/db-bloom-filters-and-uuids#why-random-keys-hurt).
+
+<PgPlayground src="design/shortener" />
+
+The course adds that a write-heavy version might suit an LSM engine such as MyRocks, which [post 11](/blog/db-engines-and-cursors) explains.
+
+### Scaling it
+
+The key fact is the read-to-write ratio: a short link is created once and clicked many times. So split the paths:
+
+![The URL shortener at scale. A reverse proxy sends POST requests to a writer connected to the primary, and GET requests to readers connected to read replicas, which are placed near users. Reads far outnumber writes, so most traffic never touches the primary.](/images/data-engineering/database-engineering/db-system-design/url-scaled.svg)
+
+A reverse proxy sends `POST` to a writer, and `GET` to readers on replicas. Replicas can sit near users, and the [replication lag](/blog/db-replication-and-cap#reading-your-own-writes) is harmless here: a new short link that takes a moment to resolve elsewhere doesn't hurt anyone. Only if writes outgrow one primary do you reach for [sharding](/blog/db-sharding).
+
+## Things that can trip you up
+
+- **Designing for scale you don't have.** Each box adds failure modes of its own.
+- **A queue changes what "done" means.** The client's success is now "accepted".
+- **Counts computed on read.** Fine for small accounts, and a problem for the biggest.
+- **Layer 7 balancers terminate TLS.** They can read your traffic, so they're part of your security boundary.
+- **Assuming a hash won't collide.** Prefixes collide much sooner than intuition says.
+- **Sequential public ids.** They reveal your volume and let people enumerate.
+- **Copying a design from a video.** Including this one. The constraints are what matter.
+
+## Reproduce this yourself
+
+1. ✅ Build the `follows` table as above, load a celebrity and some ordinary users, and run the queries. The plans depend on the ratio of the two, as the parallel scan shows.
+2. ✅ For the timeline, I used `tweets (id, author, body)` with an index on `(author, id DESC)`, and a `LATERAL` query taking the 20 latest per followed account:
+   ```sql
+   SELECT t.id, t.author, t.body
+   FROM follows f CROSS JOIN LATERAL (
+     SELECT * FROM tweets t WHERE t.author = f.followee ORDER BY t.id DESC LIMIT 20
+   ) t
+   WHERE f.follower = 1 ORDER BY t.id DESC LIMIT 20;
+   ```
+3. ✅ For push, time `INSERT INTO timelines SELECT g, 1 FROM generate_series(1, n) g`.
+4. ✅ For collisions, hash numbered URLs with SHA-256, encode with base64url, cut to each length, and count repeats in a set.
+5. 🎓 The queue, balancer and HTTP/2 parts are design discussion in the course, and I didn't build them.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Load balancer** | Spreads traffic across servers |
+| **Layer 4, layer 7** | Balancing by TCP connection, or by reading the HTTP request |
+| **Reverse proxy** | A server in front that forwards requests to backends |
+| **Message queue** | A buffer between producers and consumers |
+| **Fan-out** | Delivering one event to many recipients |
+| **Pull, push** | Building a feed at read time, or at write time |
+| **Birthday problem** | Why collisions appear far earlier than the size of the space suggests |
+
+## Summary
+
+The course's lesson is a way of working: start simple, ask what fails, and justify every box. Posting a tweet gained a pool, a queue and a balancer, each for a stated reason. A follow is a cheap row, and the expensive questions are the counts, so the design stores them. A timeline can pay at read time or write time, and the measurements show why the biggest accounts force a mix. A short URL trades guessable ids against colliding hashes, and because reads dominate, the system splits its read and write paths.
+
+![A map of this post in three columns. Method: start simple, ask what fails, add a box only for a reason. Twitter: post, follow, and the timeline trade-off. URL shortener: generated ids or hashes, split reads from writes.](/images/data-engineering/database-engineering/db-system-design/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Why it matters |
+| --- | --- | --- |
+| **Start simple** | Add a box only for a named failure | Complexity is a cost |
+| **Queue** | Absorbs spikes, changes what "done" means | Protects the database |
+| **L4 or L7** | Packets or requests | Decides routing, and who holds TLS keys |
+| **Two indexes on follows** | One for each direction | Reads outnumber follows |
+| **Stored counters** | Accept a little lag | Counting on each view is too slow |
+| **Pull or push** | Pay at read time or write time | Celebrities break pure push |
+| **Short code length** | Clashes grow with the square of the count | Length is a design decision |
+| **Read and write paths** | Reads go to replicas | Reads dominate |
+
+### Test yourself
+
+<details>
+<summary>A queue sits between your servers and the database. What do you gain, and what does a client's "success" now mean?</summary>
+
+You gain protection from spikes and a place to retry. Success now means the write was accepted, not that it's stored. It may appear a little later, and it can still fail after the reply.
+
+</details>
+
+<details>
+<summary>Why can't a layer 4 load balancer route /api to one set of servers and /static to another?</summary>
+
+It only sees TCP packets and doesn't decrypt or parse HTTP, so it has no idea of the URL. A layer 7 balancer can, because it terminates the connection and reads each request, which means it also holds the TLS keys.
+
+</details>
+
+<details>
+<summary>Why not count a user's followers on every profile view?</summary>
+
+For most users it's cheap. For a celebrity it reads a large share of the table: 47 ms here, on every view. A stored counter that's slightly stale is fine, because nobody can tell 3.2 million from 3.1 million.
+
+</details>
+
+<details>
+<summary>A celebrity with 50 million followers posts. Why is fan-out on write a problem, and what's the usual answer?</summary>
+
+It means 50 million timeline writes for one tweet. The usual answer is a mix: push for ordinary accounts, and pull the few celebrities' tweets at read time, merging the two.
+
+</details>
+
+<details>
+<summary>Why do 5-character codes collide so early, given that there are about a billion of them?</summary>
+
+The birthday problem: each new code can clash with every code already issued, so clashes grow with the square of the count. In a million URLs that gave 436 clashes.
+
+</details>
+
+## Open questions and gaps
+
+- The course's Twitter sessions end after the follow feature. The timeline section is mine, and its hybrid answer is general knowledge, not something I built or the course stated.
+- 🎓 The queue, load balancer and HTTP/2 discussions are reported, not run. The Netflix remark is from the course and I didn't check it.
+- I measured single-client timings on a laptop, so they show how costs grow and not what a real service would see.
+
+## Sources
+
+- Hussein Nasser, [Fundamentals of Database Engineering](https://www.udemy.com/course/database-engines-crash-course/), the Twitter and URL shortener sessions
+- PostgreSQL docs: [SELECT and LATERAL](https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-LATERAL), [INSERT and ON CONFLICT](https://www.postgresql.org/docs/current/sql-insert.html)

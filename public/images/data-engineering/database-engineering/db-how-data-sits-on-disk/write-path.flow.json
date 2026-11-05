@@ -1,0 +1,26 @@
+{
+  "steps": [
+    {
+      "from": "UPDATE",
+      "to": "page in buffer pool",
+      "type": "data"
+    },
+    {
+      "from": "UPDATE",
+      "to": "log record",
+      "type": "data"
+    },
+    {
+      "from": "log record",
+      "to": "WAL file",
+      "label": "at COMMIT",
+      "type": "data"
+    },
+    {
+      "from": "page in buffer pool",
+      "to": "data file",
+      "label": "at a checkpoint",
+      "type": "metadata"
+    }
+  ]
+}

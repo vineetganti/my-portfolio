@@ -1,0 +1,199 @@
+{
+ "theaters": {},
+ "runs": {
+  "shortener": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- 10,000 URLs: sha256 -> first 5 characters -> hash ring -> INSERT on that server",
+     "out": "server on port 55441: 2775 rows\nserver on port 55442: 3612 rows\nserver on port 55443: 3613 rows"
+    },
+    {
+     "cmd": "-- read path for code 'khYaW': the ring says port 55443",
+     "out": "port 55443: https://example.com/page/1234\nport 55441 (the wrong server): 0 rows"
+    },
+    {
+     "cmd": "-- not by shard key: SELECT count(*) ... WHERE url LIKE '%/page/99%'",
+     "out": "had to ask all 3 servers and add up: 26 + 45 + 40 = 111, in 1.9 ms"
+    }
+   ]
+  },
+  "half-transfer": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- shard 1\nBEGIN; UPDATE accounts SET balance = balance - 100 WHERE id = 1;\n-- shard 2\nBEGIN; UPDATE accounts SET balance = balance + 100 WHERE id = 2;\n-- shard 1\nCOMMIT;\n-- shard 2 dies before its COMMIT\n$ docker kill -s KILL shard2",
+     "out": "COMMIT on shard 2 failed: read ECONNRESET"
+    },
+    {
+     "cmd": "-- after shard 2 restarts",
+     "out": "account 1 on shard 1: 400\naccount 2 on shard 2: 100\ntotal: 500, and it started at 600"
+    }
+   ]
+  }
+ },
+ "charts": {
+  "movement": {
+   "engine": "100,000 real keys, computed",
+   "title": "Keys that must move when you add one server",
+   "alt": "The share of 100,000 keys that change server when one server is added, for clusters of 2 to 16 servers. With hash modulo N the share stays between 66 and 94 percent. With a hash ring it falls to one share in N plus 1.",
+   "x": {
+    "label": "servers before adding one"
+   },
+   "y": {
+    "label": "% of keys moved"
+   },
+   "series": [
+    {
+     "name": "hash % N",
+     "points": [
+      [
+       2,
+       66.8
+      ],
+      [
+       3,
+       75
+      ],
+      [
+       4,
+       80
+      ],
+      [
+       5,
+       83.3
+      ],
+      [
+       6,
+       85.7
+      ],
+      [
+       8,
+       88.9
+      ],
+      [
+       10,
+       90.8
+      ],
+      [
+       16,
+       94.1
+      ]
+     ]
+    },
+    {
+     "name": "hash ring",
+     "points": [
+      [
+       2,
+       31.4
+      ],
+      [
+       3,
+       22.7
+      ],
+      [
+       4,
+       17.1
+      ],
+      [
+       5,
+       17.6
+      ],
+      [
+       6,
+       14.8
+      ],
+      [
+       8,
+       11.7
+      ],
+      [
+       10,
+       9.6
+      ],
+      [
+       16,
+       5.5
+      ]
+     ]
+    }
+   ]
+  },
+  "evenness": {
+   "engine": "100,000 real keys, computed",
+   "title": "How uneven is a ring of five servers?",
+   "alt": "How far above its fair share the busiest of five servers is, as the number of points each server has on the ring grows from 1 to 256. With one point the busiest server holds far more than its share, and with hundreds of points it's close to fair.",
+   "x": {
+    "label": "points per server on the ring",
+    "log": true
+   },
+   "y": {
+    "label": "busiest server above fair share",
+    "unit": "%"
+   },
+   "series": [
+    {
+     "name": "busiest server",
+     "points": [
+      [
+       1,
+       263.4
+      ],
+      [
+       2,
+       111.9
+      ],
+      [
+       4,
+       67.8
+      ],
+      [
+       8,
+       21.1
+      ],
+      [
+       16,
+       14.5
+      ],
+      [
+       32,
+       23.5
+      ],
+      [
+       64,
+       2.6
+      ],
+      [
+       128,
+       7.9
+      ],
+      [
+       256,
+       7.7
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "data": {},
+ "playgrounds": {
+  "shard-routing": {
+   "title": "Hashing a key to a server, in SQL",
+   "hint": "One Postgres can't be three servers, but the arithmetic is the same. Try changing the 3 to a 4 and see how many keys get a new server.",
+   "setup": "CREATE TABLE keys AS SELECT 'key-' || g AS k FROM generate_series(1, 10000) g;",
+   "query": "SELECT abs(hashtext(k)) % 3 AS server, count(*)\nFROM keys GROUP BY 1 ORDER BY 1;",
+   "presets": [
+    {
+     "label": "Keys that move, 3 to 4",
+     "sql": "SELECT count(*) FILTER (WHERE abs(hashtext(k)) % 3 <> abs(hashtext(k)) % 4) AS moved, count(*) AS total\nFROM keys;"
+    },
+    {
+     "label": "Postgres hash partitions",
+     "sql": "CREATE TABLE IF NOT EXISTS h (k text) PARTITION BY HASH (k);\nCREATE TABLE IF NOT EXISTS h0 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 0);\nCREATE TABLE IF NOT EXISTS h1 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 1);\nCREATE TABLE IF NOT EXISTS h2 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 2);\nTRUNCATE h;\nINSERT INTO h SELECT k FROM keys;\nSELECT tableoid::regclass, count(*) FROM h GROUP BY 1 ORDER BY 1;"
+    }
+   ]
+  }
+ }
+}

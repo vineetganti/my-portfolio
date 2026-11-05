@@ -1,0 +1,652 @@
+[
+  {
+    "id": "ei-01",
+    "post": "db-engines-and-cursors",
+    "q": "What is a storage engine?",
+    "options": [
+      "The layer that stores rows on disk and gets them back, beneath parsing and planning",
+      "The process that accepts client connections and routes them",
+      "The part of the planner that picks an index",
+      "The component that ships changes to replicas"
+    ],
+    "answer": 0,
+    "why": "MySQL lets you choose one per table, which is why the same SQL can behave differently."
+  },
+  {
+    "id": "ei-02",
+    "post": "db-engines-and-cursors",
+    "q": "BEGIN, INSERT, ROLLBACK on a MyISAM table all return OK. Where's the row?",
+    "options": [
+      "Still in the table: MyISAM has no transactions, so ROLLBACK did nothing",
+      "Gone: ROLLBACK removed it as usual",
+      "In a pending state until the next CHECK TABLE",
+      "Visible only to the session that inserted it"
+    ],
+    "answer": 0,
+    "why": "No error, no warning, and the row was visible to other sessions at once."
+  },
+  {
+    "id": "ei-03",
+    "post": "db-engines-and-cursors",
+    "q": "Why did an update of row 2 wait while another session read row 1 of a MyISAM table?",
+    "options": [
+      "MyISAM locks whole tables, so any read holds up any write",
+      "The two rows happened to share a page",
+      "MyISAM waits for all reads to commit before any write",
+      "An index lock covered both rows"
+    ],
+    "answer": 0,
+    "why": "On InnoDB, row locks let the same two statements proceed side by side."
+  },
+  {
+    "id": "ei-04",
+    "post": "db-engines-and-cursors",
+    "q": "You create an InnoDB table with no primary key. What does InnoDB do?",
+    "options": [
+      "Adds a hidden clustered index, GEN_CLUST_INDEX",
+      "Stores the rows in a heap, as Postgres does",
+      "Refuses the CREATE TABLE statement",
+      "Uses the first column as the primary key"
+    ],
+    "answer": 0,
+    "why": "InnoDB always stores a table in a clustered tree, so it makes one up."
+  },
+  {
+    "id": "ei-05",
+    "post": "db-engines-and-cursors",
+    "q": "Is it true that Postgres can't change its table storage?",
+    "options": [
+      "No: table access methods exist since version 12, though only heap ships with it",
+      "Yes: heap is built in, and there's no interface for another",
+      "Yes, but indexes can be swapped between B-tree and heap",
+      "No: you pick an engine per table, as in MySQL"
+    ],
+    "answer": 0,
+    "why": "The lecture was out of date on that. pg_am lists heap as the one table method."
+  },
+  {
+    "id": "ei-06",
+    "post": "db-engines-and-cursors",
+    "q": "Connection B can't write to a SQLite file while A has a write transaction open, even for another row. What does WAL mode change?",
+    "options": [
+      "Readers and the writer stop blocking each other, and there's still one writer",
+      "Several writers can work at once on different tables",
+      "Each row gets its own lock, so B's write goes through",
+      "B's write queues in the WAL and applies after A commits"
+    ],
+    "answer": 0,
+    "why": "SQLite's docs are explicit: only one WAL file, so only one writer at a time."
+  },
+  {
+    "id": "ei-07",
+    "post": "db-engines-and-cursors",
+    "q": "What are the only two things a write does in an LSM tree before returning?",
+    "options": [
+      "A log append and a memtable insert",
+      "A B-tree insert and a page split",
+      "A compaction and a level flush",
+      "A file sort and an fsync of every SSTable"
+    ],
+    "answer": 0,
+    "why": "No page is rewritten in place, which is why real LevelDB took 232,800 writes a second."
+  },
+  {
+    "id": "ei-08",
+    "post": "db-engines-and-cursors",
+    "q": "All 200,000 keys were deleted from LevelDB, and disk use went from 2.9 MB to 4.3 MB. Why?",
+    "options": [
+      "A delete is a new entry, a tombstone, and space only returns at compaction",
+      "LevelDB copies deleted keys to a recycle file",
+      "The log file grew because deletes can't be batched",
+      "Deletes rewrite each SSTable with a larger page size"
+    ],
+    "answer": 0,
+    "why": "compactRange then took it to zero, which also disproves the lecture's 'nothing is ever deleted'."
+  },
+  {
+    "id": "ei-09",
+    "post": "db-engines-and-cursors",
+    "q": "Why might a read in an LSM tree check several files?",
+    "options": [
+      "The newest version of a key could be in any level, so it's checked newest first",
+      "Each key is split across several files",
+      "Reads have to wait for compaction to finish first",
+      "Every file holds a part of the row"
+    ],
+    "answer": 0,
+    "why": "That's why engines keep a Bloom filter per file, and it's the cost of fast writes."
+  },
+  {
+    "id": "ei-10",
+    "post": "db-engines-and-cursors",
+    "q": "A crash wipes an LSM tree's memtable. What brings it back?",
+    "options": [
+      "Replaying the write-ahead log",
+      "Reading the highest level's newest file",
+      "A background compaction",
+      "Nothing: unflushed writes are lost by design"
+    ],
+    "answer": 0,
+    "why": "Like any engine, an LSM tree logs before it acknowledges a write."
+  },
+  {
+    "id": "ei-11",
+    "post": "db-engines-and-cursors",
+    "q": "A cursor returned 50 rows in about 1 ms, where a plain SELECT took 1.5 seconds. Did it do less total work?",
+    "options": [
+      "No: it spreads the work out, as FETCH LAST taking longer shows",
+      "Yes: a cursor skips rows the client doesn't read",
+      "Yes: cursors read an index rather than the table",
+      "No, and it's slower overall, since it runs the query twice"
+    ],
+    "answer": 0,
+    "why": "The win is the first row and client memory, 365 MB in that run."
+  },
+  {
+    "id": "ei-12",
+    "post": "db-engines-and-cursors",
+    "q": "A client pages through a server-side cursor for minutes. What does that hold open?",
+    "options": [
+      "A transaction, which holds locks and blocks DDL, and keeps old row versions alive",
+      "Only a small amount of client memory",
+      "A second copy of the table on the server",
+      "An exclusive lock on every row read"
+    ],
+    "answer": 0,
+    "why": "The replay showed ALTER TABLE waiting until the cursor's transaction ended."
+  },
+  {
+    "id": "ei-13",
+    "post": "db-engines-and-cursors",
+    "q": "Which is a fair correction of the talk's engine history?",
+    "options": [
+      "XtraDB is Percona's fork of InnoDB, and Sleepycat made Berkeley DB",
+      "XtraDB is MySQL AB's original engine, and Sleepycat made SQLite",
+      "MongoDB switched to RocksDB as its default in 2020",
+      "LevelDB has no form of atomic write at all"
+    ],
+    "answer": 0,
+    "why": "MySQL AB was the Swedish company. LevelDB's README lists atomic batches. MongoRocks was never MongoDB's default."
+  },
+  {
+    "id": "ei-14",
+    "post": "db-mongo-memcached-redis",
+    "q": "Why does a normal MongoDB find by _id take two tree walks?",
+    "options": [
+      "The _id index gives a recordId, and a hidden tree maps that to the document",
+      "Every lookup checks both the primary and a replica",
+      "BSON documents are split across two trees",
+      "WiredTiger reads the index twice to verify it"
+    ],
+    "answer": 0,
+    "why": "That keeps index values small, at the cost of a second walk."
+  },
+  {
+    "id": "ei-15",
+    "post": "db-mongo-memcached-redis",
+    "q": "What changes in a clustered collection?",
+    "options": [
+      "Documents live in the _id tree, so there's one walk and no separate _id index",
+      "Documents are spread across several servers",
+      "Documents are stored in a column layout",
+      "The collection is held entirely in memory"
+    ],
+    "answer": 0,
+    "why": "The real stats showed no _id_ index at all. It's InnoDB's design, including the cost of a long key."
+  },
+  {
+    "id": "ei-16",
+    "post": "db-mongo-memcached-redis",
+    "q": "What page sizes did the collection's WiredTiger settings actually show?",
+    "options": [
+      "Internal pages 4 KB, and leaf pages up to 32 KB",
+      "All pages 4 KB, as the lecture said",
+      "All pages 8 KB, the same as Postgres",
+      "All pages 16 KB, the same as InnoDB"
+    ],
+    "answer": 0,
+    "why": "Read from the collection's creationString. The lecture's 4 KB was only half right."
+  },
+  {
+    "id": "ei-17",
+    "post": "db-mongo-memcached-redis",
+    "q": "A Mongo plan has FETCH over IXSCAN. What's the SQL equivalent?",
+    "options": [
+      "An index scan followed by reading the row from the table",
+      "A sequential scan with a filter",
+      "An index-only scan",
+      "A bitmap AND of two indexes"
+    ],
+    "answer": 0,
+    "why": "With a projection covering the query, totalDocsExamined fell to 0, the same idea as index-only."
+  },
+  {
+    "id": "ei-18",
+    "post": "db-mongo-memcached-redis",
+    "q": "Why does Memcached use slab classes?",
+    "options": [
+      "Fixed-size chunks avoid the fragmentation of allocating items of every size",
+      "They let items be compressed by size",
+      "They keep related keys next to each other",
+      "They allow different eviction rules for each client"
+    ],
+    "answer": 0,
+    "why": "The price is waste: an item takes a whole chunk, and a 100-byte value took 192 bytes."
+  },
+  {
+    "id": "ei-19",
+    "post": "db-mongo-memcached-redis",
+    "q": "Which happens when you exceed a Memcached limit?",
+    "options": [
+      "A 2 MB value gets SERVER_ERROR object too large, and a 251-character key gets a client error",
+      "Large values are split across several chunks automatically",
+      "Long keys are hashed down to fit",
+      "The server grows its memory past -m to fit the item"
+    ],
+    "answer": 0,
+    "why": "Limits of 250 characters and 1 MB by default, both confirmed on a real server."
+  },
+  {
+    "id": "ei-20",
+    "post": "db-mongo-memcached-redis",
+    "q": "Memcached server 2 of 3 dies. What happens to the others?",
+    "options": [
+      "Nothing: servers never talk, so only server 2's keys become misses",
+      "They rebalance its keys between them",
+      "They stop serving until a new server joins",
+      "One of them takes over its hash range and copies its data"
+    ],
+    "answer": 0,
+    "why": "The client's hash picks the server. In the run: 2,000 hits, 1,000 lost."
+  },
+  {
+    "id": "ei-21",
+    "post": "db-mongo-memcached-redis",
+    "q": "Redis went from about 69,000 to over a million requests a second with -P 16. What changed?",
+    "options": [
+      "Pipelining: commands are sent without waiting for each reply, removing round trips",
+      "It switched from one thread to sixteen",
+      "It turned off persistence during the test",
+      "It batched the keys into one larger key"
+    ],
+    "answer": 0,
+    "why": "Same single thread. Most of the time had been going on the network."
+  },
+  {
+    "id": "ei-22",
+    "post": "db-mongo-memcached-redis",
+    "q": "What's a risk of Redis running commands on one thread?",
+    "options": [
+      "One slow command, such as KEYS * on a big database, stalls everyone",
+      "Two commands can interleave and corrupt a value",
+      "Pub/sub messages can arrive out of order",
+      "Keys can't expire while a command is running"
+    ],
+    "answer": 0,
+    "why": "The same design makes each command atomic with no locks."
+  },
+  {
+    "id": "ei-23",
+    "post": "db-mongo-memcached-redis",
+    "q": "A Redis server was killed mid-write under each setting. What did the run show?",
+    "options": [
+      "No persistence lost everything, RDB lost 235 keys, and AOF lost none",
+      "All settings lost about the same number of keys",
+      "RDB lost nothing, and AOF lost up to a second",
+      "Every setting lost everything, because data lives in memory"
+    ],
+    "answer": 0,
+    "why": "AOF with fsync on every write ran about 9 times slower, the true price of fsync."
+  },
+  {
+    "id": "ei-24",
+    "post": "db-mongo-memcached-redis",
+    "q": "Why did AOF with everysec lose nothing in the kill test, though the docs say it can lose a second?",
+    "options": [
+      "Writes had reached the OS, which survives a process kill: a power cut could still lose them",
+      "Redis flushed the buffer on receiving the kill signal",
+      "The test ran for less than a second",
+      "Docker snapshots the file system at the moment of the kill"
+    ],
+    "answer": 0,
+    "why": "The same caveat as the Postgres crash test."
+  },
+  {
+    "id": "ei-25",
+    "post": "db-mongo-memcached-redis",
+    "q": "A Redis subscriber joins after a message was published. What does it receive?",
+    "options": [
+      "Nothing: pub/sub is fire and forget, and messages aren't stored",
+      "The last message on that channel",
+      "Every message from the last hour",
+      "An error saying that it missed messages"
+    ],
+    "answer": 0,
+    "why": "Use streams if messages must wait for a consumer."
+  },
+  {
+    "id": "ei-26",
+    "post": "db-security",
+    "q": "Postgres won't start with ssl=on and a key file that's readable by everyone. Why?",
+    "options": [
+      "It refuses a private key with group or world access: chmod 600 restricts it",
+      "It needs chmod 600 so that the key can be executed",
+      "Keys must be owned by root to be loaded",
+      "The certificate and key must have the same permissions"
+    ],
+    "answer": 0,
+    "why": "The lecture said chmod 600 allows execution. It restricts reading to the owner."
+  },
+  {
+    "id": "ei-27",
+    "post": "db-security",
+    "q": "TLS is on, yet a client connects without it. What stops that?",
+    "options": [
+      "A hostssl line in pg_hba.conf, which only matches TLS connections",
+      "Setting ssl = required in postgresql.conf",
+      "Removing the password from the role",
+      "Nothing on the server: only the client can decide"
+    ],
+    "answer": 0,
+    "why": "ssl=on only makes TLS available. pg_hba.conf decides who must use it."
+  },
+  {
+    "id": "ei-28",
+    "post": "db-security",
+    "q": "What does a client see when it verifies a self-signed certificate?",
+    "options": [
+      "A failure, because no trusted authority signed it",
+      "A successful connection, but with no encryption",
+      "A warning in the server's log only",
+      "Nothing: certificates aren't checked for databases"
+    ],
+    "answer": 0,
+    "why": "Encryption without verification protects against eavesdropping, and not an impostor."
+  },
+  {
+    "id": "ei-29",
+    "post": "db-security",
+    "q": "On an unencrypted Postgres connection, what could someone on the path read?",
+    "options": [
+      "The query text and the results, though not the password itself under SCRAM",
+      "Only the table names",
+      "Nothing, since the wire protocol is binary",
+      "The password, but not the queries"
+    ],
+    "answer": 0,
+    "why": "The capture found the query's text in plain sight. With TLS, the same search found nothing."
+  },
+  {
+    "id": "ei-30",
+    "post": "db-security",
+    "q": "What's the default password scheme in current Postgres?",
+    "options": [
+      "scram-sha-256, where the password never crosses the wire",
+      "md5, as in the lecture's capture",
+      "Plain text inside a TLS tunnel",
+      "SHA-1 with a per-user salt"
+    ],
+    "answer": 0,
+    "why": "It became the default in version 14. The lecture's capture was of an older server."
+  },
+  {
+    "id": "ei-31",
+    "post": "db-security",
+    "q": "An insert-only role gets 'permission denied for sequence todos_id_seq'. Why?",
+    "options": [
+      "A serial column needs USAGE on its sequence as well as INSERT on the table",
+      "Inserts need SELECT on the table first",
+      "The sequence belongs to another schema",
+      "Roles can't use sequences without superuser rights"
+    ],
+    "answer": 0,
+    "why": "Exactly the failure the course hit. The fix is GRANT USAGE ON SEQUENCE."
+  },
+  {
+    "id": "ei-32",
+    "post": "db-security",
+    "q": "A role with only DELETE runs DELETE FROM todos WHERE id = 1 and is denied. Why?",
+    "options": [
+      "Reading the WHERE column needs SELECT",
+      "DELETE always needs TRUNCATE as well",
+      "The role needs USAGE on the primary key index",
+      "A DELETE with a WHERE clause needs table ownership"
+    ],
+    "answer": 0,
+    "why": "So 'least privilege' is less obvious than it looks. You have to test each role."
+  },
+  {
+    "id": "ei-33",
+    "post": "db-security",
+    "q": "How does a read-only role limit a SQL injection?",
+    "options": [
+      "An injected DROP or DELETE fails, because the role doesn't have the right",
+      "It stops the injected SQL from being parsed",
+      "It encrypts the query before it's sent",
+      "It removes UNION from the allowed syntax"
+    ],
+    "answer": 0,
+    "why": "Parameters stop injection. Roles limit the blast radius if one gets through."
+  },
+  {
+    "id": "ei-34",
+    "post": "db-security",
+    "q": "Why should an app's user not run CREATE TABLE IF NOT EXISTS at startup?",
+    "options": [
+      "Its role shouldn't own the schema, and since version 15 it can't create in public by default",
+      "It's too slow to run on every start",
+      "IF NOT EXISTS can silently drop data",
+      "It holds an exclusive lock for the app's whole lifetime"
+    ],
+    "answer": 0,
+    "why": "Schema changes belong to a separate owner role. The course's answer to the question."
+  },
+  {
+    "id": "ei-35",
+    "post": "db-security",
+    "q": "What's the better way to send a million ids to a query?",
+    "options": [
+      "One array parameter with = ANY($1), not a huge OR built as text",
+      "A million separate queries over one connection",
+      "A temporary view holding the text of the query",
+      "Raising the server's maximum query length"
+    ],
+    "answer": 0,
+    "why": "The text version has to be sent, parsed and planned. It's also how the course crashed a free database."
+  },
+  {
+    "id": "ei-36",
+    "post": "db-security",
+    "q": "What does homomorphic encryption let a server do?",
+    "options": [
+      "Compute on data it can't read",
+      "Decrypt data without the key, using a proof",
+      "Encrypt data faster than AES",
+      "Store data without using any key"
+    ],
+    "answer": 0,
+    "why": "The browser demo adds salaries by multiplying ciphertexts, and only the client can decrypt the total."
+  },
+  {
+    "id": "ei-37",
+    "post": "db-security",
+    "q": "The lecture says nobody encrypts data in a database. What's the fair correction?",
+    "options": [
+      "Data at rest is often encrypted, and the gap is data in use, while it's being computed on",
+      "All databases encrypt every column by default",
+      "Encryption is impossible for indexed columns",
+      "TLS covers data at rest too"
+    ],
+    "answer": 0,
+    "why": "Three states: in transit, at rest, in use. Homomorphic encryption targets the third."
+  },
+  {
+    "id": "ei-38",
+    "post": "db-postgres-mysql-internals",
+    "q": "What happens when a client connects to Postgres?",
+    "options": [
+      "The postmaster forks a new backend process for it",
+      "A thread from a shared pool picks it up",
+      "It joins a single event loop in the main process",
+      "A replica takes it if the primary is busy"
+    ],
+    "answer": 0,
+    "why": "That's why pools matter, and why settings such as work_mem multiply with connections."
+  },
+  {
+    "id": "ei-39",
+    "post": "db-postgres-mysql-internals",
+    "q": "The same UPDATE wrote 5,758 kB of WAL after a checkpoint, then 231 kB. Why the gap?",
+    "options": [
+      "The first change to a page after a checkpoint logs the whole page",
+      "The first run also had to build the index",
+      "WAL compression only starts after a few writes",
+      "The second run wrote its changes to an undo log instead"
+    ],
+    "answer": 0,
+    "why": "full_page_writes protect against torn pages. More frequent checkpoints mean more of this."
+  },
+  {
+    "id": "ei-40",
+    "post": "db-postgres-mysql-internals",
+    "q": "Why does Postgres have no undo log?",
+    "options": [
+      "Old row versions stay in the table, so rollback only has to mark a transaction aborted",
+      "It keeps undo records in the WAL instead",
+      "It doesn't support rollback for large transactions",
+      "Each transaction works on a private copy of the page"
+    ],
+    "answer": 0,
+    "why": "Rollback is instant, and VACUUM is the bill."
+  },
+  {
+    "id": "ei-41",
+    "post": "db-postgres-mysql-internals",
+    "q": "Recovery replays changes from a transaction that never committed. Why doesn't that show wrong data?",
+    "options": [
+      "With no commit record, those row versions stay invisible",
+      "Recovery skips any record that has no commit record",
+      "They're undone by reading the undo log afterwards",
+      "A checkpoint deletes uncommitted pages first"
+    ],
+    "answer": 0,
+    "why": "Replay only rebuilds pages. Visibility decides what anyone can see."
+  },
+  {
+    "id": "ei-42",
+    "post": "db-postgres-mysql-internals",
+    "q": "Three UPDATEs took a table from 3.5 MB to 14 MB. VACUUM ran, and it stayed at 14 MB. Why?",
+    "options": [
+      "VACUUM makes space reusable, and only VACUUM FULL returns it to the operating system",
+      "VACUUM only removes rows older than a day",
+      "The space is held for the WAL until the next checkpoint",
+      "Autovacuum has to run first, and then VACUUM has an effect"
+    ],
+    "answer": 0,
+    "why": "VACUUM FULL rewrites the table under an exclusive lock, which brought it back to 3.5 MB."
+  },
+  {
+    "id": "ei-43",
+    "post": "db-postgres-mysql-internals",
+    "q": "VACUUM reports nothing removed, and 1,000 dead rows remain. What's the likely reason?",
+    "options": [
+      "An open transaction has a snapshot that could still need those versions",
+      "The table is too small for vacuum to run",
+      "Autovacuum is holding a lock on it",
+      "Dead rows are only removed once a day"
+    ],
+    "answer": 0,
+    "why": "One long transaction holds back cleanup for the whole server."
+  },
+  {
+    "id": "ei-44",
+    "post": "db-postgres-mysql-internals",
+    "q": "What must be true for a HOT update?",
+    "options": [
+      "No indexed column changes, and the new version fits on the same page",
+      "The table has no indexes at all",
+      "The update changes only the primary key",
+      "The transaction runs at SERIALIZABLE"
+    ],
+    "answer": 0,
+    "why": "Then the index keeps pointing at the old line pointer, and the chain continues inside the page."
+  },
+  {
+    "id": "ei-45",
+    "post": "db-postgres-mysql-internals",
+    "q": "Updating an indexed column wrote more WAL with each extra index, even on other columns. Why?",
+    "options": [
+      "The new version has a new address, so every index needs a new entry",
+      "Every index is rebuilt on each update",
+      "The WAL records all index contents at each commit",
+      "Indexes are compressed on every write"
+    ],
+    "answer": 0,
+    "why": "From 15 MB to 59 MB with five indexes. That's write amplification, and the heart of Uber's complaint."
+  },
+  {
+    "id": "ei-46",
+    "post": "db-postgres-mysql-internals",
+    "q": "Why does the same update touch fewer structures in InnoDB?",
+    "options": [
+      "Secondary indexes hold the primary key, which didn't change, so they're left alone",
+      "InnoDB doesn't keep secondary indexes up to date until a read",
+      "InnoDB compresses index updates into one write",
+      "InnoDB has no write-ahead log to update"
+    ],
+    "answer": 0,
+    "why": "It pays for that on reads, with a second tree walk."
+  },
+  {
+    "id": "ei-47",
+    "post": "db-postgres-mysql-internals",
+    "q": "A bulk update of an unindexed column was only 4,368 of 10,000 HOT. Why not all?",
+    "options": [
+      "The free space on each page ran out, so the rest of the rows had to move",
+      "HOT is limited to a fixed number of rows per statement",
+      "The other updates changed an indexed column",
+      "Autovacuum interrupted the statement"
+    ],
+    "answer": 0,
+    "why": "fillfactor reserves room for HOT, and a bulk update quickly uses it up."
+  },
+  {
+    "id": "ei-48",
+    "post": "db-postgres-mysql-internals",
+    "q": "SELECT id FROM t WHERE id NOT IN (SELECT parent FROM t) returns nothing. The subquery contains a NULL. Why?",
+    "options": [
+      "Comparing with NULL gives unknown, so no row can pass the test",
+      "NOT IN removes NULL rows, and then fails on an empty list",
+      "NULL is treated as 0, which matches every id",
+      "Subqueries with NULLs are rejected, and return no rows"
+    ],
+    "answer": 0,
+    "why": "Filter the nulls out, or use NOT EXISTS."
+  },
+  {
+    "id": "ei-49",
+    "post": "db-postgres-mysql-internals",
+    "q": "SELECT * took 297 ms and SELECT id took 5 ms on the same rows. What's a cause that an index can't fix?",
+    "options": [
+      "Large out-of-line values had to be read and sent to the client",
+      "SELECT * always runs without a query plan",
+      "The star has to be expanded at runtime for each row",
+      "SELECT * takes a table lock for the whole scan"
+    ],
+    "answer": 0,
+    "why": "It also lost the index-only scan: 753 pages against 17, and 47 MB delivered."
+  },
+  {
+    "id": "ei-50",
+    "post": "db-postgres-mysql-internals",
+    "q": "A prepared transaction survived SIGKILL. What's the catch?",
+    "options": [
+      "It keeps its locks until someone decides, so an orphan blocks work and vacuum",
+      "It's rolled back at the next checkpoint",
+      "It can only be committed from the original connection",
+      "It loses its changes, and only its id survives"
+    ],
+    "answer": 0,
+    "why": "The docs warn that it's meant for a real transaction manager and not for applications."
+  }
+]

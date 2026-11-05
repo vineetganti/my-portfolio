@@ -1,0 +1,73 @@
+{
+ "theaters": {},
+ "runs": {
+  "walk": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "-- walking the primary key of a 1,000,000-row table to id = 703000\n-- the index has 2745 pages, and the root is page 412",
+     "out": "page 412   root      level 2  10 entries, separator 625861 points down to page 1842\npage 1842  internal  level 1  286 entries, separator 702721 points down to page 1929\npage 1929  leaf      level 0  367 entries, key 703000 -> heap address (3799,185)\n             leaf neighbours: previous page 1928, next page 1930"
+    },
+    {
+     "cmd": "SELECT ctid, id, name FROM t WHERE id = 703000;",
+     "out": "heap says: ctid (3799,185), id 703000, name 'row 703000'"
+    }
+   ]
+  },
+  "key-types": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "SELECT key_type, index_size, pages, height, entries_in_a_leaf\nFROM (VALUES ('int, 4 bytes', 'k_int_pkey'), ('bigint, 8 bytes', 'k_big_pkey'), ('uuid, 16 bytes', 'k_uuid_pkey'), ('text, 36 characters', 'k_text_pkey')) AS x(key_type, idx),\nLATERAL (SELECT pg_size_pretty(pg_relation_size(idx::regclass)) AS index_size, pg_relation_size(idx::regclass) / 8192 AS pages) s,\nLATERAL (SELECT level + 1 AS height FROM bt_metap(idx)) m,\nLATERAL (SELECT live_items AS entries_in_a_leaf FROM bt_page_stats(idx, 100)) p;",
+     "out": "      key_type       | index_size | pages | height | entries_in_a_leaf \n---------------------+------------+-------+--------+-------------------\n int, 4 bytes        | 21 MB      |  2745 |      3 |               367\n bigint, 8 bytes     | 21 MB      |  2745 |      3 |               367\n uuid, 16 bytes      | 30 MB      |  3853 |      3 |               262\n text, 36 characters | 56 MB      |  7210 |      3 |               141\n(4 rows)"
+    }
+   ]
+  },
+  "range-leaves": {
+   "engine": "PostgreSQL 18.6",
+   "blocks": [
+    {
+     "cmd": "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT id FROM t WHERE id BETWEEN 4000 AND 9000;",
+     "out": "                           QUERY PLAN                            \n-----------------------------------------------------------------\n Index Only Scan using t_pkey on t (actual rows=5001.00 loops=1)\n   Index Cond: ((id >= 4000) AND (id <= 9000))\n   Heap Fetches: 0\n   Index Searches: 1\n   Buffers: shared hit=18\n Planning:\n   Buffers: shared hit=77\n(7 rows)"
+    }
+   ]
+  },
+  "pk-bloat-mysql": {
+   "engine": "MySQL 8.4.13",
+   "blocks": [
+    {
+     "cmd": "SELECT table_name, index_name, round(stat_value * 16 / 1024, 1) AS size_mb FROM mysql.innodb_index_stats WHERE database_name = database() AND stat_name = 'size' ORDER BY table_name, index_name;",
+     "out": "+------------+------------+---------+\n| table_name | index_name | size_mb |\n+------------+------------+---------+\n| users_int  | PRIMARY    |    14.5 |\n| users_int  | idx_email  |    18.6 |\n| users_uuid | PRIMARY    |    24.6 |\n| users_uuid | idx_email  |    36.7 |\n+------------+------------+---------+\n4 rows in set (0.03 sec)"
+    }
+   ]
+  }
+ },
+ "charts": {},
+ "data": {},
+ "playgrounds": {
+  "pages": {
+   "title": "Look inside a real B+Tree",
+   "hint": "100,000 rows and a primary key. These are the index's real pages. In bt_page_items, ctid on a leaf is a heap address, and on an internal page its first number is the child page.",
+   "setup": "CREATE TABLE t (id int PRIMARY KEY, name text);\nINSERT INTO t SELECT g, 'row ' || g FROM generate_series(1, 100000) g;\nVACUUM ANALYZE t;",
+   "query": "SELECT root, level, fastroot FROM bt_metap('t_pkey');",
+   "presets": [
+    {
+     "label": "The root page",
+     "sql": "SELECT itemoffset, ctid, itemlen, data\nFROM bt_page_items('t_pkey', (SELECT root FROM bt_metap('t_pkey')))\nLIMIT 6;"
+    },
+    {
+     "label": "A leaf page's stats",
+     "sql": "SELECT blkno, type, live_items, avg_item_size, free_size, btpo_prev, btpo_next\nFROM bt_page_stats('t_pkey', 1);"
+    },
+    {
+     "label": "Entries in a leaf",
+     "sql": "SELECT itemoffset, ctid, data\nFROM bt_page_items('t_pkey', 1) LIMIT 6;"
+    },
+    {
+     "label": "Follow the leaf links",
+     "sql": "SELECT blkno, btpo_prev, btpo_next, live_items\nFROM generate_series(1, 5) AS g, LATERAL bt_page_stats('t_pkey', g);"
+    }
+   ]
+  }
+ }
+}
