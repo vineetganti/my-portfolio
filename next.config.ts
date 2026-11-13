@@ -14,11 +14,16 @@ const RENAMED_POSTS: Record<string, string> = {
 const nextConfig: NextConfig = {
   /* config options here */
   async redirects() {
-    return Object.entries(RENAMED_POSTS).map(([from, to]) => ({
-      source: `/blog/${from}`,
-      destination: `/blog/${to}`,
-      permanent: true,
-    }));
+    return [
+      ...Object.entries(RENAMED_POSTS).map(([from, to]) => ({
+        source: `/blog/${from}`,
+        destination: `/blog/${to}`,
+        permanent: true,
+      })),
+      // The old placeholder "Good reads" page now lives inside the Second brain page. Temporary (307) while it is a beta,
+      // so withdrawing the beta does not leave a permanent redirect cached in browsers.
+      { source: "/reads", destination: "/second-brain#good-reads", permanent: false },
+    ];
   },
   experimental: {
     agentFeedback: true,

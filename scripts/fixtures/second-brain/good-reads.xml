@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Vineet Ganti: Engineering and AI reading list (Good reads)</title>
+    <link>https://www.vineetganti.com/second-brain</link>
+    <description>Articles picked from company engineering and AI research blogs. Summaries are generated from the article text and checked automatically; follow each link for the original.</description>
+    <item>
+      <title>Post alpha</title>
+      <link>https://x.dev/alpha</link>
+      <guid isPermaLink="false">a:f40574f2d402</guid>
+      <pubDate>Sun, 01 Nov 2026 12:00:00 +0000</pubDate>
+      <category>distributed_systems</category>
+      <description>A grounded summary.
+
+AI-written note on why it matters: Because.
+
+Source: a</description>
+    </item>
+    <item>
+      <title>Post beta</title>
+      <link>https://x.dev/beta</link>
+      <guid isPermaLink="false">a:5c24d0927fe5</guid>
+      <pubDate>Sun, 01 Nov 2026 12:00:00 +0000</pubDate>
+      <category>distributed_systems</category>
+      <description>A grounded summary.
+
+AI-written note on why it matters: Because.
+
+Source: a</description>
+    </item>
+  </channel>
+</rss>

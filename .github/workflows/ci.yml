@@ -1,0 +1,54 @@
+name: CI
+
+# Three independent jobs. The safety job runs on every push: this repository is public and holds a private-data pipeline
+# (second-brain/), so a tracked database, token, key or personal path must fail the build before it is ever visible.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  safety:
+    name: public-safety check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-public-safety.mjs
+
+  site:
+    name: site (lint, tests, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:second-brain
+      - run: npx tsc --noEmit
+      # No SECOND_BRAIN_* variables here on purpose: the build must also succeed when the page is not configured.
+      - run: npm run build
+
+  second-brain:
+    name: second-brain pipeline (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: second-brain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: second-brain/pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q

@@ -54,7 +54,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="font-body antialiased min-h-screen flex flex-col">
-        <Header />
+        <Header secondBrain={process.env.SECOND_BRAIN_ENABLED !== "false"} />
         <main className="flex-1 w-full max-w-wide mx-auto px-4 sm:px-6 lg:px-10 py-10">
           {children}
         </main>

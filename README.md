@@ -45,8 +45,27 @@ src/
     sections.ts    the list of sections and series (edit this to add one)
     speech.ts      turns the rendered post into chunks for the audio player
     projects.ts    reads project files
-next.config.ts     redirects for renamed posts
+    secondBrain.ts       fetches and verifies the Second brain snapshot (server only)
+    secondBrainCore.mjs  signature check and validation, shared by the site, the upload script and the tests
+next.config.ts     redirects for renamed posts, and /reads to /second-brain
+second-brain/      the Python pipeline behind the Second brain page (its own README); PRIVATE DATA LIVES IN second-brain/data/, IGNORED
+scripts/
+  check-public-safety.mjs     fails if a database, token, key or personal path is tracked (CI runs it on every push)
+  upload-second-brain.mjs     verifies, then uploads the signed snapshot to Vercel Blob
+  second-brain.test.mjs       tests, with a fixture signed by the Python code (npm run test:second-brain)
 ```
+
+## Second brain (beta)
+
+`/second-brain` shows a shelf of good reads and a short daily list. The owner picks what is on it; an AI writes the summaries. The Python pipeline in `second-brain/` signs a small snapshot with a private key that stays on the owner's machine; the page verifies it before showing anything and has no write path. Details, the file contract, the beta exit criteria and the rollback steps are in [second-brain/docs/second-brain-contract.md](second-brain/docs/second-brain-contract.md).
+
+| Environment variable | Purpose |
+| --- | --- |
+| `SECOND_BRAIN_BASE_URL` | where the signed files are hosted (printed by the upload script) |
+| `SECOND_BRAIN_PUBLIC_KEY` | the Ed25519 public key, base64 (public by design) |
+| `SECOND_BRAIN_ENABLED` | `false` hides the page and the nav link (needs a redeploy; `nb publish --pause` is the fast switch) |
+
+> This repository is public. `second-brain/data/`, `.env*`, tokens and keys are gitignored, and `npm run check:safety` fails if any private file is tracked.
 
 ## How the blog is organised
 
