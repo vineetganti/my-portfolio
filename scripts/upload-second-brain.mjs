@@ -82,7 +82,8 @@ for (const name of SNAPSHOT_FILES.flatMap((n) => [n, `${n}.sig`])) {
   try {
     await copy(`${PREFIX}/current/${name}`, `${PREFIX}/previous/${name}`, blobOptions(name));
   } catch (e) {
-    if (e?.name === "BlobNotFoundError" || /not found/i.test(String(e?.message))) continue; // first upload: nothing to keep
+    // First upload: nothing to keep. Blob reports a missing source as "The specified key does not exist".
+    if (e?.name === "BlobNotFoundError" || /not found|does not exist/i.test(String(e?.message))) continue;
     throw e;
   }
 }

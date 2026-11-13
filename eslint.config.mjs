@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // The PGlite runtime, copied from node_modules by scripts/copy-pglite.mjs:
     "public/pglite/**",
+    // Python virtual environments (second-brain/.venv): installed packages ship their own JavaScript.
+    "**/.venv/**",
   ]),
 ]);
 

@@ -1,0 +1,315 @@
+---
+title: "The Second brain page: signed snapshots and no write path"
+description: "Part 8 of the build log for this site. A page that shows data from outside the repository without trusting it: files signed with Ed25519 on the owner's machine, verified on their raw bytes before anything is parsed, validated field by field, cached for 15 minutes, and refused if anything is off. Five explicit states, a signed kill switch, an upload script that refuses early, and the first real upload, which failed on a missing file."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 8
+tags: ["Security", "Ed25519", "Next.js", "Vercel Blob", "Caching"]
+---
+
+Every other page on this site is built from files in the repository, which only I can change. The Second brain page is different: it shows a reading list that a separate pipeline publishes every few days, from my own machine, without a push. So the site has to show data it didn't build, and the question this part answers is how to do that without the page becoming something anyone can write to.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. **The Second brain page** (this post): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- **The site has no write path.** No form, no API route that accepts data, no database. The page only reads five static files from Vercel Blob.
+- **Every file is signed** with an Ed25519 key that never leaves my machine, and the site holds only the public key.
+- **The signature is checked on the raw bytes before anything is parsed.** Then the JSON is validated: schema, age, count, field types and lengths, and that every link is `https`.
+- **Every outcome has a named state:** off, not configured, paused, unavailable, or ok. Only ok shows items, and a status file that doesn't verify makes the page fail closed.
+- ✅ **Live today:** the production page answers in the ok state with both lists empty, because nothing has been published to it yet. 📜 The first real upload, earlier the same day, failed because there was no live copy to back up, and the upload script was fixed.
+
+## Where the trust boundary sits
+
+![Where the trust boundary sits. On the owner's machine: the private database, the private signing key, nb publish which writes and signs five files, and the upload script which holds the Blob token. In Vercel Blob: the five files and their signatures, in current and previous folders. On the website: only the public key. The site fetches, verifies and renders, and has no path that writes anything back.](/images/build-logs/building-this-site/site-second-brain-page/trust-boundary.svg)
+
+Three places, three levels of trust:
+
+| Where | Holds | Trusted with |
+| --- | --- | --- |
+| My machine | The pipeline's database, `private.pem`, the Blob read-write token | Everything |
+| Vercel Blob | Five public files and their `.sig` files, in `current/` and `previous/` | Nothing: anyone could in principle replace a file there if a token leaked |
+| The website | The 32-byte public key, `SECOND_BRAIN_PUBLIC_KEY` | Checking, not deciding |
+
+The design assumes the storage can be compromised and makes that harmless: a file that wasn't signed by my private key is never shown. A stolen Blob token could delete the files and take the page down, but it couldn't put words on it. The [pipeline post](/blog/second-brain-pipeline) covers the machine side; this one covers the site.
+
+The five files are written by `nb publish`:
+
+| File | Content |
+| --- | --- |
+| `good-reads.json`, `good-reads.xml` | The Good reads shelf, newest first |
+| `feed.json`, `feed.xml` | The curated daily list |
+| `status.json` | The kill switch: `enabled`, a note, and when it was made |
+
+The JSON files are [JSON Feed 1.1](https://www.jsonfeed.org/version/1.1/) with three extension keys: `_schema` (1), `_generated_at` and `_count`.
+
+## Verify the bytes first, parse second
+
+![What the site does with each file. It fetches the file and its signature from current, then verifies the signature over the raw bytes before parsing anything. Only then does it parse the JSON and validate the schema, age, count, field types and that every link is https. If any step fails it tries the copy in previous. If that fails too, the file is not shown, and if the status file fails the whole page shows Temporarily unavailable.](/images/build-logs/building-this-site/site-second-brain-page/verify-order.svg)
+
+The checking code is in `src/lib/secondBrainCore.mjs`, plain JavaScript with no Next.js in it, so **the site, the upload script and the tests all run the same code**:
+
+```js title="src/lib/secondBrainCore.mjs (shortened)"
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex"); // DER header for a raw Ed25519 public key
+
+export function publicKeyFromRaw(rawB64) {
+  const raw = Buffer.from(String(rawB64 ?? "").trim(), "base64");
+  if (raw.length !== 32) throw new Error("public key must be 32 raw bytes, base64 encoded");
+  return crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: "der", type: "spki" });
+}
+
+/** True only for a valid signature over exactly these bytes. Any problem is false. */
+export function verifySignature(bytes, sigB64, publicKey) {
+  try {
+    const sig = Buffer.from(String(sigB64 ?? "").trim(), "base64");
+    if (sig.length !== 64) return false;
+    return crypto.verify(null, bytes, publicKey, sig);
+  } catch {
+    return false;
+  }
+}
+
+export function verifyAndParse(kind, bytes, sigB64, publicKey, now = Date.now()) {
+  if (!verifySignature(bytes, sigB64, publicKey)) return fail("signature does not verify");
+  let json;
+  try { json = JSON.parse(Buffer.from(bytes).toString("utf8")); } catch { return fail("not valid JSON"); }
+  return kind === "status" ? validateStatus(json, now) : validateFeed(json, now);
+}
+```
+
+Reading it closely:
+
+- **The public key is just 32 bytes**, so it fits in an environment variable. Node's crypto wants a structured key, so the code prepends the fixed 12-byte DER header that says "this is an Ed25519 public key" ([RFC 8410](https://www.rfc-editor.org/rfc/rfc8410)). Anything that isn't 32 bytes is rejected.
+- **[Ed25519](https://www.rfc-editor.org/rfc/rfc8032) signatures are always 64 bytes**, so a wrong length is rejected before any maths. With Ed25519, Node's [`crypto.verify`](https://nodejs.org/api/crypto.html#cryptoverifyalgorithm-data-key-signature-callback) takes `null` as the algorithm, because the hash is built into the scheme.
+- **`verifySignature` never throws.** Bad base64, a wrong key type, anything: the answer is `false`. A verifier that throws can be made to fail open by whatever catches the exception.
+- **The signature is checked before `JSON.parse`.** The parser never sees bytes that I didn't sign, so a malicious file can't exercise it at all.
+
+Only then does validation run. It returns a **new object with only whitelisted fields**, rather than passing the parsed JSON through:
+
+- `_schema` must be 1, `_generated_at` must be a valid time, not more than an hour in the future, and not more than **30 days** old;
+- at most 500 items, and `_count` must match;
+- every id must match `[A-Za-z0-9._:-]+`, every title, summary and note has a maximum length, and tags are at most 12 short strings;
+- every link must be `https`, with no username or password in it (`isSafeHttpsUrl`).
+
+📜 The 30-day limit was a deliberate change from a planned 7. Publishing is manual during the beta, and with a 7-day limit a week away from the keyboard would have taken the page dark. Files older than 7 days are still shown, with a "not refreshed for N days" notice.
+
+## Fetching with a fallback, and caching it
+
+```ts title="src/lib/secondBrain.ts (shortened)"
+async function fetchVerified(kind, name, base, key) {
+  for (const folder of ["current", "previous"]) {
+    try {
+      const [file, sig] = await Promise.all([fetchBytes(`${base}/${folder}/${name}`), fetchBytes(`${base}/${folder}/${name}.sig`)]);
+      const parsed = verifyAndParse(kind, file, new TextDecoder().decode(sig), key);
+      if (parsed.ok) return parsed;
+      console.error(`[second-brain] verify-failed ${name} (${folder}): ${parsed.reason}`);
+    } catch (e) {
+      console.error(`[second-brain] fetch-failed ${name} (${folder}): ${e.message}`);
+    }
+  }
+  return null;
+}
+
+export async function getSecondBrain(): Promise<SecondBrainSnapshot> {
+  "use cache";
+  cacheLife({ stale: 300, revalidate: 900, expire: 86400 });
+  cacheTag("second-brain");
+  // off? not configured? then fetch status, good reads and daily in parallel, and decide the state
+}
+```
+
+- **`current/` first, then `previous/`.** The upload script copies the live files to `previous/` before replacing them, so if a new upload is broken or half-finished, the page falls back to the last verified copy.
+- **Each fetch has an 8-second timeout** (`AbortSignal.timeout`), so a slow host can't hang a build or a request.
+- **Failures log a stable prefix,** `[second-brain] verify-failed`, so Vercel's log search or an alert can find them. One of the beta's exit criteria is zero of these lines.
+- **[`'use cache'`](https://nextjs.org/docs/app/api-reference/directives/use-cache) with [`cacheLife`](https://nextjs.org/docs/app/api-reference/functions/cacheLife)** caches the whole verified result: stale after 5 minutes, refreshed after 15, dropped after a day. A new publish, or a pause, shows within about 15 minutes. A failed fetch is cached for the same time, which also bounds how long a passing problem is visible.
+
+## Five states, one that shows data
+
+![The five states the Second brain page can be in. Off: SECOND_BRAIN_ENABLED is false, the page is a 404 and the nav link is hidden. Not configured: no base URL or public key, the page says not set up yet. Paused: the signed status says enabled false, the page shows the note. Unavailable: the status did not verify, or no list did. OK: verified lists are shown, with a notice if they are older than 7 days.](/images/build-logs/building-this-site/site-second-brain-page/page-states.svg)
+
+`getSecondBrain` returns a tagged union, and the page renders each case explicitly:
+
+| State | When | The page shows |
+| --- | --- | --- |
+| `off` | `SECOND_BRAIN_ENABLED=false` in Vercel | A 404, and the header hides its link |
+| `not-configured` | No base URL or public key | "This page is not set up yet." |
+| `paused` | The signed `status.json` says `enabled: false` | "Paused for now." and the note |
+| `unavailable` | The status didn't verify, or neither list did | "Temporarily unavailable." |
+| `ok` | Verified status and at least one verified list | The lists, the hand-picked reads, the RSS link |
+
+**The status decides first, and it fails closed.** If `status.json` doesn't verify, the page can't know whether I switched it off, so it shows nothing rather than guess. A paused status is itself signed, so nobody but me can pause the page, either.
+
+Rendering is plain text only: titles, summaries and notes are React text, never HTML, so nothing in a file can inject markup. Links open with `rel="noopener noreferrer nofollow"`, the summaries are labelled as written by an AI model, and the page carries `robots: { index: false }` while it is a beta. The RSS route is built from the same verified data ([part 4](/blog/site-notes-and-feeds)).
+
+✅ The live page on 2026-11-13:
+
+```bash title="Command"
+curl -s -o /dev/null -w "%{http_code}\n" https://www.vineetganti.com/second-brain
+curl -s https://www.vineetganti.com/second-brain | grep -o "Nothing here yet\|hand-picked\|Updated" | sort | uniq -c
+```
+
+```text title="Output"
+200
+      2 Nothing here yet
+      2 Updated
+      2 hand-picked
+```
+
+"Updated" appears only in the `ok` state, so the production site fetched the files, verified all of them and accepted them. Both lists say "Nothing here yet" because the first publish had no items in it; the hand-picked reads from `content/reads.json` show below them. The counts are 2 because the HTML carries each string twice, once in the page and once in the data React hydrates from.
+
+## The upload script: refuse early, keep a fallback, status last
+
+![The upload script's order of work. First it verifies all five files and signatures with the same code the site runs, and refuses to upload anything if one fails. Then it copies the live current files to previous, so the site always has a verified fallback. Then it uploads the data files and their signatures, and the status file last, so a new status never points at half-uploaded lists.](/images/build-logs/building-this-site/site-second-brain-page/upload-order.svg)
+
+`npm run second-brain:upload` runs `scripts/upload-second-brain.mjs`, with the Blob token read from `.env.local` on my machine. Its order is the safety design:
+
+1. **Verify all five files first**, with `secondBrainCore.mjs`, the same code the site runs. Any failure stops the script before the network is touched.
+2. **Copy the live files to `previous/`**, so the site always has a verified fallback.
+3. **Upload the lists and their signatures**, then **`status.json` last**, so a new status never points at lists that haven't arrived.
+
+✅ Checked on 2026-11-13 with the test fixtures, and with a copy where one byte of `feed.json` was flipped:
+
+```text title="Output: --dry-run on the good fixtures"
+verified  good-reads.json       1529 bytes  2 items, generated 2026-11-02T12:00:00.000Z
+verified  good-reads.xml        1150 bytes  signature ok
+verified  feed.json             1026 bytes  1 items, generated 2026-11-02T12:00:00.000Z
+verified  feed.xml               804 bytes  signature ok
+verified  status.json             95 bytes  enabled=true
+
+Dry run: all 5 files verified. Would copy second-brain/current/* to second-brain/previous/*, then upload to second-brain/current/ (status.json last).
+```
+
+```text title="Output: one byte changed in feed.json"
+verified  good-reads.json       1529 bytes  2 items, generated 2026-11-02T12:00:00.000Z
+verified  good-reads.xml        1150 bytes  signature ok
+
+REFUSING TO UPLOAD: feed.json: signature does not verify
+```
+
+### 📜 The first real upload failed
+
+The first real run, on 2026-11-13, verified all five files and then stopped:
+
+```text title="Output: the first real upload (trimmed)"
+verified  status.json             102 bytes  enabled=true
+
+keeping the live copy as previous/ ...
+BlobError: Vercel Blob: The specified key does not exist.
+    at async copy (.../@vercel/blob/dist/index.js:303:20)
+    at async .../scripts/upload-second-brain.mjs:83:5
+```
+
+On a first upload there is no live copy to keep, so the copy to `previous/` has no source. The script meant to treat that as normal, but its check matched only the words "not found", and Vercel Blob reports a missing source as "The specified key does not exist". The fix widened the match. Nothing had been uploaded when it stopped, because the copy step comes before any upload; the order did its job.
+
+## Operating the beta
+
+The kill switch and the way back are written down before they are needed:
+
+| Step | How | Takes effect |
+| --- | --- | --- |
+| 1. Pause | `nb publish --pause --note "..."`, then upload | Within about 15 minutes, the length of the cache |
+| 2. Hide | `SECOND_BRAIN_ENABLED=false` in Vercel, then redeploy | On the next deployment; Vercel applies env changes only to new deployments |
+| 3. Roll back | Vercel's instant rollback, or revert the merge | Immediately |
+
+📜 The beta's exit criteria were written before launch, so the numbers can't be bent to fit afterwards: live at least 14 days and 10 publishes, zero `verify-failed` lines, zero leak findings, fresh on at least 90% of days, at most 5% broken links, and at most 10% of published items later removed.
+
+📜 Before it was merged, the page was tested end to end with a throwaway local server standing in for Blob: 25 checks across 7 scenarios, including a tampered `current/` with a good `previous/` (it fell back and logged `verify-failed`), both tampered (nothing unverified rendered, RSS 503), a tampered status (failed closed), paused, not configured, and switched off (404, link hidden). A production build passed the same way.
+
+## Things that can trip you up
+
+- **Parsing before verifying.** It lets an attacker's bytes reach your parser. Verify the exact bytes first.
+- **A verifier that throws.** Something will catch the exception and carry on. Return `false`.
+- **Passing parsed JSON straight to the page.** Build a new object from whitelisted fields, with limits.
+- **Line endings.** A signature covers exact bytes; a tool that turns `\n` into `\r\n` breaks every signature. The [pipeline post](/blog/second-brain-pipeline) shows how CI caught exactly that.
+- **Assuming storage is safe.** Design so a leaked storage token can delete but not deface.
+- **Env changes without a redeploy.** Vercel applies them only to new deployments, so the signed pause is the fast switch.
+
+## Reproduce this yourself
+
+1. ✅ **Run the tests.** `npm run test:second-brain` runs 13 Node tests, including files signed by the Python publisher and verified by this code.
+2. ✅ **Dry-run an upload.** `node scripts/upload-second-brain.mjs scripts/fixtures/second-brain --dry-run --key scripts/fixtures/second-brain/public.raw.b64`. Then flip one byte of a copy and watch it refuse.
+3. ✅ **Check the live page.** `curl` the page and look for "Updated", which appears only when everything verified.
+4. 📘 **Set it up from scratch.** The checklist in `second-brain/docs/second-brain-contract.md`: `nb keys init` (back up `private.pem` outside the repository), set `SECOND_BRAIN_PUBLIC_KEY` in Vercel, `nb publish`, upload, set the printed `SECOND_BRAIN_BASE_URL`, redeploy.
+
+## Summary
+
+The Second brain page shows data the site didn't build, without giving anyone a way to write to it. Files are signed on my machine; the site holds only the public key, verifies each file's raw bytes before parsing, validates every field into a fresh object, falls back to the previous verified copy, caches the result for 15 minutes, and turns every outcome into one of five named states, failing closed when the signed status can't be checked. The upload script verifies everything with the same code before it touches the network and uploads the status last. The first real upload stopped safely on a missing file, and the live page now verifies and shows its empty lists.
+
+![A map of the Second brain page post. Boundary: no write path, the private key stays local. Verify: signature on raw bytes first, then validation. Fail safe: a previous copy, closed failure, five explicit states. Operate: verified upload, a kill switch and a rollback ladder.](/images/build-logs/building-this-site/site-second-brain-page/summary-map.svg)
+
+### Key takeaways
+
+- If the site doesn't need to write, give it no way to write.
+- Sign at the source, verify the exact bytes at the destination, then parse.
+- Name every outcome, and make the uncertain ones fail closed.
+- Run the same verification code everywhere: site, upload script and tests.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Ed25519** | A signature scheme with 32-byte public keys and 64-byte signatures |
+| **Detached signature** | A signature stored in its own file next to the data |
+| **SPKI / DER** | The structured binary form of a public key that Node's crypto expects |
+| **Fail closed** | When the system can't be sure, it shows nothing rather than guess |
+| **Kill switch** | A signed status file that can pause the page from the owner's machine |
+| **`'use cache'` + `cacheLife`** | Caches a function's result for a set time in Next.js 16 |
+| **Tagged union** | A value that is one of several named cases, each handled explicitly |
+
+### Test yourself
+
+<details>
+<summary>Someone steals the Blob read-write token. What can they do to the page?</summary>
+
+Delete or replace the files, which can take the page to "Temporarily unavailable". They can't make it show their own content, because they can't sign with the private key, and an unsigned file is never shown.
+
+</details>
+
+<details>
+<summary>Why is the signature checked before JSON.parse?</summary>
+
+So bytes that weren't signed never reach the parser. Checking afterwards would let an attacker's file exercise the parser and anything that reads the parsed object.
+
+</details>
+
+<details>
+<summary>Why does an unverified status.json make the whole page unavailable?</summary>
+
+The status is the kill switch. If it can't be verified, the page can't know whether the owner paused it, so showing lists would risk ignoring a pause.
+
+</details>
+
+<details>
+<summary>The first upload failed at "keeping the live copy as previous/". Was anything uploaded?</summary>
+
+No. The copy to `previous/` comes before any upload, and the script stopped there. The cause was the missing live copy on a first upload, reported in words the script's check didn't expect.
+
+</details>
+
+## Sources
+
+- [RFC 8032: Ed25519](https://www.rfc-editor.org/rfc/rfc8032) and [RFC 8410: Ed25519 keys in X.509 (SPKI)](https://www.rfc-editor.org/rfc/rfc8410)
+- Node.js: [crypto.verify](https://nodejs.org/api/crypto.html#cryptoverifyalgorithm-data-key-signature-callback) and [crypto.createPublicKey](https://nodejs.org/api/crypto.html#cryptocreatepublickeykey)
+- Next.js: [`'use cache'`](https://nextjs.org/docs/app/api-reference/directives/use-cache), [cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife), [cacheTag](https://nextjs.org/docs/app/api-reference/functions/cacheTag)
+- [JSON Feed 1.1](https://www.jsonfeed.org/version/1.1/)
+- Vercel: [Blob](https://vercel.com/docs/vercel-blob) and [environment variables](https://vercel.com/docs/environment-variables)
+- MDN: [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static), [rel=noopener](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Attributes/rel/noopener)

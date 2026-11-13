@@ -1,0 +1,15 @@
+{
+  "steps": [
+    {
+      "from": "document",
+      "to": "claude -p",
+      "label": "stdin",
+      "type": "data"
+    },
+    {
+      "from": "claude -p",
+      "to": "code checks",
+      "type": "data"
+    }
+  ]
+}

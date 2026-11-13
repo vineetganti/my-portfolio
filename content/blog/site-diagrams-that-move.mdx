@@ -1,0 +1,288 @@
+---
+title: "Diagrams that move: inlined SVGs, theme tokens and message flows"
+description: "Part 5 of the build log for this site. How a Markdown image becomes an inlined SVG that follows the light and dark themes, how diagrams fade in as they scroll into view, how a looping message animation finds its path by matching text and geometry, and how the live charts are built. Plus two bugs the final review caught: 22 animation labels that matched nothing, and charts that broke hydration over a last digit."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 5
+tags: ["SVG", "CSS", "Animation", "React", "Accessibility"]
+---
+
+Most posts on this site lean on diagrams, and there are now 320 of them. They are plain SVG files, drawn by hand or by small scripts, and yet they switch colours with the theme, fade in as you scroll, and some of them animate a message travelling along their arrows. None of that needs a diagram library. This part explains how.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. **Diagrams that move** (this post): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- **SVGs are inlined, not linked.** `MdxContent` reads each local SVG at build time and puts its markup in the page, so the page's CSS can recolour it.
+- **Colours come from a fixed palette.** Each palette hex has a CSS rule that swaps it for a theme token, and the dark theme redefines the tokens. ✅ All but one of the site's SVGs stay inside the palette; the exception is a heat map.
+- **Diagrams fade in once,** in drawing order, when they first scroll into view, and never with reduced motion, without JavaScript, or in print.
+- **A `.flow.json` beside an SVG adds a looping message animation.** It names boxes by their text; the component finds the boxes and arrows by geometry, so the SVG needs no ids. ✅ 63 flow files, 279 steps, every one matched.
+- **Live charts are React components** with sliders and a sentence that restates the numbers. 📜 Four of them broke hydration because the server and the browser rounded a sine differently in the last digit; coordinates are now rounded.
+
+## From a Markdown image to an inlined SVG
+
+![What happens to a Markdown image. MdxContent's image override checks the path. A PNG is served as a normal img tag. A local SVG is read from disk at build time, its ids are prefixed with the file name so two diagrams cannot clash, and it is inlined as a span with role img and the alt text as its label. If a flow.json file sits beside it, the SVG goes to FlowDiagram instead and gets a message animation.](/images/build-logs/building-this-site/site-diagrams-that-move/inline-svg.svg)
+
+A post writes an ordinary Markdown image, `![alt text](/images/.../diagram.svg)`. `MdxContent` overrides the `img` element, and for a local SVG it reads the file from disk while the page is being built:
+
+```tsx title="src/components/MdxContent.tsx (shortened)"
+function readDiagram(src: string): string | null {
+  if (!src.startsWith("/images/") || !src.endsWith(".svg")) return null;
+  const file = path.join(PUBLIC_DIR, src);
+  if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file)) return null;
+  const prefix = path.basename(src, ".svg");
+  return fs
+    .readFileSync(file, "utf-8")
+    .replace(/<\?xml[^>]*\?>\s*/, "")
+    .replace(/\bid="([^"]+)"/g, `id="${prefix}-$1"`)
+    .replace(/url\(#([^)]+)\)/g, `url(#${prefix}-$1)`)
+    .replace(/href="#([^"]+)"/g, `href="#${prefix}-$1"`)
+    .replace(/<svg\b/, '<svg aria-hidden="true" focusable="false"');
+}
+
+function Image({ src, alt, ...rest }) {
+  const svg = typeof src === "string" ? readDiagram(src) : null;
+  if (svg === null) return <img src={src} alt={alt} {...rest} />;      // PNGs and remote images
+  const steps = readFlow(src);                                          // a .flow.json beside it?
+  if (steps) return <FlowDiagram svg={svg} steps={steps} alt={alt ?? ""} />;
+  return <span className="diagram" role="img" aria-label={alt} dangerouslySetInnerHTML={{ __html: svg }} />;
+}
+```
+
+Each line has a reason:
+
+- **The path check** (`file.startsWith(PUBLIC_DIR + path.sep)`) stops a path like `/images/../../secret.svg` from reading outside `public/`.
+- **Ids are prefixed with the file name.** Two diagrams on one page may both define an arrowhead marker called `ah-5e5241`. Inlined into one document, the second would silently use the first one's definition. Prefixing every `id` and every reference to it keeps them apart.
+- **Accessibility moves to the wrapper.** The inlined `<svg>` is hidden from screen readers, and the wrapping `span` gets `role="img"` and the alt text as its label, which is what an `<img>` would have given them. The [audio player](/blog/site-audio) reads that same label.
+- **It is a `span`, not a `div`.** A Markdown image sits inside a paragraph, and a `div` inside a `p` is invalid HTML that the browser rearranges, which breaks hydration.
+- **Inlining is the whole point.** An SVG loaded through `<img>` is a separate document, and the page's CSS can't reach into it. Inlined, its shapes are ordinary elements that CSS can recolour.
+
+## One file, two themes
+
+![How one diagram works in both themes. The SVG is drawn only with palette hex codes, for example an amber tint fill. A CSS attribute rule in globals.css maps that hex to a token, var(--dg-amber-t). The light theme defines the token as the same pale amber; the dark theme redefines it as a deep brown, so the same file reads well on both backgrounds.](/images/build-logs/building-this-site/site-diagrams-that-move/palette-tokens.svg)
+
+Every diagram is drawn with a fixed palette of 16 colours. For each one, `globals.css` has an attribute selector that swaps the literal colour for a token:
+
+```css title="src/app/globals.css (a few of the rules)"
+.diagram [fill="#fde3ad" i]   { fill: var(--dg-amber-t); }
+.diagram [stroke="#9a5400" i] { stroke: var(--dg-amber); }
+.diagram [fill="#2f281e" i]   { fill: var(--dg-ink); }
+```
+
+The tokens have light values on `:root` and dark values in the two dark-theme blocks, the same pattern the rest of the site uses ([part 1](/blog/site-architecture)). The `i` flag makes the match case-insensitive, so `#FDE3AD` works too. A drawing tool doesn't need to know about themes at all; it only needs to stick to the palette.
+
+✅ I checked every SVG on the site against the palette on 2026-11-13. All but one use only palette colours. The exception is the sinusoidal positional-encoding diagram in the transformer post, a heat map with 80 in-between shades, because a continuous colour scale can't be built from 16 fixed colours. It keeps its light colours in dark mode, on purpose.
+
+## Fading in, once
+
+`DiagramMotion` is a client component that renders nothing. After the page loads, it finds every diagram below the fold and marks it:
+
+```ts title="src/components/DiagramMotion.tsx (shortened)"
+const REVEAL_MS = 1000;   // a whole diagram finishes revealing in about this long
+const MAX_STEP_MS = 45;   // longest gap between two parts of a small diagram
+const TRIGGER = 0.92;     // reveal a little before the diagram is fully on screen
+
+if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+for (const diagram of document.querySelectorAll(".prose .diagram:not(.diagram-live):not(.diagram-flow)")) {
+  if (diagram.getBoundingClientRect().top < window.innerHeight * TRIGGER) continue; // already visible: leave it
+  const parts = [...svg.querySelectorAll(":scope > :not(defs, title, desc, style)")];
+  parts.forEach((part, i) => { part.classList.add("dg-item"); part.style.setProperty("--i", String(i)); });
+  diagram.style.setProperty("--dg-step", `${Math.min(MAX_STEP_MS, REVEAL_MS / parts.length)}ms`);
+  diagram.classList.add("dg-armed");
+}
+```
+
+CSS does the rest: an armed diagram's parts start transparent, and when it scrolls in and becomes `dg-in`, each part fades in after `--i` times `--dg-step`, so parts appear in the order they were drawn. A few choices make it safe:
+
+- **Only diagrams below the fold are hidden.** Anything already on screen when the page loads is never touched, so nothing visible flashes.
+- **The animation rules are inside `@media (prefers-reduced-motion: no-preference)`**, and the script returns early if reduced motion is on. Without JavaScript nothing is ever armed, and in print everything shows.
+- **A scroll check, not an IntersectionObserver.** A reader who jumps past a diagram with the End key or a table-of-contents link never "intersects" it on the way. A position check on scroll, throttled to one per animation frame, still reveals it when they scroll back.
+- **The background rectangle stays put,** so the card doesn't flicker while its contents arrive.
+
+## Message flows
+
+Some diagrams show a message moving between boxes: a request, the data coming back, a write reaching a log. A file next to the SVG lists the steps:
+
+```json title="two-paths.flow.json (from part 1 of this series)"
+{
+  "steps": [
+    { "from": "git push", "to": "next build", "type": "request" },
+    { "from": "next build", "to": "CDN", "type": "data" },
+    { "from": "CDN", "to": "reader", "type": "data" }
+  ]
+}
+```
+
+`FlowDiagram` plays the steps in a loop, one marker at a time, with a pause button and a legend for the four marker types (data, metadata, request or acknowledgment, URI or reference).
+
+### Finding the path without ids
+
+![How the animation finds its path without any ids in the SVG. A step names two boxes by their text. A box is the smallest rectangle around that text. An arrow is a line or path with an arrowhead marker. The arrow that joins the two boxes is the one whose two ends touch them, within 8 pixels. The diagram file is never edited; only inline styles and one marker group are added, and removed again on unmount.](/images/build-logs/building-this-site/site-diagrams-that-move/flow-matching.svg)
+
+The steps refer to boxes by the words written in them, not by ids, so any SVG works, including ones drawn by hand. `createFlow` works it out from the rendered geometry:
+
+1. **A box** is the smallest `rect` around the named text, using `getBBox()`. Two boxes with the same name are told apart with `#2`.
+2. **An arrow** is any line or path with an arrowhead marker. The one that joins the two boxes is the one whose two ends land within 8 pixels of them; arrows stop a few pixels short of a box's edge, hence the slack.
+3. **A label** is the same text as the step's label, outside every box, nearest the middle of the arrow.
+
+Nothing in the SVG is edited: the component adds inline styles and one group for the marker, and `destroy()` removes them again.
+
+### One clock
+
+![The timeline of one animation step, 1,900 milliseconds long. For the first 220 ms the arrow and its label fade in. From 220 to 1,320 ms a marker travels along the arrow with an ease-in-out curve. When it arrives, the destination box pulses for 320 ms, and from 1,580 ms the arrow and label fade back. After the last step the loop pauses for 800 ms.](/images/build-logs/building-this-site/site-diagrams-that-move/flow-step.svg)
+
+Everything on screen is a pure function of one number, `elapsed`, the milliseconds of playing time:
+
+```ts title="src/components/flow/timing.ts (shortened)"
+export const STEP_MS = 1900;
+export const LOOP_PAUSE_MS = 800;
+export const cycleMs = (steps: number) => steps * STEP_MS + LOOP_PAUSE_MS;
+
+/** The frame at `elapsed`, or null during the pause between loops. */
+export function frameAt(elapsed: number, steps: number): Frame | null {
+  const t = elapsed % cycleMs(steps);
+  if (t >= steps * STEP_MS) return null;
+  const step = Math.floor(t / STEP_MS);
+  // ...glow, marker progress (eased), marker opacity and the destination's pulse, all from t
+}
+```
+
+Because the picture depends only on `elapsed`, **pausing means "stop adding time"**, and resuming continues from exactly the same frame. Each animation frame adds the real time since the last one, capped at 100 ms, so a tab that was asleep doesn't jump ahead. The loop also stops while the diagram is off screen (here an [IntersectionObserver](https://developer.mozilla.org/en-US/docs/Web/API/Intersection_Observer_API) is the right tool: it only needs to know "visible or not") and resumes when it returns. With reduced motion it starts paused, showing the first step lit and still, and the reader can still press play.
+
+### 📜 The bug: 22 labels that matched nothing
+
+The final review of the Database Engineering posts loaded every page in a browser and collected console warnings. One warning repeated: `[flow] durability path | label "WAL record" not found; shown without a label`. A step's label is matched against the text in the drawing, and that arrow's label said "write". A script then checked every flow file against its SVG and found **20 more** steps whose labels didn't exist, and a second browser pass found one label that sat inside a box, where the matcher deliberately ignores text. The animations still ran; the arrows just didn't light their labels.
+
+All 22 were fixed, and the drawing script now refuses to write a diagram whose flow names text that isn't there, or a label inside a box, so the mistake can't return silently. ✅ Today every flow file on the site matches: 63 files, 279 steps, 0 mismatches.
+
+## Live charts
+
+Five charts in three posts are React components: the queueing knee, the naive batch fill wait and the Poisson arrivals in the batching post, the decode latency in the inference post, and the weight memory by precision in the neural network post. The database posts add `LabChart`, which draws any recorded measurement from a JSON file, and is used 15 times.
+
+They all sit inside `ChartFrame`:
+
+```tsx title="src/components/charts/ChartFrame.tsx (shortened)"
+export function ChartFrame({ alt, children, controls, readout }) {
+  return (
+    <div className="diagram diagram-live" role="group" aria-label={alt}>
+      {children}
+      {readout && <div className="chart-readout">{readout}</div>}
+      {controls && <div className="chart-controls">{controls}</div>}
+    </div>
+  );
+}
+```
+
+Three rules make them part of the same system as the static diagrams:
+
+- **The same palette and the `diagram` class**, so they recolour with the theme like an inlined SVG.
+- **A readout sentence restates the numbers** for the current slider position ("At 90% load a request spends 10× its service time in the system"), so the chart can be understood without reading the plot. Each slider also sets `aria-valuetext` with the meaning, not just the number.
+- **No paragraphs or list items inside**, because the [audio player](/blog/site-audio) treats `.diagram` as one image and reads its label; prose inside would be skipped.
+
+Only charts with a formula behind them became live. 📜 Sketches and recorded measurements stayed pictures, because letting a reader drag a measurement would invent data.
+
+### 📜 The bug: a last digit that broke hydration
+
+The 2026-11-05 review found React hydration errors on four database posts. React compares the server's HTML with the browser's first render, and the attribute diff pointed at chart and ring coordinates:
+
+```text title="Output: React hydration diff (trimmed)"
++ cy={97.9547177313654}
+- cy="97.95471773136542"
+```
+
+The server (Node) and the browser computed `Math.sin`, `Math.cos` and `Math.log10` with a different last digit, and React refused to patch the mismatch. The fix rounds every computed coordinate to two decimals in the two components that compute them, the hash ring and `LabChart`; a hundredth of a pixel can't be seen, and rounding to it removes the disagreement in all but vanishingly rare cases. After the fix, all four posts loaded without a hydration error.
+
+## Things that can trip you up
+
+- **A colour outside the palette.** It has no rule, so it ignores the theme. Stick to the palette, or accept a light-only diagram as the heat map does.
+- **A flow label that isn't on the drawing.** The animation runs but lights nothing. Use the drawing script, which checks.
+- **A `div` around an inline image.** Inside a paragraph it breaks hydration; use a `span`.
+- **Floating point in rendered attributes.** Round anything computed with trigonometry or logarithms before it reaches the DOM.
+- **Motion without an off switch.** Respect `prefers-reduced-motion`, and keep a pause button on anything that loops.
+
+## Reproduce this yourself
+
+1. ✅ **Draw this series' diagrams.** `node scripts/build-log/draw.mjs` writes every SVG and flow file in `public/images/build-logs/building-this-site/`. A flow step naming missing text stops it with an error.
+2. ✅ **Check the palette.** Collect the hexes from the `.diagram [fill="…" i]` rules in `globals.css`, then list every `fill`, `stroke` and `stop-color` in `public/images/**/*.svg` that isn't one of them. That is how the heat map was found.
+3. ✅ **See the theme swap.** Open any post, switch the theme toggle, and watch the same SVG recolour.
+4. 📘 **Try reduced motion.** Turn on your system's reduce-motion setting, or emulate it in the browser's developer tools, and reload: diagrams appear at once and flows start paused.
+
+## Summary
+
+A Markdown image of a local SVG is read at build time and inlined, with its ids prefixed and its accessibility moved to a wrapper, so the page's CSS can recolour it through palette tokens. Below-the-fold diagrams fade in once, in drawing order, and never when motion is unwelcome. A flow file beside an SVG turns it into a looping message animation that finds boxes and arrows by text and geometry and draws everything from one clock. Live charts share the palette and the `diagram` class, restate their numbers in words, and round their coordinates so the server and the browser agree.
+
+![A map of the diagrams post. Inline: SVGs are read at build time and put into the page. Palette: fixed hex codes mapped to theme tokens. Motion: a scroll reveal and a looping message flow driven by one clock. Live charts: React state, sliders and a sentence that restates the numbers.](/images/build-logs/building-this-site/site-diagrams-that-move/summary-map.svg)
+
+### Key takeaways
+
+- Inline SVGs when the page needs to style them.
+- A small fixed palette plus CSS tokens gives every drawing dark mode for free.
+- Derive an animation from one clock, and pause by not advancing it.
+- Make tools refuse bad input, so a silent visual bug becomes a loud build error.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Inlined SVG** | The SVG's markup placed in the page, so CSS can reach its shapes |
+| **Id prefixing** | Renaming ids per file so two inlined SVGs can't clash |
+| **Attribute selector** | `[fill="#fde3ad" i]` matches an element by its attribute value |
+| **Reduced motion** | The `prefers-reduced-motion` media feature a reader can set |
+| **Flow file** | `<name>.flow.json`: the steps of a message animation, by box text |
+| **`getBBox()`** | An SVG element's bounding box in its own coordinates |
+| **Hydration mismatch** | Server HTML and the first browser render differ, and React won't patch it |
+
+### Test yourself
+
+<details>
+<summary>Why are SVGs inlined instead of shown with an img tag?</summary>
+
+An SVG in `<img>` is a separate document the page's CSS can't style. Inlined, its shapes are part of the page, so the theme's CSS rules can swap its colours.
+
+</details>
+
+<details>
+<summary>Two diagrams on a page each define a marker with the id ah-5e5241. What goes wrong, and what prevents it here?</summary>
+
+Ids must be unique in a document, so both diagrams' references resolve to the first definition. Prefixing each file's ids and references with its file name keeps them separate.
+
+</details>
+
+<details>
+<summary>How does a flow animation pause and resume without drifting?</summary>
+
+Every frame is computed from one number, the elapsed playing time. Pausing stops adding to it; resuming adds again from the same value, so the picture continues from the same frame.
+
+</details>
+
+<details>
+<summary>Why did rounding coordinates to two decimals fix a hydration error?</summary>
+
+The server and the browser computed the same sine with a different last digit, so the HTML attributes differed. Rounding both to two decimals makes them produce the same text.
+
+</details>
+
+## Sources
+
+- MDN: [SVG in HTML](https://developer.mozilla.org/en-US/docs/Web/SVG/Guides/SVG_in_HTML), [Attribute selectors](https://developer.mozilla.org/en-US/docs/Web/CSS/Attribute_selectors), [prefers-reduced-motion](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-reduced-motion), [Intersection Observer API](https://developer.mozilla.org/en-US/docs/Web/API/Intersection_Observer_API), [getBBox](https://developer.mozilla.org/en-US/docs/Web/API/SVGGraphicsElement/getBBox), [aria-valuetext](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Attributes/aria-valuetext)
+- React: [hydration mismatches](https://react.dev/link/hydration-mismatch)
+- W3C: [WAI-ARIA img role](https://www.w3.org/TR/wai-aria-1.2/#img)

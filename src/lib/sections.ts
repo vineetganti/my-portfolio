@@ -80,6 +80,12 @@ export const SERIES: Series[] = [
       "A practice bank for the SQL data engineering runs on, from DDL to whole pipelines, with every answer run on real sample data.",
   },
   {
+    slug: "building-this-site",
+    title: "Building this site",
+    description:
+      "How this site is built, one part per feature: the architecture, sections and series, audio, nuggets and feeds, moving diagrams, generated content, live Postgres, and the Second brain.",
+  },
+  {
     slug: "mit-distributed-systems",
     title: "MIT Distributed Systems",
     description:

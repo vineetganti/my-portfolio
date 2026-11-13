@@ -1,0 +1,10 @@
+{
+  "steps": [
+    {
+      "from": "client",
+      "to": "server",
+      "label": "HTTP",
+      "type": "request"
+    }
+  ]
+}

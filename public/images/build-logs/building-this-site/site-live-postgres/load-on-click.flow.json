@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "Run",
+      "to": "6 extension modules",
+      "type": "request"
+    },
+    {
+      "from": "6 extension modules",
+      "to": "PGlite.create",
+      "type": "data"
+    },
+    {
+      "from": "PGlite.create",
+      "to": "lab_<id>",
+      "type": "data"
+    }
+  ]
+}

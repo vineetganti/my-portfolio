@@ -1,0 +1,325 @@
+---
+title: "Sections, series and URLs"
+description: "Part 2 of the build log for this site. How a flat list of posts became shelves and reading orders: three labels in frontmatter, one config file, two prerendered routes, readable slugs with permanent redirects, and an image folder per post."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 2
+tags: ["Next.js", "Information architecture", "Redirects", "MDX"]
+---
+
+By late October the blog was one list sorted by date: an essay about writing sat between two posts on transformer inference, and the only clue that six posts formed a series was a hand-written list at the top of each. This part is about the structure that replaced it, and the clean-up of names, URLs and images that came with it.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. **Sections, series and URLs** (this post): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- A post carries **three labels**: a **section** (the shelf), an optional **series** with a part number (the reading order), and free-form **tags**.
+- All sections and series are defined in **one file**, `src/lib/sections.ts`. The routes, chips and cards read from it, so a new shelf is one entry.
+- `parsePost` reads the labels with **fallbacks**: an unknown section lands in Essays, and a missing part number is `undefined`, never `NaN`.
+- Two routes, `/blog/topic/[section]` and `/blog/series/[series]`, are **two segments deep**, so they can never collide with a post's slug, and **every one is prerendered**.
+- Renamed posts answer **308 Permanent Redirect** to their new address. The old build-log post, split into this series, now redirects to the series page.
+
+## Why one list stopped working
+
+Once there were a dozen posts, the flat list had three problems:
+
+- **No way to browse by topic.** Every post, essay or deep dive, sat in one stream.
+- **No reading order.** A series was implied by titles, not by the site.
+- **Overlapping tags.** "AI", "LLMs" and "AI Engineering" mean nearly the same thing, so they made poor shelves.
+
+## Three labels, three jobs
+
+![Three ways to label a post. A section is the shelf it sits on, one per post, from a short fixed list: AI and LLMs, Systems, Data Engineering, Build Logs, Essays. A series is an optional reading order with a part number. Tags are free-form detail. One post carries all three, for example section build-logs, series building-this-site part 2, and a few tags.](/images/build-logs/building-this-site/site-sections-and-series/three-layers.svg)
+
+| Label | Question it answers | How many per post | In frontmatter |
+| --- | --- | --- | --- |
+| **Section** | Which shelf is this on? | Exactly one, from a short fixed list | `section: "build-logs"` |
+| **Series** | In what order should I read it? | Zero or one | `series: "building-this-site"` and `seriesOrder: 2` |
+| **Tag** | What is it about, in detail? | Any number | `tags: ["Next.js", "MDX"]` |
+
+One label couldn't do all three jobs: a shelf has to be small and stable, an order has to be explicit, and detail has to be free. This post's own frontmatter shows all three:
+
+```yaml title="content/blog/site-sections-and-series.mdx (frontmatter)"
+---
+title: "Sections, series and URLs"
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 2
+tags: ["Next.js", "Information architecture", "Redirects", "MDX"]
+---
+```
+
+## One config file for every shelf
+
+Sections and series live in one list in [`src/lib/sections.ts`](https://github.com/vineetganti/my-portfolio/blob/main/src/lib/sections.ts):
+
+```ts title="src/lib/sections.ts (shortened)"
+export const SECTIONS: Section[] = [
+  { slug: "ai-llms", title: "AI & LLMs", description: "..." },
+  { slug: "systems", title: "Systems & Engineering", description: "..." },
+  { slug: "data-engineering", title: "Data Engineering", description: "..." },
+  { slug: "build-logs", title: "Build Logs", description: "..." },
+  { slug: "essays", title: "Essays & Ideas", description: "..." },
+];
+
+/** Where a post lands when its `section` is missing or misspelled. */
+export const DEFAULT_SECTION = "essays";
+
+export const SERIES: Series[] = [
+  { slug: "llm-architectures", title: "LLM Architectures", description: "..." },
+  // agentic-ai, database-engineering, de-sql, building-this-site, mit-distributed-systems
+];
+```
+
+The rule for growing it is written into the project's notes: **add a section only when three or more posts need it**, and until then file a post under Essays with a tag. A series that isn't listed still works, because `getSeriesInfo` builds a title from its slug ("building-this-site" becomes "Building This Site"); listing it only adds a proper title and a description for the series page.
+
+## Reading the labels: `parsePost`
+
+`blog.ts` turns a file into a `BlogPost` in one place, so a new field is added once:
+
+```ts title="src/lib/blog.ts"
+function parsePost(slug: string, fileContent: string): BlogPost {
+  const { data, content } = matter(fileContent);
+  const stats = readingTime(content);
+  const order = Number(data.seriesOrder);
+
+  return {
+    slug,
+    title: data.title || slug,
+    description: data.description || "",
+    date: data.date || new Date().toISOString(),
+    tags: data.tags || [],
+    section: getSection(data.section) ? data.section : DEFAULT_SECTION,
+    series: data.series || undefined,
+    seriesOrder: Number.isFinite(order) ? order : undefined,
+    readingTime: stats.text,
+    listenMinutes: estimateListenMinutes(content),
+    audioSrc: findAudio(slug, data.audio),
+    toc: data.toc !== false,
+    content,
+  };
+}
+```
+
+Three of those lines are defensive on purpose:
+
+- **An unknown section falls back** to `essays`, so a typo moves a post to another shelf instead of breaking the build.
+- **`Number.isFinite(order)`** turns a missing `seriesOrder` into `undefined`. Without it, `Number(undefined)` is `NaN`, and `NaN` makes any sort that uses it unpredictable.
+- **A missing title or date has a default.** That one is a mixed blessing: a file with no frontmatter at all still parses, so nothing flags it. 📜 On 2026-11-13 a pasted notes file without frontmatter reached Vercel and failed the prerender. My first diagnosis blamed the missing date, but `parsePost` had defaulted it to "now"; the real cause was Rust code outside a code fence, where MDX read `fn main() {` as the start of a JavaScript expression. The file was moved out of `content/blog/`, and a second pasted file was fixed by putting its `<command>` placeholders in backticks.
+
+On top of `parsePost` sit small queries, each a filter over `getAllPosts()`:
+
+```ts title="src/lib/blog.ts"
+export function getPostsBySeries(series: string): BlogPost[] {
+  return getAllPosts()
+    .filter((p) => p.series === series)
+    .sort((a, b) => (a.seriesOrder ?? 0) - (b.seriesOrder ?? 0));
+}
+
+export function getSeriesPosition(post: BlogPost): SeriesPosition | null {
+  if (!post.series) return null;
+  const posts = getPostsBySeries(post.series);
+  const i = posts.findIndex((p) => p.slug === post.slug);
+  if (i === -1) return null;
+  return { position: i + 1, total: posts.length, prev: posts[i - 1], next: posts[i + 1] };
+}
+```
+
+A series is ordered by `seriesOrder`, **not by date**. All nine parts of this series share one date, and a date can change; an explicit order can't be confused by either.
+
+📘 These queries call `getAllPosts()` each time, which reads and parses every file. At 48 posts, during a build that runs once, that is cheaper than the cache it would take to avoid it. It would be the first thing to change if the blog grew into the thousands.
+
+## Two routes, kept apart by depth
+
+![The blog's URL space. /blog lists everything. /blog/[slug] is one segment deep and is a post. /blog/topic/[section] and /blog/series/[series] are two segments deep, so they can never collide with a post slug. Each dynamic route lists its pages with generateStaticParams, so every one is prerendered.](/images/build-logs/building-this-site/site-sections-and-series/url-space.svg)
+
+| Route | File | What it shows |
+| --- | --- | --- |
+| `/blog/topic/[section]` | `src/app/blog/topic/[section]/page.tsx` | One shelf: its series and its posts |
+| `/blog/series/[series]` | `src/app/blog/series/[series]/page.tsx` | One series, in reading order |
+
+Both follow the same pattern as the post page:
+
+```tsx title="src/app/blog/series/[series]/page.tsx (shortened)"
+export function generateStaticParams() {
+  return getSeriesSlugs().map((series) => ({ series })); // every series that has a post
+}
+
+export default async function BlogSeriesPage({ params }: { params: Promise<{ series: string }> }) {
+  const { series: slug } = await params; // in this Next.js, params is a Promise
+  const posts = getPostsBySeries(slug);
+  if (posts.length === 0) notFound(); // an unknown series is a 404
+  // ...the title, the description and the posts in order
+}
+```
+
+Why real routes and not a `?section=` filter on `/blog`? A route gives every shelf and reading list its own address that can be shared, bookmarked and indexed, and it lets each one be built as static HTML. A query string would make `/blog` depend on the request, and it couldn't be prerendered per filter.
+
+## The interface
+
+![The blog page: a row of section chips with counts, then series cards, then the latest posts, each labelled with its section and part number](/images/build-logs/building-this-site/site-sections-and-series/blog-index.png)
+
+| Component | Job |
+| --- | --- |
+| `SectionNav` | The chip row with counts. A section with no posts is hidden, and the active chip carries `aria-current="page"` for screen readers |
+| `SeriesStrip` | A card for each series with its post count |
+| `SeriesNav` | Previous and next links at the end of a series post |
+| `PostCard` | Shows the section and "Series · Part N" |
+| Post header | The section and "Part N of M" as links above the title |
+
+![The top of a post in this series: Build Logs / Building this site · Part 2 of 9 above the date, the title, the tags and the Listen to this post button](/images/build-logs/building-this-site/site-sections-and-series/post-header.png)
+
+The **series list at the top of each post** is generated too. Hand-written lists drift: a new post is added to one and forgotten in the others. The two newest series have a small script each, `scripts/db-lab/series-callouts.mjs` and `scripts/build-log/series-callouts.mjs`, that rewrites the list between two marker comments in every post, with the current one in bold. The markers are MDX comments, `{/* series:start */}` and `{/* series:end */}`, so they render as nothing.
+
+## Renames and redirects
+
+![Three kinds of redirect in next.config.ts. Renamed posts, such as mentiforce01, answer 308 Permanent Redirect to their new slug. The retired build-log post how-this-site-is-built answers 308 to the series page. The old Good reads page /reads answers 307 Temporary Redirect to the Second brain page, because that page is a beta.](/images/build-logs/building-this-site/site-sections-and-series/redirects.svg)
+
+With shelves in place, the old names stopped making sense. The six LLM posts were `mentiforce01` to `mentiforce06`, the name of the person the series credits, not a description. They got readable slugs, and their titles lost the "LLM Architectures - 0N -" prefix that the section and the part label now show.
+
+Changing a published URL breaks every link to it, so [`redirects()`](https://nextjs.org/docs/app/api-reference/config/next-config-js/redirects) in `next.config.ts` sends the old addresses on:
+
+```ts title="next.config.ts (shortened)"
+const RENAMED_POSTS: Record<string, string> = {
+  mentiforce01: "python-internals-for-llms",
+  // ...mentiforce02 to 06, and the old MapReduce file name with its spaces
+};
+
+async redirects() {
+  return [
+    ...Object.entries(RENAMED_POSTS).map(([from, to]) => ({
+      source: `/blog/${from}`,
+      destination: `/blog/${to}`,
+      permanent: true, // 308
+    })),
+    // The single build-log post became this series.
+    { source: "/blog/how-this-site-is-built", destination: "/blog/series/building-this-site", permanent: true },
+    // The old Good reads page lives inside the Second brain page now. Temporary while that page is a beta.
+    { source: "/reads", destination: "/second-brain#good-reads", permanent: false },
+  ];
+},
+```
+
+**Permanent or temporary is a real decision.** `permanent: true` sends [308 Permanent Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/308): browsers and search engines remember it and stop asking for the old address. That is right for a rename that will never be undone. `/reads` uses `permanent: false`, a [307 Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307), because the page it points at is a beta. If the beta is withdrawn, a remembered 308 would keep sending people to a page that no longer exists.
+
+✅ Checked on a production server on 2026-11-13:
+
+```bash title="Command"
+for p in mentiforce01 how-this-site-is-built; do curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://localhost:3000/blog/$p; done
+curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://localhost:3000/reads
+```
+
+```text title="Output"
+308 http://localhost:3000/blog/python-internals-for-llms
+308 http://localhost:3000/blog/series/building-this-site
+307 http://localhost:3000/second-brain#good-reads
+```
+
+## Images: a folder per post
+
+Images used to sit in loose folders such as `public/llm-vllm-engine/`. They now mirror the blog's structure:
+
+```text title="Where images live"
+public/images/<section>/<series>/<post-slug>/diagram.svg
+public/images/build-logs/building-this-site/site-architecture/two-paths.svg
+public/images/essays/ideal-chat-app/message_send_flow.png        (no series, so straight under the section)
+```
+
+They sit under `images/` and not `blog/` on purpose: a folder named `public/blog/` would share the `/blog/...` URL space with the pages, and a file there could shadow a route.
+
+## Things that can trip you up
+
+- **A typo in `section` doesn't fail.** It quietly files the post under Essays. Check the post's shelf after adding it.
+- **Two posts with the same `seriesOrder`.** The sort keeps them, in an order you didn't choose. Number the parts 1 to n with no gaps.
+- **A permanent redirect is hard to take back.** Browsers cache a 308. Use 307 for anything that might change.
+- **Raw notes in `content/blog/`.** Every file there is compiled as MDX, so pasted code outside a fence, or a bare `<` or `{` in prose, fails the build. Keep raw notes in the git-ignored `raw/` folder.
+- **Forgetting the sibling posts.** A new part of a series needs the series list updated in every part; run the series script rather than editing lists by hand.
+
+## Reproduce this yourself
+
+1. ✅ **See the routes.** Run `npm run build` and read the route table: every `/blog/topic/...` and `/blog/series/...` page is listed as prerendered.
+2. ✅ **Check the redirects.** `npx next start`, then the `curl` commands above. A 308 or 307 and the new address mean the redirect works.
+3. ✅ **Add a series part.** Give the post `series` and `seriesOrder`, add it to the list in `scripts/build-log/series-callouts.mjs`, run `node scripts/build-log/series-callouts.mjs`, and check the list in each part.
+4. 📘 **Add a shelf.** One entry in `SECTIONS` in `src/lib/sections.ts`. The chips, the section page and the post labels pick it up with no other change.
+
+## Summary
+
+Every post now has a shelf, an optional place in a reading order, and free-form tags, all set in frontmatter and read by one parser that falls back instead of failing. One config file defines the shelves and series; two routes, two segments deep, give each one a prerendered page; and every renamed URL redirects, permanently for renames and temporarily for anything that might be withdrawn. Images live in a folder per post that mirrors the blog.
+
+![A map of the post. Labels: section, series and tags in frontmatter. One config: sections.ts lists the shelves and series. Routes: /blog/topic and /blog/series, two segments deep and prerendered. Moves: readable slugs, permanent redirects and an image folder per post.](/images/build-logs/building-this-site/site-sections-and-series/summary-map.svg)
+
+### Key takeaways
+
+- Separate "where it lives", "what order" and "what about": they are three different labels.
+- Keep the list of shelves in one place, and make everything else read from it.
+- Give every shelf and reading list a real, prerendered URL.
+- Never break a URL: redirect it, and choose permanent or temporary on purpose.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Section** | The one shelf a post sits on |
+| **Series** | An ordered reading list, ordered by `seriesOrder` |
+| **Fallback** | A safe default for a bad value, so the build keeps going |
+| **Dynamic segment** | A `[name]` folder in the App Router, filled from the URL |
+| **308 Permanent Redirect** | Remembered by browsers and search engines; for renames |
+| **307 Temporary Redirect** | Not remembered; for anything that may change |
+| **Series callout script** | Rewrites the series list in every part between marker comments |
+
+### Test yourself
+
+<details>
+<summary>Why are series ordered by seriesOrder and not by date?</summary>
+
+Several parts can share a date, and a date can be corrected later. An explicit number is stable and says exactly what the author meant.
+
+</details>
+
+<details>
+<summary>Why can't a post called "topic" hide the /blog/topic/... pages?</summary>
+
+A post's URL is one segment after `/blog`, while the section pages are two segments deep. `/blog/topic` and `/blog/topic/build-logs` are different routes.
+
+</details>
+
+<details>
+<summary>Why is /reads a 307 when the renamed posts are 308s?</summary>
+
+The renames are final, so browsers may remember them. `/reads` points at a beta page that might be withdrawn, and a remembered permanent redirect would keep sending people to a page that is gone.
+
+</details>
+
+<details>
+<summary>What happens to a post with section: "buildlogs" (a typo)?</summary>
+
+`parsePost` doesn't find that section, so the post falls back to Essays & Ideas. The build passes, which is why the shelf is worth checking after adding a post.
+
+</details>
+
+## Sources
+
+- Next.js: [redirects](https://nextjs.org/docs/app/api-reference/config/next-config-js/redirects), [generateStaticParams](https://nextjs.org/docs/app/api-reference/functions/generate-static-params), [dynamic routes](https://nextjs.org/docs/app/api-reference/file-conventions/dynamic-routes)
+- MDN: [308 Permanent Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/308) and [307 Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)
+- [gray-matter](https://github.com/jonschlinkert/gray-matter) and [reading-time](https://github.com/ngryman/reading-time)
+- [The repository](https://github.com/vineetganti/my-portfolio)

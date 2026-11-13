@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "ratings",
+      "to": "≥ 3 and ≥ 3?",
+      "type": "data"
+    },
+    {
+      "from": "≥ 3 and ≥ 3?",
+      "to": "examples",
+      "type": "data"
+    },
+    {
+      "from": "examples",
+      "to": "triage",
+      "type": "data"
+    }
+  ]
+}

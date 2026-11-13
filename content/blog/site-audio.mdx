@@ -1,0 +1,337 @@
+---
+title: "Listen to this post: a browser voice and an AI podcast"
+description: "Part 3 of the build log for this site. Two ways to listen: the browser's own text-to-speech for every post, and recorded AI podcast versions for some. What gets read, the state machine that keeps pause and skip honest, the four fixes that made it work on phones, and how recordings are encoded, stored and chosen, with every number re-measured."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 3
+tags: ["Web Speech API", "Audio", "React", "Vercel Blob", "NotebookLM"]
+---
+
+The posts on this site are long: the old build-log post took about 31 minutes to listen to, and some database posts take longer. So every post has a **Listen to this post** button, and fourteen posts have a recorded **AI podcast version** instead. This part explains both players, and re-measures what they do today, which found one thing the original write-up got wrong.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. **Listen to this post** (this post): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- **Every post can be read aloud by the browser** with the [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API). It reads the rendered prose and each diagram's description, and says "Code example skipped" or "Table skipped" instead of reading code and tables.
+- **A generation counter** keeps pause, skip and speed changes reliable: every `speak` call takes a new number, and a late end event from an older utterance does nothing.
+- **Phones needed four fixes and a watchdog.** They were tested in an emulated phone with a stubbed speech engine, never on a real handset.
+- **Fourteen posts have a NotebookLM recording.** ✅ Measured on 2026-11-13: mono AAC at 64 kbps, 41 to 70 minutes each, 390.6 MB in Vercel Blob, which is 39% of the Hobby plan's 1 GB.
+- ✅ **A correction:** the player was described as keeping every spoken chunk under 180 characters. It doesn't: the longest chunk sent in today's test was 327 characters, because a single long sentence is never split.
+
+## Two players, one per post
+
+![How a post gets its audio. A recording saved as the post's slug in public/audio is uploaded by upload-audio.mjs to Vercel Blob and listed in content/audio.json. At build time parsePost looks the slug up and sets audioSrc. The post page then shows the podcast player if there is an audioSrc, and the browser-voice player if not.](/images/build-logs/building-this-site/site-audio/which-player.svg)
+
+| | Browser voice (Listen to this post) | AI podcast version |
+| --- | --- | --- |
+| Made by | The reader's device, live | NotebookLM, once, before publishing |
+| Content | The post, read word for word | A two-host conversation about the post |
+| Code and tables | Skipped with a spoken note | Described in conversation, if the hosts choose to |
+| Cost per post | None | Storage and transfer, plus my time to check it |
+| Works offline | No | Yes, after a download |
+
+The post page shows one or the other, never both, with one conditional:
+
+```tsx title="src/app/blog/[slug]/page.tsx"
+{post.audioSrc ? (
+  <RecordedAudio src={post.audioSrc} title={post.title} />
+) : (
+  <AudioPlayer minutes={post.listenMinutes} />
+)}
+```
+
+Two voices at once would be a mess, and the browser voice highlights paragraphs as it reads, which a recording can't do.
+
+## The browser voice
+
+### Why not pre-generated audio for everything?
+
+| | Browser voice | Pre-generated files |
+| --- | --- | --- |
+| Cost | Free | A text-to-speech service per post, and again after every edit |
+| New posts | Work at once | Need a generation step |
+| Voice quality | Depends on the device | Consistent |
+| Download, lock-screen play | No | Yes |
+
+The free option covers every post on the day it is published. The recordings came later, for the posts most worth finishing.
+
+### What gets read
+
+![The browser-voice player in three steps. Prepare: collectChunks reads the rendered article, keeps prose and image descriptions, replaces code, tables and recall questions with a short spoken note, and joins sentences into chunks of up to 180 characters, although a single longer sentence stays whole. Speak: each chunk becomes an utterance, and its end event starts the next one only if no newer speak call has happened. Along the way the current block is highlighted and preferences are saved.](/images/build-logs/building-this-site/site-audio/speech-pipeline.svg)
+
+The logic is in [`src/lib/speech.ts`](https://github.com/vineetganti/my-portfolio/blob/main/src/lib/speech.ts), kept apart from React so it can be tested on its own. It reads the **rendered page** (`#post-content`), not the Markdown, for two reasons: each chunk keeps a reference to its element so it can be highlighted, and whatever the page shows, including text from components, is what gets spoken.
+
+```ts title="src/lib/speech.ts (shortened)"
+const SKIPPED: Record<string, string> = {
+  PRE: "Code example skipped.",
+  TABLE: "Table skipped.",
+  IMG: "Diagram skipped.",
+  DETAILS: "Recall questions skipped.",
+};
+const SKIP_CONTAINERS = "pre,table,details,.diagram";
+const READ_SELECTOR = "h2,h3,h4,p,li,pre,table,img,.diagram,details";
+const MAX_CHUNK = 180;
+```
+
+Each rule exists because of how speech sounds:
+
+- **Symbols are rewritten.** `→` becomes "to", `×` becomes "times", and dashes become commas; otherwise a voice says "rightwards arrow".
+- **Sentences split at punctuation followed by a space**, with the lookbehind `/(?<=[.!?])\s+/`, so "1.5×" stays whole.
+- **Diagrams are read from their alt text**, after the word "Image:". An alt counts as a description only if it has at least 12 characters and a space, so a file name such as `flow_chart` gets the skip note instead. Interactive charts carry the `diagram` class too, so they are read from their `aria-label`. That makes alt text matter twice, for screen readers and for this player, and there is a setting to turn diagram reading off.
+- **A run of the same skipped kind gets one note**, not one per block.
+
+### A correction: the 180-character limit
+
+The original write-up said chunks are capped at 180 characters, because some browsers are widely reported to cut off a long utterance after about 15 seconds. ⚠️ That cut-off is a known Chromium behaviour discussed in bug reports, not something the specification documents, so treat it as reported rather than verified.
+
+The cap is real in the code, but it only applies when **joining** sentences: `splitForSpeech` adds sentences to a chunk while the total stays under 180, and a sentence that is longer on its own is sent whole. To see what the player really sends, I played four posts through the real page with the speech engine replaced by a stub that records each utterance and ends it 2 ms later:
+
+| Post | Chunks | Words spoken | Skip notes | Diagrams read | Longest chunk |
+| --- | --- | --- | --- | --- | --- |
+| MapReduce | 16 | 226 | 1 code | 0 | **327 characters** |
+| SQL foundations | 233 | 1,874 | 2 code, 31 table, 29 recall | 1 | 320 |
+| Transactions and ACID | 271 | 4,593 | 4 code, 6 table, 1 recall | 20 | 247 |
+| The old build-log post | 323 | 5,083 | 19 code, 19 table, 1 recall | 9 | 272 |
+
+✅ Measured on 2026-11-13 in headless Edge on the dev server. Every run finished on its own.
+
+So four of four posts sent chunks over the target, up to 1.8 times it. A 327-character sentence is about 55 words, roughly 20 seconds at normal speed. If a browser does cut long utterances off, the [watchdog](#making-it-work-on-phones) notices the engine went quiet without an end event and moves to the next chunk, so a listener would lose the end of that sentence rather than get stuck. The fix would be a second split at commas for over-long sentences. It isn't made yet.
+
+### The player: a small state machine
+
+[`AudioPlayer.tsx`](https://github.com/vineetganti/my-portfolio/blob/main/src/components/AudioPlayer.tsx) is a client component. Four decisions carry it.
+
+**Browser facts come from [`useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore).** Whether the browser can speak, and which voices it has, are outside React. Voices arrive late, on a `voiceschanged` event, so the component subscribes to it. On the server the store returns "nothing", so the server and the first browser render match.
+
+**Pause is "cancel and remember".** `speechSynthesis.pause()` is unreliable in some browsers, so pausing cancels the utterance and resuming starts that chunk again. A new speed or voice does the same: restart the current chunk with the new setting.
+
+**A generation counter stops stale callbacks.** Cancelling an utterance can still fire its `onend`, which would start the next chunk and undo the pause:
+
+![The bug the generation counter prevents. Before: the reader presses pause, the player cancels the utterance, but the cancelled utterance still fires its end event, which starts the next chunk, so pause undoes itself. After: every speak call takes a new generation number, pause bumps it too, and the late end event sees an old number and does nothing.](/images/build-logs/building-this-site/site-audio/stale-callback.svg)
+
+```ts title="src/components/AudioPlayer.tsx (shortened)"
+const speak = (i: number) => {
+  const gen = ++genRef.current; // a new generation invalidates every older callback
+  // ...highlight chunk i, update state...
+  const utterance = new SpeechSynthesisUtterance(chunks[i].text);
+  utterance.rate = prefsRef.current.rate;
+  utterance.onend = () => {
+    if (genRef.current === gen) speakRef.current(i + 1); // only if nothing newer started
+  };
+  synth.speak(utterance);
+};
+```
+
+One number compared in one place is easier to keep right than a "paused" flag that every code path must remember to reset.
+
+**Highlighting scrolls only when it must.** The block being read gets a `tts-active` class, and it is scrolled into view only if it drifts under the sticky header or the player bar, instantly when the reader prefers reduced motion. Speed and voice are saved in `localStorage` inside `try`/`catch`, because storage can be blocked.
+
+<Callout type="warn" title="What the linter caught">
+
+📜 The first version assigned `speakRef.current = speak` during render, which React's rules forbid because a render must not have side effects. It moved into an effect. A second warning was about reading a ref in a cleanup function, solved by copying the ref first. Running `eslint` before trusting the code earned its keep.
+
+</Callout>
+
+![The player on desktop: a bottom bar with previous, pause and next buttons, Playing, the time left, a speed button, a settings button and a progress bar, while the paragraph being read is highlighted above it](/images/build-logs/building-this-site/site-audio/player-desktop.png)
+
+### Making it work on phones
+
+📜 After the first release, the player didn't speak on phones, in Safari or Chrome. I couldn't hold a phone to the code, so the code was read for the failure points known to hit mobile browsers, and four were real:
+
+| Symptom on a phone | Cause in the code | Fix |
+| --- | --- | --- |
+| Nothing is spoken | `cancel()` and `speak()` in the same instant; mobile browsers can drop speech queued like that | Cancel only when something is speaking, and wait 80 ms before speaking after a cancel |
+| One sentence, then silence | The utterance object wasn't kept anywhere, and it can be garbage-collected mid-speech, so its end event never fires | Keep the current utterance in a ref |
+| Silent after a pause | Mobile Chrome can leave the engine "paused" | Call `resume()` before every `speak()` |
+| "Paused", with no reason | A failed utterance was caught and ignored | Show the reason in the bar |
+
+Two safety nets sit on top. A **watchdog** checks every 500 ms: if speech started but the engine went idle without an end event, it moves on; if nothing started within 4.5 seconds, it stops and says "Nothing was spoken. Check the volume (and the silent switch on iPhone), then tap play again". And a browser that blocks audio gets a plain message instead of silence. The first tap still calls `speak()` inside the click handler, because phones only allow speech that a tap starts, and the bar sits above the iPhone home indicator with `env(safe-area-inset-bottom)`.
+
+<Callout type="warn" title="What was and wasn't verified">
+
+📜 Every phone failure mode was simulated in an emulated phone with a stubbed engine: end events that never arrive, speech that never starts, a browser that refuses. Each one now recovers or explains itself. It has **not** been heard on a real iPhone or Android phone. Two things are outside the code's control: the iPhone silent switch, and phones that stop speech when the screen locks.
+
+</Callout>
+
+## The AI podcast versions
+
+### How a recording is made
+
+[NotebookLM](https://notebooklm.google.com) can turn sources into an **Audio Overview**, a conversation between two AI hosts. For a post the workflow is: add the post as a source, generate the overview with a focus prompt ("explain this to someone learning it for the first time, and stick to the post's examples"), listen to the whole thing, regenerate if it drifts, and download the m4a named after the post's slug.
+
+<Callout type="warn" title="Check the audio like a draft">
+
+The hosts paraphrase, and a paraphrase can be wrong; they can also add examples that aren't in the post. The page labels the audio as an AI podcast version, and the post stays the source of truth. A recording also goes stale when the post changes, so it should be regenerated after a big edit.
+
+</Callout>
+
+### Adding one to a post
+
+The goal was two commands and no code: no frontmatter to edit, no component to wire up.
+
+```bash title="Commands"
+# 1. save the file as public/audio/<post-slug>.m4a (git-ignored)
+# 2. upload it and list it
+node --env-file=.env.local scripts/upload-audio.mjs
+```
+
+`upload-audio.mjs` sends each file to Vercel Blob with the read-write token from `.env.local`, and adds the slug to `content/audio.json`, which is committed:
+
+```json title="content/audio.json (first entries)"
+{
+  "agent-evaluation": "agent-evaluation.m4a",
+  "agents-to-production": "agents-to-production.m4a"
+}
+```
+
+At build time `parsePost` looks the slug up and builds the address from `AUDIO_BASE_URL`, falling back to `/audio` so local files play in development:
+
+```ts title="src/lib/blog.ts"
+const AUDIO_BASE_URL = (process.env.AUDIO_BASE_URL || "/audio").replace(/\/+$/, "");
+
+function findAudio(slug: string, declared: unknown): string | undefined {
+  if (typeof declared === "string" && /^(\/|https:\/\/)/.test(declared)) return declared;
+  const file = readAudioManifest()[slug];
+  return file ? `${AUDIO_BASE_URL}/${file}` : undefined;
+}
+```
+
+The code doesn't depend on Blob: moving to another store is copying the files and changing one setting.
+
+### The player bar
+
+`RecordedAudio` looks like the speech player on purpose, with play and pause, back 15 seconds, forward 30, a seek bar, speeds 1, 1.25, 1.5, 2 and 0.75, and a download link. Three details matter:
+
+- **The `<audio>` element is always on the page, hidden.** Phones allow audio only from a tap, so the button calls `play()` on an element that already exists.
+- **[`preload="none"`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/audio#preload)**: nothing is downloaded until someone presses the button, so a 30 MB recording costs nothing to readers who don't listen.
+- **The download link adds `?download=1`** for files on another origin, because browsers ignore the `download` attribute across origins and would play the file instead.
+
+### What the recordings cost now
+
+📜 When the recordings first moved out of git, NotebookLM's exports were 257 kbps stereo, and eleven of them came to 433 MB. They were re-encoded:
+
+```bash title="Command: one re-encode"
+ffmpeg -i in.m4a -vn -ac 1 -c:a aac -b:a 64k -movflags +faststart out.m4a
+```
+
+- `-ac 1` makes it mono: two voices talking gain almost nothing from stereo.
+- `-b:a 64k` is 64 kbps AAC; speech sits mostly below 8 kHz, so what is lost is the very top of the spectrum.
+- `-movflags +faststart` moves the index to the front of the file, so a phone can start playing and seek before the whole file arrives ([ffmpeg's MP4 options](https://ffmpeg.org/ffmpeg-formats.html#mov_002c-mp4_002c-ismv)).
+
+That took the eleven files from 433 MB to 113 MB. The recordings have since been regenerated, and they are much longer, so I measured what is live today:
+
+```bash title="Command: size and format of each live recording"
+curl -sI "$AUDIO_BASE_URL/<file>" | grep -i content-length
+ffprobe -v error -show_entries format=duration,bit_rate:stream=channels,sample_rate -of csv=p=0 "$AUDIO_BASE_URL/<file>"
+```
+
+| What | Measured (✅ 2026-11-13) |
+| --- | --- |
+| Recordings | 14 |
+| Format | AAC, mono, 44.1 kHz, about 67 kbps including the container (64 kbps audio) |
+| Lengths | 41 to 70 minutes (2,475 to 4,176 seconds), 12.9 hours in all |
+| Size | 20.8 to 35.0 MB each, **390.6 MB in all** |
+
+The encoding is as intended; the length is what changed. Against [Vercel Blob's Hobby allowance](https://vercel.com/docs/vercel-blob/usage-and-pricing), 1 GB of storage and 10 GB of transfer a month:
+
+- **Storage:** 39% of the allowance, shared with everything else in the project, including the Second brain files.
+- **Transfer:** a full listen averages 27.9 MB, so 10 GB covers about 360 full plays a month. `preload="none"` means visits that don't press play cost nothing.
+- **Over the limit:** the page says Hobby is never charged extra, but Blob stops working for 30 days. The site would keep working; the recordings would not.
+
+## Things that can trip you up
+
+- **An alt text that is a file name.** The player skips it, and so do screen readers in effect. Write alt text as a description.
+- **Essential content in a table or code block only.** The browser voice skips it. Say the important point in prose too.
+- **Testing speech on a laptop only.** Phones differ: speech must start from a tap, and events can go missing.
+- **A recording that drifts from its post.** Regenerate it after a material edit; the hosts paraphrase whatever version they were given.
+- **Long recordings on a free plan.** Size scales with minutes, not with the post. Check the Blob usage page before adding more.
+
+## Reproduce this yourself
+
+1. ✅ **Play a post with a stubbed voice.** In a headless browser, replace `window.speechSynthesis` before the page loads with an object whose `speak` records `utterance.text` and calls `onend` a moment later, press **Listen to this post**, and read the recorded list. That is how the table above was made.
+2. ✅ **Measure a recording.** `ffprobe` on the Blob URL, as above. `ffprobe` can read over HTTPS without downloading the file first.
+3. ✅ **Add a recording.** Save `public/audio/<slug>.m4a`, run `node --env-file=.env.local scripts/upload-audio.mjs`, commit `content/audio.json`. It needs `BLOB_READ_WRITE_TOKEN` in `.env.local` and `AUDIO_BASE_URL` in Vercel.
+4. 📘 **Read the API.** [SpeechSynthesis on MDN](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis) lists the methods and events the player relies on.
+
+## Summary
+
+Every post can be listened to for free: the browser voice reads the rendered prose and diagram descriptions, says what it skips, and stays reliable through pauses and skips because each `speak` call takes a generation number. Phones needed four fixes and a watchdog, tested only in emulation. Fourteen posts carry a NotebookLM recording instead, chosen by one list in `content/audio.json`, stored in Vercel Blob and fetched only when someone presses play. Re-measuring found two things to act on: chunks can exceed the 180-character target, and the recordings now use 39% of the free storage.
+
+![A map of the audio post. Browser voice: the Web Speech API reads the rendered prose and diagram descriptions and skips code and tables with a note. Robustness: a generation counter, phone fixes and a watchdog. Podcast: NotebookLM recordings, re-encoded to mono 64 kbps and stored in Vercel Blob. The switch: content/audio.json decides which player a post shows.](/images/build-logs/building-this-site/site-audio/summary-map.svg)
+
+### Key takeaways
+
+- Read the rendered page, not the source, when the output should match what readers see.
+- A generation number beats a flag for "is this callback still wanted?".
+- Measure what you ship: the recordings tripled in length without anyone noticing the storage.
+- A limit that is applied only when joining things is not a limit on each thing.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Web Speech API** | The browser's built-in speech; `SpeechSynthesisUtterance` is one thing to say |
+| **`collectChunks`** | Turns the rendered post into short speakable pieces with skip notes |
+| **Generation counter** | A number each `speak` takes, so older callbacks can tell they are stale |
+| **Watchdog** | A timer that notices speech that never started or never ended |
+| **Audio Overview** | NotebookLM's two-host conversation about your sources |
+| **`preload="none"`** | The browser downloads nothing until play is pressed |
+| **faststart** | An MP4's index moved to the front, so playback starts before the download ends |
+
+### Test yourself
+
+<details>
+<summary>Why does pausing cancel the utterance instead of calling pause()?</summary>
+
+`speechSynthesis.pause()` is unreliable in some browsers. Cancelling and restarting the chunk on resume behaves the same everywhere, at the cost of repeating the start of one chunk.
+
+</details>
+
+<details>
+<summary>A reader pauses, and the next paragraph starts anyway. What is the likely cause, and the fix here?</summary>
+
+The cancelled utterance fired its end event, which started the next chunk. Each `speak` takes a new generation number and pause bumps it, so a callback from an older generation does nothing.
+
+</details>
+
+<details>
+<summary>Why did the player send a 327-character chunk when the limit is 180?</summary>
+
+The limit applies when joining sentences. A single sentence longer than 180 characters is sent whole, because nothing splits inside a sentence.
+
+</details>
+
+<details>
+<summary>Why does the podcast player keep a hidden audio element on the page?</summary>
+
+Phones allow audio only when a tap starts it. The button's click handler calls `play()` on an element that already exists, so playback counts as started by the tap.
+
+</details>
+
+## Sources
+
+- MDN: [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API), [SpeechSynthesis](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis), [the audio element](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/audio)
+- React: [useSyncExternalStore](https://react.dev/reference/react/useSyncExternalStore)
+- Vercel: [Blob usage and pricing](https://vercel.com/docs/vercel-blob/usage-and-pricing)
+- [ffmpeg: MP4 muxer options](https://ffmpeg.org/ffmpeg-formats.html#mov_002c-mp4_002c-ismv) and [ffprobe](https://ffmpeg.org/ffprobe.html)
+- [NotebookLM](https://notebooklm.google.com)

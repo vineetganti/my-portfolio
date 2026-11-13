@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "push or PR",
+      "to": "public-safety",
+      "type": "request"
+    },
+    {
+      "from": "push or PR",
+      "to": "site",
+      "type": "request"
+    },
+    {
+      "from": "push or PR",
+      "to": "second-brain",
+      "type": "request"
+    }
+  ]
+}

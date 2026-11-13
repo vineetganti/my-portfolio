@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "nb publish",
+      "to": "upload script",
+      "type": "data"
+    },
+    {
+      "from": "upload script",
+      "to": "Vercel Blob",
+      "type": "data"
+    },
+    {
+      "from": "Vercel Blob",
+      "to": "secondBrain.ts",
+      "type": "data"
+    }
+  ]
+}

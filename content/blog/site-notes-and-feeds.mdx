@@ -1,0 +1,229 @@
+---
+title: "Nuggets and feeds"
+description: "Part 4 of the build log for this site. Short notes that don't need a post: one Markdown file each, one reader, one list component for two pages, and an RSS feed built by a route handler. Plus the second feed on the site, which is built only from data that passed a signature check, and a time-zone trap found while re-checking the first one."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 4
+tags: ["Next.js", "RSS", "Route handlers", "Dates"]
+---
+
+Not everything is worth a blog post. A thought about a navigation app, a one-line opinion: these don't need a title, a table of contents or recall questions. So next to posts there is a second, much smaller kind of content, shown on the site as **Nuggets** and called notes in the code. This part is about how little machinery that takes, and about the feeds that carry it.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. **Nuggets and feeds** (this post): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- **A nugget is one Markdown file** in `content/notes/` with a date and plain text: no title, tags or images.
+- **One reader, one component, three places.** `notes.ts` filters and sorts the files; `NoteList` renders them on `/notes` and in a scrolling box on the home page; a route handler turns the same list into RSS at `/notes/feed.xml`.
+- **The feed is static.** ✅ The build lists `/notes/feed.xml` as prerendered, so it is a file until the next push.
+- **The site's second feed is built from verified data.** The Second brain's RSS is generated from JSON that passed a signature check, never by serving the uploaded XML, and it answers 503 when nothing verifies.
+- ✅ **A trap found while re-checking:** a date with a time but no time zone is read as local time, so the feed's `pubDate` depends on the time zone of the machine that builds it.
+
+## What a nugget is
+
+```md title="content/notes/2026-10-30-apple-vs-google-maps.md (shortened)"
+---
+date: "2026-10-30T12:00"
+---
+Apple vs Google maps
+
+The UX on navigation is better for Apple Maps on iPhone. ...
+```
+
+That is the whole format. The front matter holds a date, optionally with a time to break ties between nuggets written the same day; everything below it is text, and a blank line starts a new paragraph. There are no titles, links or images to render, so writing one means creating one file.
+
+## One folder, three readers
+
+![Where a note goes. A Markdown file in content/notes with a date and plain text is read by notes.ts, which drops notes without text or with a bad date and sorts the rest newest first. Three places use the same list: the /notes page, a scrolling box on the home page, and the RSS feed at /notes/feed.xml.](/images/build-logs/building-this-site/site-notes-and-feeds/notes-flow.svg)
+
+```ts title="src/lib/notes.ts"
+export function getAllNotes(): Note[] {
+  if (!fs.existsSync(NOTES_DIR)) return [];
+
+  return fs
+    .readdirSync(NOTES_DIR)
+    .filter((f) => f.endsWith(".md"))
+    .map((filename) => {
+      const { data, content } = matter(fs.readFileSync(path.join(NOTES_DIR, filename), "utf-8"));
+      return { id: filename.replace(/\.md$/, ""), date: String(data.date ?? ""), text: content.trim() };
+    })
+    .filter((n) => n.text && !Number.isNaN(new Date(n.date).getTime()))
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+}
+```
+
+Two choices in there:
+
+- **A bad nugget is dropped, not fatal.** An empty file or an unreadable date is filtered out. That is the opposite of the flash cards, which fail the build on a bad card; a missing nugget harms nobody, a wrong answer key would.
+- **The file name is the id.** It becomes the anchor, so `/notes#2026-10-30-apple-vs-google-maps` links to one nugget. A dated file name also keeps the folder in order.
+
+`NoteList` renders the list once, and both `/notes` and the home page use it, so the two views can't drift apart. On the home page it sits inside a box about 26 rem tall that scrolls on its own: `overscroll-contain` stops the page from scrolling when the box reaches its end, and the box is focusable (`tabIndex={0}`, `role="region"` with a label), so it scrolls with the keyboard too.
+
+## The RSS feed
+
+`/notes/feed.xml` is a [route handler](https://nextjs.org/docs/app/getting-started/route-handlers): a `GET` function in a `route.ts` file that returns a `Response`. Because it reads only files, it can be built once:
+
+```ts title="src/app/notes/feed.xml/route.ts (shortened)"
+const SITE = "https://www.vineetganti.com";
+const escape = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+export function GET() {
+  const items = getAllNotes()
+    .map((n) => {
+      const firstLine = n.text.split("\n")[0];
+      const title = firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
+      return `<item>
+      <title>${escape(title)}</title>
+      <link>${SITE}/notes#${n.id}</link>
+      <guid isPermaLink="false">${n.id}</guid>
+      <pubDate>${new Date(n.date).toUTCString()}</pubDate>
+      <description>${escape(n.text)}</description>
+    </item>`;
+    })
+    .join("\n");
+  // ...wrapped in <rss version="2.0"><channel>...</channel></rss>
+  return new Response(xml, { headers: { "Content-Type": "application/rss+xml; charset=utf-8" } });
+}
+```
+
+Reading it against the [RSS 2.0 specification](https://www.rssboard.org/rss-specification):
+
+- **`escape` runs on every piece of text.** An `&` or `<` in a nugget would otherwise break the XML. The ampersand is replaced first, so the `&` in `&lt;` isn't escaped twice.
+- **`guid isPermaLink="false"`** says the id is a stable identifier, not a URL. Feed readers use it to tell new items from ones already seen.
+- **`pubDate` uses `toUTCString()`**, which produces the RFC 822 style date the specification asks for, with the four-digit year its later revision allows, such as `Fri, 30 Oct 2026 06:30:00 GMT`.
+- **The title is the first line**, cut at 80 characters, because a nugget has no title of its own.
+
+✅ Fetched from the dev server on 2026-11-13:
+
+```bash title="Command"
+curl -s -D - http://localhost:3125/notes/feed.xml
+```
+
+```text title="Output (headers and the one item, trimmed)"
+HTTP/1.1 200 OK
+content-type: application/rss+xml; charset=utf-8
+
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Vineet Ganti: Nuggets</title>
+    <link>https://www.vineetganti.com/notes</link>
+    <item>
+      <title>Apple vs Google maps</title>
+      <link>https://www.vineetganti.com/notes#2026-10-30-apple-vs-google-maps</link>
+      <guid isPermaLink="false">2026-10-30-apple-vs-google-maps</guid>
+      <pubDate>Fri, 30 Oct 2026 06:30:00 GMT</pubDate>
+```
+
+### The time-zone trap
+
+Look at that `pubDate`: **06:30 GMT** for a nugget dated `12:00`. The front matter says `2026-10-30T12:00`, a date and time with no time zone, and [JavaScript reads a date-time without an offset as local time](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#date_time_string_format). The machine that ran this check is on India Standard Time, UTC+5:30, so 12:00 local became 06:30 GMT. A build machine set to UTC, the usual setting for cloud build machines, would give 12:00 GMT for the same file. ⚠️ I haven't checked which time zone Vercel's build uses, so the live feed may say either.
+
+Nothing is broken today, because only one nugget exists and the order between nuggets doesn't change. But the published time depends on where the site is built, and the date shown on the page can flip a day for a nugget written near midnight. The fix is to write the offset in the file (`2026-10-30T12:00+05:30`) or to treat these times as UTC on purpose. ⚠️ It isn't made yet; I noticed it while writing this.
+
+## The site's other feed: built from verified data
+
+![The site's two RSS feeds come from different places. The notes feed is built from files in the repository at build time. The Second brain feed is built at request time from data that has already passed signature verification, never by copying the uploaded XML file.](/images/build-logs/building-this-site/site-notes-and-feeds/two-feeds.svg)
+
+The [Second brain page](/blog/site-second-brain-page) has an RSS feed of its Good reads shelf at `/second-brain/feed.xml`. Its data comes from outside the repository, so the route does more than the nuggets feed:
+
+```ts title="src/app/second-brain/feed.xml/route.ts (shortened)"
+export async function GET() {
+  const snapshot = await getSecondBrain(); // fetched, signature-checked, validated, cached 15 min
+  if (snapshot.state === "off") return new Response("Not found", { status: 404 });
+  if (snapshot.state !== "ok" || !snapshot.goodReads) {
+    return new Response("Temporarily unavailable", { status: 503, headers: { "Retry-After": "900" } });
+  }
+  // ...the same escape-and-build as the nuggets feed, from the verified items
+}
+```
+
+The pipeline uploads a signed `good-reads.xml` too, and the route ignores it. It rebuilds the XML from the JSON that passed verification, so a feed reader only ever receives whitelisted, escaped text and https links. When nothing verifies, it answers [503 Service Unavailable](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/503) with `Retry-After: 900`, telling a feed reader to try again in 15 minutes, the length of the cache. ✅ On the dev server, which has no Second brain settings, that is exactly what it returned: `503 text/plain`.
+
+## Things that can trip you up
+
+- **A date-time with no offset.** It is local time on whatever machine reads it. Write the offset, or decide on UTC.
+- **Unescaped text in XML.** One `&` breaks a feed. Escape every piece of text, ampersand first.
+- **Serving a file you didn't check.** A feed built from verified data can't contain more than the data does; a copied file can.
+- **A feed that shows 404 when it means "not now".** 503 with `Retry-After` tells readers to come back; 404 tells them to give up.
+
+## Reproduce this yourself
+
+1. ✅ **Add a nugget.** Create `content/notes/<date>-<name>.md` with a `date` and some text. It appears on `/notes` and on the home page.
+2. ✅ **Read the feed.** `curl -s http://localhost:3000/notes/feed.xml` on a running site. Check the `pubDate` against the date in your file and your machine's time zone.
+3. ✅ **See the 503.** Without `SECOND_BRAIN_BASE_URL` and `SECOND_BRAIN_PUBLIC_KEY` set, `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/second-brain/feed.xml` prints `503`.
+4. 📘 **Validate a feed.** Paste the XML into the [W3C Feed Validation Service](https://validator.w3.org/feed/). ⚠️ I have only checked the XML by eye and with `curl`, not with a validator or a feed reader.
+
+## Summary
+
+A nugget is one dated Markdown file. `notes.ts` drops bad ones and sorts the rest, `NoteList` renders the same list on two pages, and a static route handler turns it into RSS with escaped text, stable ids and RFC 822 dates. The Second brain feed follows the same shape but is built only from data that passed a signature check, and says 503 when there is none. Re-checking the first feed found a time-zone trap: a time without an offset means whatever the build machine thinks it means.
+
+![A map of the notes post. Writing: one Markdown file with a date. Reading: notes.ts filters and sorts. Showing: /notes, the home page box and NoteList. Feeding: RSS 2.0 built by a route handler.](/images/build-logs/building-this-site/site-notes-and-feeds/summary-map.svg)
+
+### Key takeaways
+
+- A small content type can be one folder, one reader and one component.
+- Render one list in one component, and use it everywhere it appears.
+- Build a feed from checked data, not from a file you received.
+- Write time zones into dates.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Nugget** | A dated plain-text note, one Markdown file in `content/notes/` |
+| **Route handler** | A `GET` (or other method) function in `route.ts` that returns a `Response` |
+| **RSS 2.0** | An XML format of a channel with items, each with a title, link, guid and date |
+| **`guid isPermaLink="false"`** | A stable id that is not itself a URL |
+| **RFC 822 date** | The `Fri, 30 Oct 2026 06:30:00 GMT` style RSS expects |
+| **503 + Retry-After** | "Not available now, try again in N seconds" |
+
+### Test yourself
+
+<details>
+<summary>Why is the feed's pubDate 06:30 GMT for a note dated 12:00?</summary>
+
+The date has no time zone, so JavaScript read it as local time on the machine that built it, which was on UTC+5:30. On a UTC build machine the same file would say 12:00 GMT.
+
+</details>
+
+<details>
+<summary>Why does escape replace & before < and >?</summary>
+
+If `<` were replaced first, its replacement `&lt;` would contain an `&` that the next step would turn into `&amp;lt;`. Escaping the ampersand first avoids double-escaping.
+
+</details>
+
+<details>
+<summary>Why doesn't the Second brain feed just serve the signed good-reads.xml?</summary>
+
+The site validates the JSON field by field and whitelists what it shows. Rebuilding the XML from that data guarantees the feed contains nothing the page wouldn't show; serving the received file would skip those checks.
+
+</details>
+
+## Sources
+
+- Next.js: [Route Handlers](https://nextjs.org/docs/app/getting-started/route-handlers)
+- [RSS 2.0 specification](https://www.rssboard.org/rss-specification)
+- MDN: [Date, and the date-time string format](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#date_time_string_format), [503 Service Unavailable](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/503), [overscroll-behavior](https://developer.mozilla.org/en-US/docs/Web/CSS/overscroll-behavior)
+- [W3C Feed Validation Service](https://validator.w3.org/feed/)

@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "from": "owner asks",
+      "to": "Claude Code",
+      "type": "request"
+    },
+    {
+      "from": "Claude Code",
+      "to": "tool call",
+      "type": "request"
+    },
+    {
+      "from": "tool call",
+      "to": "tool result",
+      "type": "data"
+    },
+    {
+      "from": "tool result",
+      "to": "Claude Code",
+      "label": "next step",
+      "type": "data"
+    }
+  ]
+}

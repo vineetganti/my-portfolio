@@ -20,6 +20,8 @@ const nextConfig: NextConfig = {
         destination: `/blog/${to}`,
         permanent: true,
       })),
+      // The single build-log post was split into the "Building this site" series.
+      { source: "/blog/how-this-site-is-built", destination: "/blog/series/building-this-site", permanent: true },
       // The old placeholder "Good reads" page now lives inside the Second brain page. Temporary (307) while it is a beta,
       // so withdrawing the beta does not leave a permanent redirect cached in browsers.
       { source: "/reads", destination: "/second-brain#good-reads", permanent: false },

@@ -1,0 +1,271 @@
+---
+title: "Real PostgreSQL in the browser"
+description: "Part 7 of the build log for this site. How every Database Engineering post runs real PostgreSQL 18 in the reader's browser with PGlite: loaded only on the first Run, one instance per page, one schema per box, statements run one at a time. The download that was nearly twice what the boxes promised, and the fix; the final review that clicked every control in production; and the four bugs it found."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 7
+tags: ["PostgreSQL", "PGlite", "WebAssembly", "Performance", "Testing"]
+---
+
+The Database Engineering series argues about what a database does, and the best answer to "is that true?" is to run it. So every post in it has boxes of editable SQL with a **Run this** button, and pressing it runs real PostgreSQL inside the reader's browser, with no server behind it. This part explains how that works, what it costs a reader, and how it was tested.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. **Real PostgreSQL in the browser** (this post): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- **[PGlite](https://pglite.dev/) is PostgreSQL compiled to WebAssembly.** ✅ The bundled build reports `PostgreSQL 18.6 (PGlite 0.5.15)`.
+- **Nothing loads until the first press of Run.** Then three things download together: the JavaScript, six extensions, and the database's file system image. Later boxes on the page reuse the same instance.
+- **Each box gets its own schema** (`lab_<id>`), and SQL runs one statement at a time, so `VACUUM` works and an error keeps the results before it.
+- ✅ **The download is 5.74 MB, down from 9.86 MB.** Hosts don't compress a `.data` file, so it now ships gzipped and the browser unpacks it.
+- 📜 **The final review ran every box and clicked every control** on a production build, on desktop and at phone width: 55 interactive components, about 220 controls and 106 box steps, with no errors left except the ones boxes are designed to show.
+
+## Why in the browser at all?
+
+There were three ways to let a reader run SQL:
+
+| Option | Cost | Risk | What the reader gets |
+| --- | --- | --- | --- |
+| A shared database server | Always running, paid for | Anyone can run anything on it | Real Postgres, shared with strangers |
+| Pre-recorded results only | None | None | Read-only; no "what if I change this?" |
+| **PGlite in the browser** | A one-time download per page | Contained in the reader's own tab | Real Postgres, private, free |
+
+The recordings from [part 6](/blog/site-generated-content) cover the things a browser can't show, such as two machines replicating. For everything else, the reader's own tab is the cheapest and safest server there is.
+
+## Loading it only when asked
+
+![What happens when a reader presses Run in a live box for the first time on a page. Three downloads start together: PGlite's JavaScript entry, the six extension modules, and the gzipped file system image, which the browser unpacks with DecompressionStream. PGlite then starts PostgreSQL in WebAssembly, the box creates its own schema and runs its setup, and then the reader's SQL runs one statement at a time.](/images/build-logs/building-this-site/site-live-postgres/load-on-click.svg)
+
+PGlite isn't bundled with the site's JavaScript. `scripts/copy-pglite.mjs` runs before every `dev` and `build`, and copies the runtime from `node_modules` into `public/pglite/`, which git ignores. The browser loads it from there, from the site's own origin, only when a box asks:
+
+```ts title="src/components/db/pglite.ts (shortened)"
+const EXTENSIONS = ["pageinspect", "pg_visibility", "pg_buffercache", "pg_walinspect", "pg_freespacemap", "bloom"];
+let loading: Promise<Pg> | null = null;
+
+/** PGlite's file system image, gzipped by scripts/copy-pglite.mjs because hosts won't compress it. */
+async function fileSystem(): Promise<Blob> {
+  const response = await fetch("/pglite/pglite.data.gzipped");
+  if (!response.ok || !response.body) throw new Error(`Couldn't download PostgreSQL (${response.status})`);
+  return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).blob();
+}
+
+// The URLs live in variables so that neither bundler tries to resolve them at build time.
+async function load(): Promise<Pg> {
+  const entry = "/pglite/index.js";
+  const [{ PGlite }, modules, fsBundle] = await Promise.all([
+    import(/* webpackIgnore: true */ /* turbopackIgnore: true */ entry),
+    Promise.all(EXTENSIONS.map((name) => import(/* webpackIgnore: true */ /* turbopackIgnore: true */ `/pglite/contrib/${name}.js`))),
+    fileSystem(),
+  ]);
+  const extensions = Object.fromEntries(EXTENSIONS.map((name, i) => [name, modules[i][name]]));
+  const db = await PGlite.create({ extensions, fsBundle });
+  await db.exec(EXTENSIONS.map((name) => `CREATE EXTENSION IF NOT EXISTS ${name};`).join("\n"));
+  return db;
+}
+
+export function postgres(): Promise<Pg> {
+  loading ??= load().catch((e) => { loading = null; throw e; });
+  return loading;
+}
+```
+
+The details that matter:
+
+- **The import path is a variable, with "ignore" comments for both bundlers.** A literal `import("/pglite/index.js")` would make Turbopack or webpack try to resolve and bundle it at build time. A variable plus `webpackIgnore` and `turbopackIgnore` leaves it as a real browser import of a URL.
+- **One promise per page.** `postgres()` stores the loading promise, so every box on the page shares one PostgreSQL instance, and a second box pressed while the first is still loading waits for the same download. If loading fails, the promise is cleared so the next press can try again.
+- **Everything downloads in parallel** with `Promise.all`, so the slowest file sets the wait, not the sum.
+- **The extensions are why the posts can show internals.** `pageinspect` reads raw heap pages, `pg_visibility` the visibility map, `bloom` the bloom index type; the posts about storage and indexes use them.
+
+## One database, one schema per box
+
+![Several live boxes on one page share one PGlite database. Each box creates its own schema named lab_ plus its id and sets the search path to it, so two boxes can each have a table t without clashing. Queries should look a table up with 't'::regclass, which follows the search path, rather than relname = 't', which can match another box's table.](/images/build-logs/building-this-site/site-live-postgres/schema-per-box.svg)
+
+Boxes on a page share one database, so each one isolates itself in a [schema](https://www.postgresql.org/docs/current/ddl-schemas.html):
+
+```ts title="src/components/db/PgPlaygroundView.tsx (shortened)"
+const schema = `lab_${id.replace(/\W/g, "_")}`; // "acid/transfer" becomes lab_acid_transfer
+
+async function prepare(db: Pg) {
+  await db.exec(`RESET ROLE; DROP SCHEMA IF EXISTS ${schema} CASCADE; CREATE SCHEMA ${schema}; SET search_path TO ${schema}, public;`);
+  for (const statement of splitSql(box.setup ?? "")) await db.exec(statement);
+}
+
+async function runAll(db: Pg, statements: string[]) {
+  for (const statement of statements) {
+    try {
+      results.push(...(await db.exec(statement, { rowMode: "array" })));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      break; // stop at the first error, keep everything before it on screen
+    }
+  }
+}
+```
+
+- **`search_path`** makes `accounts` mean this box's `accounts`. A query that reads the catalog should use `'accounts'::regclass`, which follows the search path, rather than `relname = 'accounts'` in `pg_class`, which matches every box's table on the page.
+- **Statements run one at a time,** split by `splitSql`, which understands quotes, `$$`-quoted function bodies and comments. 📜 Sending a whole box in one `exec` call makes PGlite run it as one implicit transaction, and `VACUUM` refuses to run inside a transaction block. One at a time also means an error at statement five leaves statements one to four's results on screen.
+- **`RESET ROLE` first.** The security post has a box that switches to a limited role; without the reset, the next box would inherit that role.
+- **Reset** rolls back any open transaction and rebuilds the schema from the box's setup.
+
+The display is small but careful: at most 100 rows per result, `EXPLAIN` output shown as a plan rather than a one-column table, `NULL` shown as a word so it can't be mistaken for an empty string, and a status line that says when a transaction is still open.
+
+## What a reader downloads
+
+![The download before and after the fix, measured on a production server. Before: 9.86 MB, of which pglite.data was 6.24 MB because hosts do not compress a .data file, plus 3.29 MB of gzipped WebAssembly and 0.33 MB of the rest. After gzipping the data file at build time and unpacking it in the browser: 5.74 MB, with the data file at 2.13 MB.](/images/build-logs/building-this-site/site-live-postgres/download-size.svg)
+
+Every box said "Real PostgreSQL loads when you press Run: about 5 MB". 📜 The final review on 2026-11-05 measured it on a production server, with the browser's network events, and the total was **9.86 MB**:
+
+```text title="Output: the first Run on a production server, before the fix (largest files)"
+   6242572 none   /pglite/pglite.data
+   3293242 gzip   /pglite/pglite.wasm
+    131831 gzip   /pglite/initdb.wasm
+total 9.86 MB in 24 requests
+```
+
+The `none` and `gzip` column is the response's `Content-Encoding`. The 6.24 MB file system image went over the wire uncompressed. [Vercel's compression list](https://vercel.com/docs/how-vercel-cdn-works/compression) includes `application/wasm` but not `application/octet-stream`, the type a `.data` file is served as, so the same would happen in production.
+
+The fix was not to change the label. The file compresses well: `gzip -9` shrinks it from 6.24 MB to 1.86 MB, and Node's built-in `zlib` at level 9 to 2.13 MB (Node's bundled zlib favours speed; the difference wasn't worth a new dependency). So:
+
+1. `copy-pglite.mjs` writes `pglite.data.gzipped` at build time.
+2. The browser fetches it and unpacks it with [`DecompressionStream`](https://developer.mozilla.org/en-US/docs/Web/API/DecompressionStream).
+3. The result is passed to PGlite as `fsBundle`, so PGlite never fetches the original.
+
+The file is deliberately **not** named `.gz`. Some hosts add a `Content-Encoding: gzip` header to `.gz` files, and the browser would then unpack it before the code does, and the code's own unpacking would fail on plain data. A neutral extension can't trigger that.
+
+✅ Measured again on 2026-11-13 on a production build:
+
+```text title="Output: the first Run on a production server, after the fix (largest files)"
+before Run: 0 PGlite requests
+   3293242 gzip   /pglite/pglite.wasm
+   2128067 none   /pglite/pglite.data.gzipped
+    131831 gzip   /pglite/initdb.wasm
+total 5.74 MB in 24 requests
+```
+
+That is a 42% smaller download for every reader who presses Run, and the boxes now say "about 6 MB", which is what they deliver.
+
+## Simulators and flash cards
+
+Not everything in the database posts needs a database. Eleven components are simulators with their logic written in TypeScript: B+ trees that split as keys are inserted, a Bloom filter, a consistent-hash ring, partition pruning, an LSM tree with compaction, a write-ahead log you can crash, a replication lag model, a slab allocator and others. They run instantly and can show internal state that a real engine hides.
+
+The series also added four flash card decks of 50 questions to the home page. A deck is a JSON file in `content/flashcards/`, and decks that share a `group` fold into one entry on the chooser, which is how the four Database Engineering decks appear as one. The build fails on a malformed card ([part 1](/blog/site-architecture)).
+
+## Testing every control
+
+📜 Before the series was published, a script drove a headless browser through all fourteen posts on a **production build**: it clicked every button and moved every slider in every interactive component, three times in alternating order, ran every live box and every preset, pressed Reset and ran again, and recorded uncaught errors, console errors, controls that changed nothing, and anything that overflowed the page. Then it did it again at phone width in the dark theme.
+
+| | Result |
+| --- | --- |
+| Interactive components | 55 |
+| Controls exercised | about 220 |
+| Box steps (runs, presets, resets) | 106 |
+| Errors at the end | none, apart from boxes designed to show an error |
+
+Getting there found four real bugs.
+
+**1. A cache that outlived the file.**
+
+![A bug found in the final review. Before: dbLab.ts kept each recording file in a module-level cache, so a dev server started before a re-record kept serving the old recording, and the roles box looked broken. After: the cache is used only in production builds, where the files cannot change, and the dev server reads the file on every request.](/images/build-logs/building-this-site/site-live-postgres/stale-cache.svg)
+
+The roles box in the security post failed every step with `relation "todos" does not exist`. Running diagnostic SQL through the real box showed the grant had gone to the wrong schema: `public` had the role's `USAGE`, the box's own schema had none. The recording on disk was correct. The dev server, started before a re-record, was still serving the old one from a module-level `Map` in `dbLab.ts`. The cache is now used only in production, where the files can't change.
+
+**2. Hydration errors from a last digit** in charts and the hash ring ([part 5](/blog/site-diagrams-that-move) has the details).
+
+**3. Twenty-two animation labels that matched nothing** ([part 5](/blog/site-diagrams-that-move) again).
+
+**4. Text cut off on phones.** A source line under the plan matrix had `white-space: nowrap`, and at 390 pixels wide it ran past its frame, which clipped it. The page-level overflow check missed it, because a parent with `overflow: hidden` hid the overflow; a second check that compared every element with its own frame found it. It now wraps as one unit.
+
+## Things that can trip you up
+
+- **Promising a size you didn't measure.** Measure the download in a browser on a production build; compression depends on the host and the file type.
+- **Multi-statement `exec` as one transaction.** Split statements yourself if any of them can't run inside a transaction.
+- **Catalog queries that ignore the search path.** `relname = 't'` matches every schema's `t`; use `'t'::regclass`.
+- **A dev server as the test bed.** Module caches survive between requests and edits. Test on `next build` plus `next start`.
+- **Checking only page-level overflow.** Clipped content inside a frame doesn't widen the page; compare elements with their own containers.
+
+## Reproduce this yourself
+
+1. ✅ **Run a box.** Open any [Database Engineering post](/blog/series/database-engineering), press **Run this**, and `SELECT version();` should print the PostgreSQL 18.6 line.
+2. ✅ **Measure the download.** On a production build (`npm run build`, `npx next start`), open the browser's network panel, press Run, and add up the `/pglite/` requests. Check the `Content-Encoding` of each.
+3. ✅ **See the gzipped image.** After a build, `public/pglite/pglite.data.gzipped` is the file the browser fetches; the original `pglite.data` isn't copied at all.
+4. 📘 **Read PGlite's options.** [The PGlite API reference](https://pglite.dev/docs/api) documents `extensions` and `fsBundle`.
+
+## Summary
+
+Every Database Engineering post runs PostgreSQL 18.6 in the reader's browser through PGlite, loaded from the site's own origin only on the first press of Run, shared by every box on the page, and isolated per box by a schema and a search path, with statements run one at a time. Measuring the download in production showed 9.86 MB against a promised 5; shipping the file system image gzipped and unpacking it in the browser brought it to 5.74 MB. A browser test that clicked every control and ran every box in production found four bugs before readers did.
+
+![A map of the live Postgres post. Load: nothing until Run, then one instance per page. Isolation: a schema per box and statements run one at a time. Size: 5.74 MB after gzipping the data file. Tests: every control clicked and every box run, on desktop and phone, in production.](/images/build-logs/building-this-site/site-live-postgres/summary-map.svg)
+
+### Key takeaways
+
+- A reader's browser is a free, private database server for teaching.
+- Load heavy tools on demand, from your own origin, and share one instance per page.
+- Measure what you promise, in production, and fix the cause rather than the label.
+- Test the way a reader uses the page: every control, in a production build.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **PGlite** | PostgreSQL compiled to WebAssembly, running in a browser tab |
+| **WebAssembly** | A binary format browsers run at near-native speed |
+| **`fsBundle`** | PGlite's option for supplying the file system image yourself |
+| **`DecompressionStream`** | A browser API that unpacks gzip as a stream |
+| **Schema** | A namespace in a database; here, one per box |
+| **`search_path`** | The schemas PostgreSQL searches for an unqualified name |
+| **`Content-Encoding`** | The response header saying how the bytes were compressed for transfer |
+
+### Test yourself
+
+<details>
+<summary>Why does the import path live in a variable?</summary>
+
+A literal path would make the bundler try to resolve and bundle PGlite at build time. A variable, with the `webpackIgnore` and `turbopackIgnore` comments, leaves it as a browser import of a URL served from `public/pglite/`.
+
+</details>
+
+<details>
+<summary>Why did the download measure 9.86 MB when the label said 5 MB?</summary>
+
+The 6.24 MB file system image was served without compression, because hosts don't compress the `application/octet-stream` type a `.data` file gets. Only the WebAssembly was gzipped.
+
+</details>
+
+<details>
+<summary>Why isn't the gzipped file named pglite.data.gz?</summary>
+
+Some hosts serve `.gz` files with `Content-Encoding: gzip`, so the browser would unpack them automatically and the code's own unpacking would then fail. A neutral extension avoids that.
+
+</details>
+
+<details>
+<summary>Two boxes on a page both create a table t. Why don't they clash?</summary>
+
+Each box creates its own schema and puts it first on the search path, so each `t` lives in a different schema and an unqualified `t` finds the box's own.
+
+</details>
+
+## Sources
+
+- [PGlite documentation](https://pglite.dev/docs/) and [API reference](https://pglite.dev/docs/api)
+- PostgreSQL: [Schemas](https://www.postgresql.org/docs/current/ddl-schemas.html), [VACUUM](https://www.postgresql.org/docs/current/sql-vacuum.html), [pageinspect](https://www.postgresql.org/docs/current/pageinspect.html)
+- MDN: [DecompressionStream](https://developer.mozilla.org/en-US/docs/Web/API/DecompressionStream), [Content-Encoding](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Encoding), [WebAssembly](https://developer.mozilla.org/en-US/docs/WebAssembly)
+- Vercel: [CDN compression](https://vercel.com/docs/how-vercel-cdn-works/compression)

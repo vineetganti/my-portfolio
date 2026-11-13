@@ -385,6 +385,11 @@ instead of `.svg`, beside it (`content-pipeline.svg` gets `content-pipeline.flow
   paused with the first step lit. Diagrams with a flow file do not get the scroll-in fade.
 - The code is in `src/components/flow/`; the marker looks live in `markers.ts` and the `.flow-m-*` rules in
   `globals.css`, so the markers and the legend cannot drift apart.
+- Prefer drawing with a script over writing flow files by hand. `node scripts/build-log/draw.mjs` (the
+  *Building this site* series) and `node scripts/db-lab/draw.mjs` (the database series) write each SVG and
+  its flow file from one spec, using only palette colours, and refuse a step whose `from`, `to` or `label`
+  isn't text in the drawing, or whose label sits inside a box. A label that matches nothing doesn't break
+  the page, it just never lights, which is why the check is in the build rather than the browser.
 
 ---
 

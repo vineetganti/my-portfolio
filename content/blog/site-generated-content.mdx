@@ -1,0 +1,248 @@
+---
+title: "Content generated from real runs"
+description: "Part 6 of the build log for this site. Two kinds of post where no output is typed by hand: a 92-question SQL practice bank whose every answer is run in DuckDB, and a database series whose demos were recorded from PostgreSQL, MySQL, MongoDB, Redis and Memcached on real concurrent connections. How each generator works, how a blocked statement is recorded, and what a re-run proved."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 6
+tags: ["DuckDB", "PostgreSQL", "Docker", "Code generation", "Testing"]
+---
+
+A wrong number in a tutorial is worse than none: a reader trusts it, learns it, and repeats it. Two series on this site avoid typed outputs entirely. The **Data Engineering SQL** posts are generated from specs whose answers are run in DuckDB, and the **Database Engineering** posts replay recordings made against real database engines. This part explains both generators and what they guarantee.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. **Content generated from real runs** (this post): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+## TL;DR
+
+- **The SQL posts are compiled, not written.** `scripts/sql-bank/build.py` creates a fresh DuckDB database per question, runs the sample setup and the answer, and writes the post and its step-through data from the real results.
+- **Re-runnable answers are run twice.** 13 of the 92 questions are marked `rerun`, and the build fails if the second run changes anything. ✅ Re-run on 2026-11-13 with DuckDB 2.0.0: all 92 questions in 5 seconds, and git showed no file changed.
+- **The database demos are recordings.** `scripts/db-lab/record.mjs` starts five engines in Docker and drives several real connections step by step. 📜 25 multi-session recordings, 100 command runs, 15 measured charts and 22 live boxes, from 2026-11-05.
+- **A blocked statement is recorded as blocked.** Each statement races a 450 ms timer; if the timer wins, the run moves on and later records which step released it.
+- **The prose still quotes numbers by hand,** so the rule is: re-run, then re-read the text around every changed number.
+
+## The SQL practice bank
+
+![How a SQL practice post is generated. A Python spec holds each question's sample tables, answer and explanation. build.py creates a fresh in-memory DuckDB database per question, runs the setup and the answer, and runs a re-runnable answer twice to prove it is idempotent. From the real results it writes the post's MDX and a JSON file of trace steps that the DataTrace component reads.](/images/build-logs/building-this-site/site-generated-content/sql-bank.svg)
+
+### A question is a spec
+
+Each of the six posts is a Python module in `scripts/sql-bank/posts/`. A question looks roughly like this (field names from the real dataclass; the content shortened):
+
+```python title="scripts/sql-bank/build.py (the question type, shortened)"
+@dataclass
+class Q:
+    id: str
+    title: str
+    level: str                         # Easy | Medium | Hard | Expert
+    pattern: str
+    prompt: str
+    setup: str                         # SQL that creates and fills the sample tables
+    answer: str                        # the answer, run for real
+    explain: str
+    check: str
+    hint: str = ""
+    result: str = ""                   # query for the expected output when the answer is DML
+    diff: tuple[str, str] | None = None  # (table, key columns) to mark inserted/changed/removed rows
+    rerun: bool = False                # run the answer twice and require the same result
+    steps: list[Step] | None = None    # custom trace; default is input -> result
+    display: str = ""                  # engine-specific SQL shown instead of the runnable answer
+```
+
+`build.py` imports every module, and for each question:
+
+1. Opens a **fresh in-memory DuckDB database**, so no question can see another's tables.
+2. Runs `setup`, then renders the sample tables from the database, not from the spec.
+3. Runs `answer`, then `check`, and renders the expected output from the result.
+4. Runs each **trace step**: a step can run statements and then show tables, and a shown query can return a `_mark` column (`keep`, `new`, `drop`, `upd`, `hit`, `bad`) that tints rows in the step-through. For a statement that changes data, `diff_table` compares the table before and after and marks inserted, removed and changed rows by key.
+5. For a question marked `rerun=True`, runs the answer **a second time** and fails the build if the result moves. That is how a `MERGE` or an incremental load proves it is idempotent: running it twice must give the same table.
+
+It then writes `content/blog/<slug>.mdx` and `content/sql-traces/<slug>.json`, which the `<DataTrace>` component reads to show each answer stage by stage.
+
+When the answer needs syntax DuckDB doesn't share with Snowflake, the spec shows the Snowflake form with `display=` while DuckDB runs its own equivalent, and the explanation cites Snowflake's documentation for the behaviour.
+
+### What a re-run proved
+
+```bash title="Command (✅ 2026-11-13, DuckDB 2.0.0 in a throwaway virtual environment)"
+python -m venv .venv && .venv/Scripts/python -m pip install duckdb
+.venv/Scripts/python scripts/sql-bank/build.py
+git status --short content/blog/de-sql-* content/sql-traces
+```
+
+```text title="Output (trimmed)"
+de-sql-foundations: 15 questions
+de-sql-dimensional-warehouse: 22 questions
+de-sql-medallion-cdc: 17 questions
+de-sql-product-analytics: 18 questions
+de-sql-cross-domain: 14 questions
+  q87 ok
+  ...
+  q92 ok
+de-sql-capstones: 6 questions
+```
+
+`git status` printed nothing: all six posts and all six trace files came out exactly as committed, in 5 seconds, on a DuckDB version newer than the one they were first built with. That is the property the generator exists for. A change to a spec, or a DuckDB upgrade that changed a result, would show up as a diff to read before committing.
+
+📜 When the bank was first built, running the answers caught several wrong numbers in the hand-written explanations. The explanations are still prose, so after any change to sample data the numbers they quote have to be compared with the regenerated tables by hand.
+
+## The database recordings
+
+![How the Database Engineering recordings are made. A spec describes sessions and steps. record.mjs starts the engines in Docker: PostgreSQL, MySQL, MongoDB, Redis and Memcached. Each session is a real connection, and a step that blocks is recorded with the step that released it. The results go to content/db-lab as JSON, and every live box is also checked on PGlite before anything is written.](/images/build-logs/building-this-site/site-generated-content/db-harness.svg)
+
+The Database Engineering series shows transactions blocking each other, crashes losing writes, query plans changing with data size, and replicas falling behind. Those are things that happen between connections over time, and a typed transcript of them would be guesswork. So each one was recorded.
+
+### Engines and specs
+
+`scripts/db-lab/lab.mjs` knows five engines, each a Docker image with its own port so it can't collide with anything else on the machine: PostgreSQL 18, MySQL 8.4, MongoDB 8.0, Redis 8.0 and Memcached 1.6. A spec in `scripts/db-lab/specs/` describes, per post, what to record:
+
+| Kind | What it is | Shown by |
+| --- | --- | --- |
+| Theater | Several sessions running statements step by step, with what a third connection saw after each step | `<TxnTheater>` |
+| Run | A command and its real output, labelled with the engine and version | `<Ran>` |
+| Chart | A measurement over a range of sizes, such as query time against rows | `<LabChart>` |
+| Playground | SQL for a live box, checked on PGlite before it is saved | `<PgPlayground>` ([part 7](/blog/site-live-postgres)) |
+| Data | One-off captures: raw pages, plan matrices, a wire trace | Purpose-built components |
+
+```bash title="Commands"
+node scripts/db-lab/record.mjs design                        # record one post's spec
+ONLY='^collisions$' node scripts/db-lab/record.mjs design    # record one item
+```
+
+`record.mjs` saves after every item, so a crash or a timeout loses at most one recording. ✅ The recordings in the repository today hold 25 theaters, 100 runs, 15 charts, 22 playgrounds and 5 data captures across 14 files (312 KB). 📜 They were recorded on 2026-11-05. I didn't re-record them for this series: Docker wasn't running on this machine, and I chose not to start it for a re-run that would only reproduce timings.
+
+### Recording a blocked statement
+
+![How a blocked statement is recorded. Session A updates a row and holds its lock. Session B tries to update the same row and blocks. The recorder does not wait for B: it records B as waiting, moves on, and when session A commits it notes that B returned at that step, with B's real result. The theater replays it the same way.](/images/build-logs/building-this-site/site-generated-content/blocked-step.svg)
+
+The hard part of recording concurrency is that a blocked statement doesn't return, and a script that waits for it waits forever. The recorder never waits:
+
+```js title="scripts/db-lab/lab.mjs (recordVariant, the loop over steps, shortened)"
+const work = sessions[who].run(sql); // a real query on that session's own connection
+const running = work.then(
+  (r) => (box.done = { ok: true, r, ms: Date.now() - began }),
+  (e) => (box.done = { ok: false, e, ms: Date.now() - began }),
+);
+await Promise.race([running, pause(opts.wait ?? t.wait ?? 450)]); // returned, or 450 ms passed
+if (box.done) Object.assign(step, toResult(box.done));
+else {
+  step.status = "blocked"; // still running: it is waiting on something
+  waiting.set(i, box);
+}
+await pause(opts.settle ?? 150);
+for (const [k, b] of [...waiting]) {
+  if (!b.done || k === i) continue;
+  steps[k].resolvedAt = i; // this step released it
+  steps[k].resolved = toResult(b.done); // and this is what it finally returned
+  waiting.delete(k);
+}
+if (t.observe) step.table = await admin.run(fill(t.observe, vars)); // what a third connection sees now
+```
+
+So a step either returns within 450 ms or is marked blocked. After every later step the recorder lets the engine settle for 150 ms and checks which waiting statements have finished, recording the step that freed them and their real result. The theater component replays exactly that: the waiting statement shows a timer until the step that released it.
+
+📘 The 450 ms threshold is a judgment: long enough for any unblocked statement on a local container, short enough to keep a recording quick. A statement that is merely slow would be misread as blocked, so specs that time things set their own `wait`.
+
+### Checks before anything is written
+
+- **Every live box is run on PGlite** (the in-browser PostgreSQL of [part 7](/blog/site-live-postgres)) before the file is saved, so a box that would error in a reader's browser fails the recording instead. A box meant to show an error is marked `mayFail`.
+- **A missing recording fails the build.** A post refers to an item as `src="acid/transfer"`, and `labItem` in `src/lib/dbLab.ts` throws at build time if `acid.json` has no `transfer`.
+
+<Callout type="warn" title="Where mayFail hid a real bug">
+
+📜 `mayFail: true` makes the recorder ignore that box's errors, which is right for a box designed to fail, and wrong for any other error in it. The final review on 2026-11-05 found a roles box, marked `mayFail` because its point is a permission error, failing in the browser with `relation "todos" does not exist`. The recorder had accepted it. The browser test is what caught it ([part 7](/blog/site-live-postgres) has the cause).
+
+</Callout>
+
+## Things that can trip you up
+
+- **Editing a generated post.** The next build overwrites it. Change the spec.
+- **Numbers in prose after a re-run.** Generated tables update; sentences that quote them don't. Re-read every changed number.
+- **A slow statement read as blocked.** The 450 ms race can't tell slow from waiting; give timing specs a longer `wait`.
+- **`mayFail` as a blanket.** It hides every error in that box, not only the intended one. Check those boxes in a browser.
+- **A newer engine changing a result.** Pin versions in the harness, and treat a diff after an upgrade as something to explain, not to accept.
+
+## Reproduce this yourself
+
+1. ✅ **Rebuild the SQL bank.** `pip install duckdb` in a virtual environment, then `python scripts/sql-bank/build.py`, then `git status`. No changes means every answer still produces its published output ([DuckDB Python API](https://duckdb.org/docs/stable/clients/python/overview)).
+2. ✅ **Count the recordings.** Each file in `content/db-lab/` has `theaters`, `runs`, `charts`, `playgrounds` and `data`; counting their keys gives the numbers above.
+3. 📜 **Re-record a database item.** With Docker running, `ONLY='^<item>$' node scripts/db-lab/record.mjs <spec>`. The harness starts its own `dbe-*` containers. Then re-read the prose around the item.
+4. 📘 **Read the specs.** `scripts/sql-bank/posts/p1_foundations.py` and `scripts/db-lab/specs/acid.mjs` are the best first examples of each kind.
+
+## Summary
+
+Two series on this site are generated from runs rather than written. The SQL bank compiles each question from a spec, runs its setup and answer in a fresh DuckDB database, proves re-runnable answers by running them twice, and writes the post and its step-through from the results; re-running it today reproduced every file exactly. The database series replays recordings from five real engines in Docker, where each statement races a timer so a blocked one is recorded as blocked and released at the right step, and every live box is tested on PGlite before it is saved. The prose around them is still checked by hand.
+
+![A map of the generated-content post. SQL bank: specs, DuckDB, real outputs and traces. Database harness: Docker engines and real sessions, recorded to JSON. Components: replay recordings without a database. Rules: prose numbers are re-checked after any re-run.](/images/build-logs/building-this-site/site-generated-content/summary-map.svg)
+
+### Key takeaways
+
+- If an output can be computed, compute it, and make the build do it.
+- Run idempotent answers twice; it is the cheapest proof they are idempotent.
+- Record concurrency with a timeout race, never with a blocking wait.
+- An escape hatch like `mayFail` needs its own check, because it hides more than you meant.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Spec** | The source a generator reads: question, setup, answer, trace steps |
+| **Fresh database per question** | Each answer runs in isolation, so nothing leaks between questions |
+| **Idempotent** | Running it twice gives the same result as running it once |
+| **Theater** | A recorded multi-session run, replayed step by step |
+| **`Promise.race`** | Settles with whichever promise finishes first, here a query or a timer |
+| **`mayFail`** | Marks a live box whose errors are expected, so the recorder accepts them |
+
+### Test yourself
+
+<details>
+<summary>Why does each SQL question get a fresh database?</summary>
+
+So a question can't depend on tables another question created or changed. Each answer's output then depends only on its own setup, and the questions can be read in any order.
+
+</details>
+
+<details>
+<summary>How does the generator prove a MERGE answer is idempotent?</summary>
+
+Questions marked `rerun=True` run their answer a second time, and the build fails if the result changes. An idempotent statement leaves the same table after the second run.
+
+</details>
+
+<details>
+<summary>Why can't the recorder just await each statement?</summary>
+
+A statement blocked on a lock doesn't return until another session releases it, and that release is a later step the script hasn't run yet. Awaiting it would wait forever.
+
+</details>
+
+<details>
+<summary>What did re-running the SQL bank on a newer DuckDB show?</summary>
+
+That every published table and trace still matched: git showed no changed file. A difference would have meant a spec or engine change worth reading before committing.
+
+</details>
+
+## Sources
+
+- [DuckDB: Python API](https://duckdb.org/docs/stable/clients/python/overview)
+- MDN: [Promise.race](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/race)
+- PostgreSQL: [Explicit locking](https://www.postgresql.org/docs/current/explicit-locking.html)
+- Docker: [docker run](https://docs.docker.com/reference/cli/docker/container/run/)
+- The two series this part describes: [Data Engineering SQL](/blog/series/de-sql) and [Database Engineering](/blog/series/database-engineering)

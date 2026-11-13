@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "verify all 5",
+      "to": "copy live",
+      "type": "metadata"
+    },
+    {
+      "from": "copy live",
+      "to": "upload lists",
+      "type": "data"
+    },
+    {
+      "from": "upload lists",
+      "to": "status.json",
+      "type": "data"
+    }
+  ]
+}

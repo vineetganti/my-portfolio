@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "from": "parse",
+      "to": "triage",
+      "type": "data"
+    },
+    {
+      "from": "triage",
+      "to": "SQLite",
+      "type": "metadata"
+    },
+    {
+      "from": "SQLite",
+      "to": "nb brief",
+      "type": "data"
+    },
+    {
+      "from": "nb publish",
+      "to": "upload",
+      "type": "data"
+    }
+  ]
+}

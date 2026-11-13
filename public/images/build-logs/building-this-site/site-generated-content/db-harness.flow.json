@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "from": "specs/*.mjs",
+      "to": "record.mjs",
+      "type": "data"
+    },
+    {
+      "from": "content/db-lab",
+      "to": "TxnTheater, Ran",
+      "type": "data"
+    }
+  ]
+}

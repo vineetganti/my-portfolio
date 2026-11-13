@@ -1,0 +1,349 @@
+---
+title: "How this site works: the architecture"
+description: "Part 1 of the build log for this site. Content lives in files, a build turns them into static pages, and only small islands of the page run JavaScript. How a page gets to a reader, where everything lives, what runs on the server and in the browser, how one stylesheet serves two themes, and the checks that stop a bad change from shipping."
+date: "2026-11-13"
+section: "build-logs"
+series: "building-this-site"
+seriesOrder: 1
+tags: ["Next.js", "React", "Architecture", "MDX", "CI"]
+---
+
+This site started as a portfolio with a blog in October 2026. Since then it has grown audio players, moving diagrams, live charts, a SQL practice bank, a real PostgreSQL in the browser and a signed data feed. One long build-log post used to describe all of it. It is now this series, one part per feature, and this first part is the map: how the pieces fit, before the other parts open each one up.
+
+{/* series:start */}
+
+<Callout type="info" title="The Building this site series">
+
+1. **The architecture** (this post): files in, static pages out, and the few parts that run in the browser.
+2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
+3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
+5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
+6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
+7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
+8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+
+Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
+
+</Callout>
+
+{/* series:end */}
+
+<Callout type="note" title="How this series was made">
+
+The features were built in working sessions with Claude Code, an AI coding assistant: it wrote most of the code, ran the checks and the browser tests, and I decided what to build and reviewed it. For this series every check I could repeat was run again on 2026-11-13 and is marked ✅. Results quoted from the logs of the original work are marked 📜, and anything explained from the code or documentation alone is marked 📘.
+
+</Callout>
+
+## TL;DR
+
+- **The repository is the CMS.** Posts, notes, project cards, audio lists, flash cards and recorded database runs are all files in git. There is no database and no admin page.
+- **Almost every page is built before anyone visits.** `next build` reads the files and prerenders the pages to static HTML. One page, the Second brain, keeps refreshing after the build: it fetches and verifies signed data at most every 15 minutes.
+- **Most code never reaches the browser.** Pages are React Server Components that send HTML. 35 of the 56 components are client components, small islands such as the audio player, the table of contents and the database labs.
+- **One stylesheet serves two themes.** Colours are CSS variables, and the dark theme redefines the variables, not the components.
+- **The build is the test.** A broken post fails `next build`, and CI also runs lint, type checks, 13 Node tests, 138 Python tests and a public-safety scan on every push.
+
+## What is the site made of?
+
+| Layer | Choice | Where it is set |
+| --- | --- | --- |
+| Framework | Next.js 16.4 with the App Router, React 19, TypeScript | `package.json`, `next.config.ts` |
+| Styling | Tailwind CSS 4, with the typography plugin for post text | `src/app/globals.css`, `tailwind.config.mts` |
+| Content | MDX and Markdown files, read with `gray-matter`, rendered by `next-mdx-remote` | `content/`, `src/lib/blog.ts` |
+| Markdown plugins | `remark-gfm` for tables, `rehype-slug` for heading ids, `rehype-highlight` for code | `src/components/MdxContent.tsx` |
+| Fonts | Bricolage Grotesque for headings, Atkinson Hyperlegible Next and Mono for text and code | `src/app/layout.tsx` |
+| Storage outside git | Vercel Blob for podcast audio and the Second brain files | `scripts/upload-*.mjs` |
+| Hosting and CI | Vercel, and GitHub Actions | `.github/workflows/ci.yml` |
+
+<Callout type="info" title="Not the Next.js of older tutorials">
+
+The repository's `AGENTS.md` warns that this version has breaking changes and says to read the documentation bundled in `node_modules/next/dist/docs/` before relying on memory. Two examples run through this series: a page's `params` is a `Promise` you `await`, and caching is opted into with the `'use cache'` directive under [Cache Components](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents), not configured per `fetch` call.
+
+</Callout>
+
+## How does a page get to a reader?
+
+![Two ways a page reaches a reader. At build time, a git push starts next build on Vercel, which prerenders every page to static HTML that a CDN serves to readers. At request time, only the Second brain page does work: its cached render fetches signed files from Vercel Blob at most every 15 minutes.](/images/build-logs/building-this-site/site-architecture/two-paths.svg)
+
+There are two paths, and the first one carries almost all the traffic.
+
+**Build time.** A push to `main` starts a build on Vercel. `next build` reads every content file, renders every page with the data it needs, and writes the result as static HTML and JavaScript that a CDN serves. A reader asking for a post gets a file that was finished minutes or days earlier. Nothing runs on a server for them.
+
+**Request time.** The [Second brain page](/blog/site-second-brain-page) shows a feed the owner publishes from a separate pipeline, so its data changes without a push. Its data function is marked `'use cache'` with a 15-minute revalidation ([cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife)), so the page fetches and verifies the files at most four times an hour and serves the cached result in between.
+
+✅ The production build on 2026-11-13 generated 74 pages. Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
+
+```text title="Output: next build, route table (trimmed)"
+Route (app)                              Revalidate  Expire
+┌ ○ /                                           15m      1y
+├ ○ /blog                                       15m      1y
+├   /blog/[slug]                                15m      1y
+│ ├ ○ /blog/second-brain-pipeline               15m      1y
+│ ├ ○ /blog/site-architecture                   15m      1y
+│ └ ◐ [+46 more paths]
+├   /blog/series/[series]                       15m      1y
+│ ├ ○ /blog/series/building-this-site           15m      1y
+│ └ ◐ [+4 more paths]
+├ ○ /notes/feed.xml
+├ ○ /second-brain                               15m      1d
+└ ƒ /second-brain/feed.xml
+
+○  (Static)             prerendered as static content
+◐  (Partial Prerender)  prerendered as static HTML with dynamic server-streamed content
+```
+
+Four things in that table are worth reading closely:
+
+- The dynamic routes (`[slug]`, `[series]`, `[section]`) are still prerendered, because each one lists its pages with [`generateStaticParams`](https://nextjs.org/docs/app/api-reference/functions/generate-static-params). A post that isn't returned by it would be rendered on first request instead.
+- **Revalidate 15m** comes from the `default` cache profile, which the [cacheLife docs](https://nextjs.org/docs/app/api-reference/functions/cacheLife) give as stale after 5 minutes, revalidated after 15, and never expiring; the build prints that last one as `1y`. For pages built from files that only change with a push, it changes nothing in practice: the next push replaces the whole build.
+- `/notes/feed.xml` is a [route handler](https://nextjs.org/docs/app/getting-started/route-handlers), and it is static too: it returns the same XML until the next build.
+- `/second-brain` is prerendered at build time like everything else, but its own `cacheLife` (revalidate 15 minutes, expire 1 day) shows in its row, so it is refreshed in the background after the build. Its RSS route, `/second-brain/feed.xml`, is dynamic: it runs on each request, reading from the same cached, verified data.
+
+<Callout type="warn" title="A dev-only warning that is still open">
+
+📜 On 2026-11-05 the dev server logged a validation error on every post page: "Next.js encountered URL data during prerendering or a navigation", meaning `params` is awaited outside a `<Suspense>` boundary. The [`instant` documentation](https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config/instant) says this validation runs in development only and that the build is unaffected, and the production build indeed passes. It is not fixed, and it is not clear it should be: the [instant navigation guide](https://nextjs.org/docs/app/guides/instant-navigation) implies that `generateStaticParams` makes a slug known ahead of time, yet the route is still flagged. I've left it as an open question rather than wrap the page in `<Suspense>` on a guess.
+
+</Callout>
+
+## Where does everything live?
+
+There is no database and no API. The repository is the content management system, and each kind of content is a folder or a file:
+
+```text title="The folder map"
+content/
+  blog/            one .mdx file per post (the file name is the URL)
+  notes/           one .md file per nugget (a date and plain text)
+  projects/        one .md file per project card
+  flashcards/      one .json file per home page deck
+  sql-traces/      generated step-throughs for the SQL posts
+  db-lab/          recorded database runs for the Database Engineering posts
+  audio.json       which posts have a podcast recording
+  reads.json       hand-picked reads shown on the Second brain page
+public/images/     diagrams and screenshots, by section / series / post
+scripts/           generators, recorders, upload scripts, checks and tests
+second-brain/      the Python pipeline behind the Second brain page
+src/
+  app/             routes: /, /blog/..., /notes, /projects, /about, /second-brain
+  components/      the page parts, and folders for charts, flow, db, sql, home
+  lib/             readers and parsers: blog, notes, sections, speech, dbLab, flashcards, secondBrain
+```
+
+Two rules keep this manageable. **Generated content is never edited by hand**: the SQL posts come from `scripts/sql-bank/`, and the database recordings from `scripts/db-lab/` ([part 6](/blog/site-generated-content)). **Big binary files stay out of git**: podcast audio and the Second brain files live in Vercel Blob, and git holds only a list and a base URL ([part 3](/blog/site-audio)).
+
+## From a file to a page
+
+![Three lanes: read, where a content file goes through gray-matter and parsePost to become a BlogPost; ask, where queries feed the blog, section, series and post pages; render, where the body goes through MDXRemote and custom components to static HTML](/images/build-logs/building-this-site/site-architecture/content-pipeline.svg)
+
+A post goes through three steps, all at build time:
+
+1. **Read.** `getAllPosts()` lists `content/blog/*.mdx`, reads each with `fs`, and `gray-matter` splits the frontmatter from the body. `parsePost` turns that into a `BlogPost`, with fallbacks so a bad value never breaks the build ([part 2](/blog/site-sections-and-series) explains it).
+2. **Ask.** Each page calls a small query: `getAllPosts`, `getPostsBySection`, `getPostsBySeries` or `getPostBySlug`.
+3. **Render.** The post page hands the body to `MdxContent`, which compiles the MDX on the server with [`next-mdx-remote/rsc`](https://github.com/hashicorp/next-mdx-remote). No MDX compiler is shipped to the browser.
+
+`MdxContent` is also where Markdown turns into the site's design. It replaces plain elements with components:
+
+| Element | What replaces it |
+| --- | --- |
+| `h2`, `h3`, `h4` | The heading plus a hover **#** link, using the id `rehype-slug` made |
+| `pre` | A code block with a language label and a Copy button |
+| `table` | The table inside a scrolling wrapper, so wide tables don't break the page |
+| `img` | A local SVG is read from disk and inlined, so the theme can recolour it; a `.flow.json` beside it adds a message animation ([part 5](/blog/site-diagrams-that-move)) |
+| Named tags | `<Callout>`, five live charts, `<DataTrace>`, and 19 database components such as `<PgPlayground>` and `<TxnTheater>` |
+
+The **table of contents** has one subtle job: its links must point at the ids the page really has. `getHeadings()` parses the post with `remark-parse` and makes ids with the same slugger `rehype-slug` uses, walking every heading in order, so two headings with the same text get the same `-1` suffix in both places. The client component on top adds scrollspy, a reading-progress bar and a phone menu.
+
+## Which code runs in the browser?
+
+![Which code runs where. Server components run at build time and send only HTML: the pages, MdxContent with its diagram inliner, the post and lab readers, and the Second brain verifier. Client components are small islands that ship JavaScript: the audio players, the table of contents, diagram motion and flow animation, live charts, the database labs and the flash cards.](/images/build-logs/building-this-site/site-architecture/server-and-client.svg)
+
+In the App Router every component is a [Server Component](https://nextjs.org/docs/app/getting-started/server-and-client-components) unless its file starts with `'use client'`. A server component can read files and runs once, at build time, so it is where all the content reading happens. A client component is also rendered to HTML on the server, then **hydrated** in the browser, which attaches its event handlers and state.
+
+✅ 35 of the site's 56 component files are client components. That sounds like a lot, but most are small, and they all sit at the edges: the audio players, the table of contents, the theme toggle, the copy button, diagram motion, the five live charts, the flash cards and the database labs. The pages, `MdxContent` and every reader in `src/lib` stay on the server.
+
+Hydration has one strict rule: the HTML the server produced and the first render in the browser must match. Two patterns keep this site inside it:
+
+- **Browser facts come from `useSyncExternalStore`.** Whether the browser can speak, which voices it has, or whether reduced motion is on are facts about the outside world. [`useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore) takes a server value (nothing, or "off") and a browser value, so the first render matches and the real value arrives right after.
+- **Computed numbers are rounded.** 📜 The 2026-11-05 review found hydration errors on four database posts: `Math.cos`, `Math.sin` and `Math.log10` gave a different last digit in Node and in the browser, such as `97.9547177313654` against `97.95471773136542`. Chart and ring coordinates are now rounded to two decimals ([part 5](/blog/site-diagrams-that-move)).
+
+## How does one class work in two themes?
+
+The colours are CSS variables in `globals.css`: `--paper`, `--card`, `--ink`, `--accent` and so on, with light values on `:root`. The dark values apply in two cases: when the system prefers dark and no theme is chosen (`:root:not([data-theme="light"])`), and when the reader picks dark (`:root[data-theme="dark"]`). Tailwind's colour names (`ink`, `card`, `accent`) point at those variables, so a component writes `text-ink` once and it is right in both themes. No component has a `dark:` variant.
+
+The saved choice is applied before the first paint by a one-line inline script in the `<head>`, so a reader who chose dark never sees a flash of light:
+
+```ts title="src/app/layout.tsx"
+const themeScript = `try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}`;
+```
+
+The `try` matters: reading storage can throw when cookies are blocked, and the page must still render. Diagrams follow the same idea with their own set of variables, which [part 5](/blog/site-diagrams-that-move) covers.
+
+## What stops a bad change from shipping?
+
+![The checks every push and pull request runs on GitHub Actions: a public-safety job that fails if a private file or secret is tracked, a site job that lints, runs the Node tests, type-checks and builds, and a pipeline job that runs the Python tests for the Second brain.](/images/build-logs/building-this-site/site-architecture/ci-jobs.svg)
+
+The first guard is the build itself: `next build` type-checks the code and renders every page, so a post with broken MDX, a missing recording or a malformed flash card fails it. Several readers fail on purpose rather than show something wrong: `labItem` throws when a post points at a recording that doesn't exist, and the flash card reader rejects a deck that doesn't have exactly 50 cards, a card without four different options, an answer index outside 0 to 3, or a card that points at a post that doesn't exist.
+
+On top of that, [GitHub Actions](https://docs.github.com/en/actions) runs three independent jobs on every push and pull request. I re-ran each locally:
+
+```bash title="Commands: the three CI jobs, run locally"
+node scripts/check-public-safety.mjs
+npm run test:second-brain
+cd second-brain && python -m pytest -q
+```
+
+```text title="Output (✅ 2026-11-13)"
+Public-safety check passed (702 files).
+ℹ tests 13
+ℹ pass 13
+ℹ fail 0
+138 passed in 11.23s
+```
+
+The **public-safety** job exists because the repository is public and now holds a pipeline that touches private data. It fails if git tracks a forbidden path (a `.env` file, a database, a key, the pipeline's `data/` folder) or a line that looks like a secret or a personal home path. It prints the file and line, never the secret. [Part 8](/blog/site-second-brain-page) explains why the pipeline lives in this repository at all.
+
+## Things that can trip you up
+
+- **Reading memory instead of the bundled docs.** Next.js 16 changed caching and params. Check `node_modules/next/dist/docs/` first.
+- **Editing a generated file.** The SQL posts and the database recordings are rewritten by their generators. Change the spec and rebuild.
+- **A server and browser that disagree.** Anything random, time-based, locale-based or computed with floating point can break hydration. Round it, or render it only in the browser.
+- **A colour outside the palette.** It has no dark-mode rule and stays the same colour in both themes.
+- **Trusting the dev server.** It caches modules between edits. A result that matters should be checked on a production build (`next build` then `next start`), which is what the tests in this series used.
+
+## Reproduce this yourself
+
+Each step is marked with how it was checked.
+
+1. ✅ **Install and run.** `npm install`, then `npm run dev`. The `predev` script copies PGlite into `public/pglite/` first ([part 7](/blog/site-live-postgres)).
+2. ✅ **Build like production.** `npm run build`, then `npx next start`, and open `http://localhost:3000`. The route table above is the end of the build output.
+3. ✅ **Run the checks.** The three commands in the CI section. The Python tests need the pipeline's environment: `python -m venv .venv`, activate it, `pip install -e ".[dev]"` inside `second-brain/` ([Python venv docs](https://docs.python.org/3/library/venv.html)).
+4. 📘 **Find a page's code.** Routes are folders under `src/app/`, so `/blog/series/building-this-site` is `src/app/blog/series/[series]/page.tsx`. Readers are in `src/lib/`, and components in `src/components/`.
+5. 📘 **Read the writing guide.** `docs/mdx-formatting-guide.md` covers frontmatter, callouts, images, the database components and the MDX traps.
+
+## Summary
+
+The site is files in and static pages out. Content lives in the repository, `next build` reads it with `fs` and prerenders every page, and a CDN serves the result. Server components do all the reading and send HTML; 35 small client components add behaviour where it is needed, under the rule that their first render must match the server's. One set of CSS variables serves both themes, and the build, three CI jobs and a public-safety scan stop most bad changes before a reader can see them. The parts that follow open up each feature.
+
+![A map of the architecture post. Content: MDX, JSON and Markdown files in the repository, no database. Build: next build reads them with fs and prerenders every page. Render: server components send HTML, small client islands add behaviour. Guard rails: the build is the test, plus lint, tests and a public-safety check in CI.](/images/build-logs/building-this-site/site-architecture/summary-map.svg)
+
+### Key takeaways
+
+- A static build with a few client islands is fast, cheap and hard to break.
+- One page that needs fresh data can be cached per page with `'use cache'`, without making the rest dynamic.
+- Keep generated content generated, and keep big files out of git.
+- Make readers fail the build on bad data, rather than render it.
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Prerendering** | Rendering a page to HTML at build time, so a request only fetches a file |
+| **Partial prerendering** | A static shell served at once, with a dynamic part filled in later (`◐` in the build output) |
+| **`generateStaticParams`** | Lists the values of a dynamic route to prerender |
+| **Server Component** | Runs on the server, can read files, sends only HTML |
+| **Client Component** | Marked `'use client'`; rendered on the server, then hydrated in the browser |
+| **Hydration** | Attaching event handlers and state to server HTML; the first render must match |
+| **`'use cache'`** | Caches a function's result, with a lifetime set by `cacheLife` |
+| **Theme tokens** | CSS variables that the dark theme redefines, so classes never change |
+| **Public-safety check** | A CI script that fails if a private file or secret is tracked |
+
+### Test yourself
+
+<details>
+<summary>A post is added but not returned by generateStaticParams. What happens?</summary>
+
+It is not prerendered. The route still exists, so the page is rendered on its first request instead. Returning every slug keeps every post a static file.
+
+</details>
+
+<details>
+<summary>Why does the Second brain page fetch at request time when nothing else does?</summary>
+
+Its data is published from a separate pipeline and changes without a push, so a build-time snapshot would go stale. A 15-minute `'use cache'` keeps it fresh without fetching on every visit.
+
+</details>
+
+<details>
+<summary>Why can't a client component use Math.random() in its first render?</summary>
+
+The server and the browser would produce different values, the HTML wouldn't match the first browser render, and React would report a hydration mismatch. Compute it on one side only, or after hydration.
+
+</details>
+
+<details>
+<summary>How does `text-ink` become a different colour in dark mode without a dark: variant?</summary>
+
+Tailwind maps `ink` to a CSS variable, and the dark theme redefines that variable. The class stays the same; its value changes.
+
+</details>
+
+<details>
+<summary>What does the public-safety check protect against that the build doesn't?</summary>
+
+A build passes with a database file, a token or a private key committed. The safety check fails on those paths and on secret-shaped lines, because the repository is public.
+
+</details>
+
+## Update log
+
+Every change to the site is logged here under the day it was made, oldest first. New updates go in a new dated heading at the bottom.
+
+### 2026-10-29
+
+| Type | Change |
+| --- | --- |
+| Feature | Sections, series and tags, with `/blog/topic` and `/blog/series` pages, "Part N of M" and previous and next links |
+| Change | LLM Architectures posts renamed to readable slugs, with permanent redirects. Images moved to `public/images/<section>/<series>/<post>/` |
+| Feature | **Listen to this post** audio player: browser text-to-speech, reads prose, skips code and tables with a spoken note, highlights the paragraph, speed and voice controls |
+| **Fix** | **Audio did not play on mobile Safari and Chrome.** Four causes fixed, a watchdog added, and the bar lifted above the iPhone home indicator |
+| **Feature** | **Diagram reading.** The player reads each image's alt text, with a setting to turn it off |
+
+### 2026-10-30
+
+| Type | Change |
+| --- | --- |
+| **Feature** | **AI podcast versions.** A post can carry an m4a made with NotebookLM, listed in `content/audio.json`, with its own player bar |
+| **Feature** | **Notes.** Short, dated, plain-text entries on `/notes`, in a scrolling box on the home page, and as an RSS feed |
+| Change | **Audio moved out of git** to Vercel Blob, re-encoded to mono AAC at 64 kbps |
+
+### 2026-11-03
+
+| Type | Change |
+| --- | --- |
+| **Feature** | **Diagram motion.** Diagrams fade their parts in as they scroll into view, off with reduced motion |
+| **Feature** | **Live charts.** Five charts in three posts became interactive, with sliders and a sentence that restates the numbers |
+| **Content** | **Data Engineering SQL series.** A six-post, 92-question practice bank generated from real DuckDB runs |
+| **Feature** | **Data traces.** A step-through of each SQL answer, built from the same runs |
+
+### 2026-11-05
+
+| Type | Change |
+| --- | --- |
+| **Content** | **Database Engineering series.** Fourteen posts on database internals |
+| **Feature** | **Recorded demos** from real PostgreSQL, MySQL, MongoDB, Redis and Memcached in Docker |
+| **Feature** | **Live PostgreSQL in the browser** with PGlite, loaded only when a reader presses Run |
+| **Feature** | **Database simulators** and **flash card groups** on the home page |
+
+### 2026-11-13
+
+| Type | Change |
+| --- | --- |
+| **Feature** | **Second brain page (beta).** A curated reading feed published as signed files and verified by the site before it renders anything |
+| **Content** | **This series.** The single build-log post became nine parts, one per feature, with the checks re-run. The old address redirects to the series page |
+
+## What's next
+
+- Tags are still free-form and a little inconsistent. A small fixed list would make them a better filter.
+- No sitemap, search or RSS feed for blog posts yet. The nuggets and the Second brain already have feeds.
+- The dev-only `instant` validation error on post pages is unresolved (see above).
+- The browser voice can be sent a sentence longer than its 180-character target ([part 3](/blog/site-audio) shows the measurement).
+
+## Sources
+
+- Next.js: [Server and Client Components](https://nextjs.org/docs/app/getting-started/server-and-client-components), [generateStaticParams](https://nextjs.org/docs/app/api-reference/functions/generate-static-params), [Route Handlers](https://nextjs.org/docs/app/getting-started/route-handlers), [cacheComponents](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents), [cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife), [instant](https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config/instant)
+- React: [useSyncExternalStore](https://react.dev/reference/react/useSyncExternalStore) and [hydration mismatches](https://react.dev/link/hydration-mismatch)
+- [next-mdx-remote](https://github.com/hashicorp/next-mdx-remote)
+- [Tailwind CSS: the `@config` directive](https://tailwindcss.com/docs/functions-and-directives), which loads `tailwind.config.mts`
+- [GitHub Actions documentation](https://docs.github.com/en/actions)
+- [Python: venv](https://docs.python.org/3/library/venv.html)
+- [The repository](https://github.com/vineetganti/my-portfolio) and its writing guide, `docs/mdx-formatting-guide.md`

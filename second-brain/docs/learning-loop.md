@@ -4,10 +4,10 @@ Decision (2026-11-02): for the first few runs the reader rates items so the mode
 
 ## Phase 1 (now): you rate, the model calibrates
 
-### Morning routine (exact steps; run by hand, indefinitely, until you decide to publish)
-Open PowerShell in the `second-brain/` folder of the `my-portfolio` repo, then:
+### Morning routine (exact steps; run by hand)
+Use **one** PowerShell window, opened in the **root** of the `my-portfolio` repo. `nb` finds its data folder and `.env` from where its code lives, so it runs from here (checked with `nb daily`) and no `cd` is needed at any step. The only command that holds the window is `nb brief` (it runs the page until you press Ctrl+C), so the steps below run one after another in that same window. A second window is only useful if you want to keep the rating page open while running something else; nothing here needs it.
 
-1. **Activate the environment** (once per terminal): `.\.venv\Scripts\Activate.ps1`. The prompt then starts with `(.venv)`. Without it the short `nb` command is not found; `.\.venv\Scripts\nb.exe` works without activating.
+1. **Activate the environment** (once per terminal): `.\second-brain\.venv\Scripts\Activate.ps1`. The prompt then starts with `(.venv)`. Without it the short `nb` command is not found; `.\second-brain\.venv\Scripts\nb.exe` works without activating.
 2. **`nb daily`**: reads the 24 engineering feeds and triages only what is new (about 2 minutes), writes the digest to `data/out/engineering-<date>.md`, and prints whether learning from your ratings is active. After skipping days use `nb daily --days 5` (the default looks back 3 days; already-seen articles are never repeated). Do **not** use `--refresh` while rating: it re-scores items you have already seen, which makes the measurements jump.
 3. **`nb brief`**: starts the private page at http://127.0.0.1:7860 (open it in a browser). For each article choose one of three ratings, or leave it **unrated**:
    - **skip**: not interested (the article disappears from the digest);
@@ -16,13 +16,17 @@ Open PowerShell in the `second-brain/` folder of the `my-portfolio` repo, then:
    Tick **Not a vendor announcement** if the model wrongly put a normal article in the vendor section. Press **Save labels** and wait for the "Saved N labels" message. Then press **Ctrl+C** in the terminal to stop the page. To see the new order, start `nb brief` again.
 4. **`nb eval`**: shows how closely the model agrees with your ratings and which of the automation gates are met.
 5. Optional: read `data/out/engineering-<date>.md`; it follows your ratings (skips are left out, top learning is on top).
+6. **Publish to the site** (only when you want the website updated; skip it on days you only rate):
+   - `nb publish`: writes and signs the public files in `data/out/public/` (the Good reads shelf and the daily list). It prints how many items were written and uploads nothing.
+   - `npm run second-brain:upload`. It reads the Blob token from `.env.local` in the root, so it must run from the root, where you already are. It checks every signature first, keeps the live copy as `previous/`, then uploads. If it prints a verification error, nothing was uploaded.
+   - The site picks up the new files within about 15 minutes.
 
 Things to know:
 - **Rate the dull ones as skip.** The model can only learn what you do not want from skips. Learning stays off until there are at least 3 good-or-top and 3 skip ratings.
 - **No fine rating:** there are only three choices on purpose. The scores behind them are skip = 1, good = 3, top learning = 5.
 - **Publish and Tag are hidden** during this phase. Anything saved for them earlier is kept untouched when you save. They come back with `nb brief --publish-controls` when you are ready to publish.
 - If **Save shows an error**, copy the terminal text. (One was fixed on 2026-11-02: the page's Save ran on a different thread from the database connection. Fixed and tested; if you started the page before that fix, restart it.)
-- `nb publish` still exists but publishes nothing until items are marked public, and it never uploads anything.
+- `nb publish` never uploads: only `npm run second-brain:upload` does. With nothing on the Good reads shelf and no item marked public, it writes empty files (`0 daily items and 0 good reads`), so an upload then shows an empty feed on the site.
 
 ### What "the model learns" means here
 No fine-tuning. Your most recent ratings are shown to the triage model as labelled examples ("this article, you scored it 3, the reader rated it 5"), so its relevance scores and categories move toward your taste. Rules built in:

@@ -1,0 +1,29 @@
+{
+  "steps": [
+    {
+      "from": "public/audio",
+      "to": "upload-audio.mjs",
+      "type": "data"
+    },
+    {
+      "from": "upload-audio.mjs",
+      "to": "Vercel Blob",
+      "type": "data"
+    },
+    {
+      "from": "Vercel Blob",
+      "to": "audio.json",
+      "type": "metadata"
+    },
+    {
+      "from": "audio.json",
+      "to": "parsePost",
+      "type": "metadata"
+    },
+    {
+      "from": "parsePost",
+      "to": "post page",
+      "type": "uri"
+    }
+  ]
+}
