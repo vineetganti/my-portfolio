@@ -112,7 +112,7 @@ Your program should:
 
 Display the prompt $ (keep the code from the previous stage)
 Read the user's input
-Print an error message in exactly this format: {command}: command not found
+Print an error message in exactly this format: `{command}`: command not found
 e.g. if the user types xyz, print xyz: command not found
 For now, we'll treat all commands as "invalid". In later stages we'll handle executing "valid" commands like echo, cd etc.
 
@@ -130,7 +130,7 @@ This cycle continues indefinitely until the shell process is terminated.
 Your shell should follow this same cycle:
 
 Display the prompt $, then wait for a line of input.
-Print <command_name>: command not found for any command the user enters, like with the previous stages.
+Print `<command_name>`: command not found for any command the user enters, like with the previous stages.
 Return to step 1.
 For example, if the user types hello, your shell should print hello: command not found, then display the prompt ($) again.
 
@@ -149,7 +149,7 @@ invalid_command_3: command not found
 $
 After each command, the tester will verify that your shell:
 
-Prints the message <command_name>: command not found.
+Prints the message `<command_name>`: command not found.
 Displays a new prompt ($) before the tester sends the next command
 Notes
 The exact number of commands sent and the command names will be random.
@@ -210,8 +210,8 @@ $ type invalid_command
 invalid_command: not found
 For this stage, you'll handle two cases:
 
-For builtin commands (like echo, exit, and type), print <command> is a shell builtin.
-For unrecognized commands that don't match any builtin, print <command>: not found.
+For builtin commands (like echo, exit, and type), print `<command>` is a shell builtin.
+For unrecognized commands that don't match any builtin, print `<command>`: not found.
 We'll handle executable files in later stages.
 
 Tests
@@ -231,8 +231,8 @@ invalid_command: not found
 $
 The tester will verify that:
 
-Builtin commands print: <command> is a shell builtin
-Unrecognized commands print: <command>: not found
+Builtin commands print: `<command>` is a shell builtin
+Unrecognized commands print: `<command>`: not found
 Notes
 The tester will only check for builtin commands and unrecognized commands in this stage.
 type itself is a shell builtin command, so $ type type should print type is a shell builtin.
@@ -252,13 +252,13 @@ For example, if the PATH is set to /dir1:/dir2:/dir3, the shell would search for
 Searching for Executables
 When type receives a command input, your shell must follow these steps:
 
-Check if the command is a builtin command (like exit or echo). If it is, report it as a builtin (<command> is a shell builtin) and stop.
+Check if the command is a builtin command (like exit or echo). If it is, report it as a builtin (`<command>` is a shell builtin) and stop.
 If the command is not a builtin, your shell must go through every directory in PATH. For each directory:
 Check if a file with the command name exists.
 Check if the file has execute permissions.
-If the file exists and has execute permissions, print <command> is <full_path> and stop.
+If the file exists and has execute permissions, print `<command>` is `<full_path>` and stop.
 If the file exists but lacks execute permissions, skip it and continue to the next directory.
-If no executable is found in any directory, print <command>: not found.
+If no executable is found in any directory, print `<command>`: not found.
 For example:
 
 $ type grep
@@ -281,9 +281,9 @@ invalid_command: not found
 $
 The tester will verify that the type command correctly identifies executable files in the PATH:
 
-Executable files in PATH are reported with their full path (<command> is <full_path>).
+Executable files in PATH are reported with their full path (`<command>` is `<full_path>`).
 Files without execute permissions are skipped.
-Non-existent commands print the <command>: not found message.
+Non-existent commands print the `<command>`: not found message.
 Notes
 Most languages provide functions to check execute permissions for a file (like os.access(path, os.X_OK) in Python, or Files.isExecutable() in Java).
 
@@ -387,7 +387,7 @@ An absolute path starts with / and specifies a location from the root of the fil
 When cd receives an absolute path:
 
 If the directory exists, change to that directory.
-If the directory doesn't exist, print cd: <directory>: No such file or directory.
+If the directory doesn't exist, print cd: `<directory>`: No such file or directory.
 
 For example:
 
@@ -417,7 +417,7 @@ $
 The tester will verify that:
 
 Valid paths change the directory.
-Invalid paths print the error message cd: <directory>: No such file or directory.
+Invalid paths print the error message cd: `<directory>`: No such file or directory.
 Invalid paths don't change the current directory.
 Notes
 Check if the directory exists before attempting to change to it, or handle the error if the change fails.
@@ -472,7 +472,7 @@ $
 The tester will verify that:
 
 Valid relative paths change the directory correctly.
-Invalid relative paths print the error message cd: <directory>: No such file or directory.
+Invalid relative paths print the error message cd: `<directory>`: No such file or directory.
 The directory remains unchanged when cd fails.
 Notes
 The actual directory names used will be random, so you can't hardcode the expected output.
