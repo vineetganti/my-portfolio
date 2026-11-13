@@ -1,0 +1,455 @@
+Introduction
+Welcome to the Build your own Redis challenge!
+
+Redis is an in-memory data structure store often used as a database, cache, message broker and streaming engine. In this challenge you'll build your own Redis server that is capable of serving basic commands, reading RDB files and more.
+
+Along the way, you'll learn about TCP servers, the Redis Protocol and more.
+
+What exactly will I build?
+You'll start by implementing the core building blocks of every Redis server:
+
+Binding to a TCP port and listening for connections
+Responding to basic commands like PING and ECHO
+Parsing the Redis Protocol (RESP) from client requests
+Handling multiple clients concurrently
+Implementing the SET and GET commands to store and retrieve data.
+At this stage, your Redis will already feel real, and you'll be able to interact with the official redis-cli.
+
+As you progress, you'll implement advanced features like:
+
+Redis replication
+RDB persistence
+Atomic transactions
+… and more
+At the end, you'll have a GitHub repo to show off.
+
+What exactly will I learn?
+In the first 7 stages, you'll learn:
+
+How a TCP server binds to a port and accepts connections
+What the Redis Protocol (RESP) is, and how to parse/encode messages
+How to handle multiple clients concurrently
+How to implement commands like PING, ECHO, SET, and GET
+How to manage a key-value store with automatic key expiry
+In the advanced stages, you'll discover new programming ideas, such as master-replica synchronization, atomic transactions, and specialized data structures like sorted sets and geospatial indices.
+
+As your code gets complex, you'll be forced to structure and refactor it - to avoid regressions and to make adding new features easier.
+
+Why should I build such a project?
+Building your own Redis blends network programming, concurrent computing, and system design. If you've mostly built websites or apps, this project takes you a layer deeper to understand how caching and distributed systems work.
+
+You’ll also be building a core piece of infrastructure that applications rely on, such as Twitter's timeline and Uber's integrated cache.
+
+Beyond technical depth, there's something uniquely satisfying about understanding a tool used by millions of developers every day. You'll come out of it as a more confident and interesting developer.
+https://blog.x.com/en/engineering/the-infrastructure-behind-twitter-scale#cache
+https://www.uber.com/gb/en/blog/how-uber-serves-over-40-million-reads-per-second-using-an-integrated-cache/
+
+
+What are the prerequisites for this challenge?
+You should be comfortable writing code in any one language and using Git. No prior experience with databases or network programming is required.
+
+Most learners pick up required concepts (e.g, TCP servers) as they go.
+
+What matters most is curiosity and persistence. You'll develop intuition by exploring, debugging, and discovering solutions yourself.
+
+While we will make it extremely simple to get started, don't expect this to be a follow-along tutorial.
+
+
+Local Setup
+Completed
+Follow these steps to set up your Rust project locally.
+
+Clone the repository
+command line
+
+copy
+git clone https://git.codecrafters.io/d873fd2690ceaf26 codecrafters-redis-rust
+cd codecrafters-redis-rust
+Troubleshoot
+Test CLI connection
+PowerShell
+Linux / macOS
+
+copy
+irm https://codecrafters.io/install.ps1 | iex # Install CodeCrafters CLI
+codecrafters ping
+
+PS C:\Windows\system32> cd C:\Users\vinee\projects
+PS C:\Users\vinee\projects> git clone https://git.codecrafters.io/d873fd2690ceaf26 codecrafters-redis-rust
+Cloning into 'codecrafters-redis-rust'...
+remote: Enumerating objects: 14, done.
+remote: Counting objects: 100% (14/14), done.
+remote: Compressing objects: 100% (12/12), done.
+remote: Total 14 (delta 1), reused 0 (delta 0), pack-reused 0
+Receiving objects: 100% (14/14), done.
+Resolving deltas: 100% (1/1), done.
+PS C:\Users\vinee\projects> cd codecrafters-redis-rust
+PS C:\Users\vinee\projects\codecrafters-redis-rust> irm https://codecrafters.io/install.ps1 | iex
+Downloading CodeCrafters CLI (v54)...
+✓ CodeCrafters CLI installed! Version: v54-892884b
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust> codecrafters ping
+
+ ------------------------------------------------------------------------
+
+     ___            _          ___              __  _
+    / __\ ___    __| |  ___   / __\_ __  __ _  / _|| |_  ___  _ __  ___
+   / /   / _ \  / _` | / _ \ / /  | '__|/ _` || |_ | __|/ _ \| '__|/ __|
+  / /___| (_) || (_| ||  __// /___| |  | (_| ||  _|| |_|  __/| |   \__
+  \____/ \___/  \__,_| \___|\____/|_|   \__,_||_|   \__|\___||_|   |___/
+
+
+                         Welcome to CodeCrafters!
+
+                            ✔︎ Ping received.
+
+ ------------------------------------------------------------------------
+
+ ✔︎ Repository activated.
+
+ Return to your browser to continue.
+
+ Redis servers communicate over TCP, a protocol that enables reliable data exchange between clients and servers. In this stage, you’ll implement a TCP server that listens on port 6379, just like the real Redis.
+
+How to pass this stage
+1
+Uncomment code in src/main.rs
+To simplify getting started, we're providing you with the solution to this first stage.
+
+Uncomment the relevant code in src/main.rs, save your file, and submit your changes by following the step below.
+
+#![allow(unused_imports)]
+use std::net::TcpListener;
+
+fn main() {
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    println!("Logs from your program will appear here!");
+
+    // Uncomment the code below to pass the first stage
+    
+    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    
+        for stream in listener.incoming() {
+            match stream {
+                Ok(_stream) => {
+                    println!("accepted new connection");
+                }
+               Err(e) => {
+                   println!("error: {}", e);
+               }
+           }
+       }
+}
+PS C:\Users\vinee\projects\codecrafters-redis-rust> codecrafters submit
+Submitting changes (commit: d92c542)...
+
+⚡ This is a turbo test run. https://codecrafters.io/turbo
+
+Running tests on your code. Logs should appear shortly...
+
+[compile]    Compiling codecrafters-redis v0.1.0 (/app)
+[compile]     Finished `release` profile [optimized] target(s) in 0.12s
+[compile] Moved ./.codecrafters/run.sh → ./your_program.sh
+[compile] Compilation successful.
+
+[tester::#JM1] Running tests for Stage #JM1 (Bind to a port)
+[tester::#JM1] $ ./your_program.sh
+[tester::#JM1] Connecting to port 6379...
+[your_program] Logs from your program will appear here!
+[tester::#JM1] Test passed.
+[your_program] accepted new connection
+
+Test passed. Congrats!
+
+Mark step as complete in your browser.
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust>
+
+
+Respond to PING
+What is PING?
+Redis clients talk to Redis servers by sending commands and receiving responses.
+
+For example:
+
+redis> PING                  # client sends a PING command
+"PONG"                       # server replies with PONG
+
+redis> SET name Alice        # store the value "Alice" under the key "name"
+OK                           # server confirms success
+PING is the simplest Redis command. It’s used to check whether a Redis server is alive and responding.
+
+When a Redis server replies to PING, the raw response it sends over the network is actually +PONG\r\n, which is the string PONG encoded using RESP, a format Redis uses to exchange messages between clients and servers.
+
+For this stage, your task is to simply hardcode a +PONG\r\n response, regardless of the incoming command.
+
+You’ll learn more about RESP and how input command parsing works in future stages.
+
+
+#![allow(unused_imports)]
+use std::net::TcpListener;
+use std::io::Write;
+
+fn main() {
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    println!("Logs from your program will appear here!");
+
+    // Uncomment the code below to pass the first stage
+    
+    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    
+        for stream in listener.incoming() {
+            match stream {
+                Ok(_stream) => {
+                    println!("accepted new connection");
+                }
+                Ok(mut stream) => {
+                    stream.write_all(b"+PONG\r\n").unwrap();
+                }
+               Err(e) => {
+                   println!("error: {}", e);
+               }
+           }
+       }
+}
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust> codecrafters submit
+Submitting changes (commit: 07b803a)...
+
+⚡ This is a turbo test run. https://codecrafters.io/turbo
+
+Running tests on your code. Logs should appear shortly...
+
+[compile]    Compiling codecrafters-redis v0.1.0 (/app)
+[compile] warning: unreachable pattern
+[compile]   --> src/main.rs:18:17
+[compile]    |
+[compile] 15 |                 Ok(_stream) => {
+[compile]    |                 ----------- matches all the relevant values
+[compile] ...
+[compile] 18 |                 Ok(mut stream) => {
+[compile]    |                 ^^^^^^^^^^^^^^ no value can reach this
+[compile]    |
+[compile]    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+[compile]
+[compile] warning: `codecrafters-redis` (bin "codecrafters-redis") generated 1 warning
+[compile]     Finished `release` profile [optimized] target(s) in 0.16s
+[compile] Moved ./.codecrafters/run.sh → ./your_program.sh
+[compile] Compilation successful.
+
+[tester::#RG2] Running tests for Stage #RG2 (Respond to PING)
+[tester::#RG2] $ ./your_program.sh
+[your_program] Logs from your program will appear here!
+[tester::#RG2] [client] $ redis-cli PING
+[your_program] accepted new connection
+[tester::#RG2] Received: "" (no content received)
+[tester::#RG2]            ^ error
+[tester::#RG2] Error: Expected start of a new RESP2 value (either +, -, :, $ or *)
+[tester::#RG2] Test failed
+
+View our article on debugging test failures: https://codecrafters.io/debug
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust>
+
+#![allow(unused_imports)]
+use std::net::TcpListener;
+use std::io::Write;
+
+fn main() {
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    println!("Logs from your program will appear here!");
+    
+    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    stream.write_all(b"+PONG\r\n").unwrap();
+                }
+               Err(e) => {
+                   println!("error: {}", e);
+               }
+           }
+       }
+    }
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust> codecrafters submit
+Submitting changes (commit: 13ea01c)...
+
+⚡ This is a turbo test run. https://codecrafters.io/turbo
+
+Running tests on your code. Logs should appear shortly...
+
+[compile]    Compiling codecrafters-redis v0.1.0 (/app)
+[compile]     Finished `release` profile [optimized] target(s) in 0.15s
+[compile] Moved ./.codecrafters/run.sh → ./your_program.sh
+[compile] Compilation successful.
+
+[tester::#RG2] Running tests for Stage #RG2 (Respond to PING)
+[tester::#RG2] $ ./your_program.sh
+[your_program] Logs from your program will appear here!
+[tester::#RG2] [client] $ redis-cli PING
+[tester::#RG2] [client] ✔︎ Received "PONG"
+[tester::#RG2] Test passed.
+
+[tester::#JM1] Running tests for Stage #JM1 (Bind to a port)
+[tester::#JM1] $ ./your_program.sh
+[tester::#JM1] Connecting to port 6379...
+[your_program] Logs from your program will appear here!
+[tester::#JM1] Test passed.
+
+Test passed. Congrats!
+
+Mark step as complete in your browser.
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust>
+
+Handling Multiple Commands
+A Redis server starts to listen for the next command as soon as it's done responding to the previous one. This allows Redis clients to send multiple commands using the same connection.
+
+For this stage, your server should run a loop that continuously reads commands and sends responses back through the same connection. Since we're only dealing with the PING command for now, your program can run a loop that reads input and responds with +PONG\r\n.
+
+Tests
+The tester will execute your program like this:
+
+$ ./your_program.sh
+It will then send multiple PING commands using the same connection.
+
+For example, it might send:
+
+$ echo -e "PING\nPING" | redis-cli
+The tester will expect to receive a +PONG\r\n response for each command sent.
+
+Notes
+The exact bytes your program will receive won't be just PING. You'll receive something like this: *1\r\n$4\r\nPING\r\n, which is the Redis protocol encoding of the PING command.
+Just like the previous stage, you can hardcode +PONG\r\n as the response for this stage. We'll get to parsing client input in later stages.
+The tester will send the PING commands using the same connection. We'll get to handling multiple connections in later stages.
+
+Hint #1: How do I read data from a client connection?
+Use the read() method on the TcpStream to read data into a buffer:
+
+use std::io::Read;
+
+let mut buf = [0; 512];
+let bytes_read = stream.read(&mut buf).unwrap();
+To use read(), you need to import the Read trait.
+read() returns the number of bytes read. It returns 0 when the client has closed the connection.
+
+Hint #2: How do I handle multiple commands?
+Wrap your read() and write_all() calls in a loop. Break out of the loop when the client disconnects (i.e., when read() returns 0):
+
+let mut buf = [0; 512];
+loop {
+    let bytes_read = stream.read(&mut buf).unwrap();
+    if bytes_read == 0 {
+        break;
+    }
+    stream.write_all(b"+PONG\r\n").unwrap();
+}
+This loop will keep reading commands and responding with +PONG\r\n until the client closes the connection.
+
+
+
+
+#![allow(unused_imports)]
+use std::net::TcpListener;
+use std::io::{Read,Write};
+
+fn main() {
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    println!("Logs from your program will appear here!");
+    
+    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    let mut buffer = [0; 512];
+                    loop {
+                        let bytes_read = stream.read(&mut buffer).unwrap();
+                        if bytes_read == 0 {
+                            break;
+                        }
+                        stream.write_all(b"+PONG\r\n").unwrap();
+                    }
+                }
+               Err(e) => {
+                   println!("error: {}", e);
+               }
+           }
+       }
+    }
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust> codecrafters submit
+Submitting changes (commit: 340e788)...
+
+⚡ This is a turbo test run. https://codecrafters.io/turbo
+
+Running tests on your code. Logs should appear shortly...
+
+[compile]    Compiling codecrafters-redis v0.1.0 (/app)
+[compile]     Finished `release` profile [optimized] target(s) in 0.13s
+[compile] Moved ./.codecrafters/run.sh → ./your_program.sh
+[compile] Compilation successful.
+
+[tester::#WY1] Running tests for Stage #WY1 (Respond to multiple PINGs)
+[tester::#WY1] $ ./your_program.sh
+[your_program] Logs from your program will appear here!
+[tester::#WY1] [client-1] $ redis-cli PING
+[tester::#WY1] [client-1] ✔︎ Received "PONG"
+[tester::#WY1] [client-1] > PING
+[tester::#WY1] [client-1] ✔︎ Received "PONG"
+[tester::#WY1] [client-1] > PING
+[tester::#WY1] [client-1] ✔︎ Received "PONG"
+[tester::#WY1] Test passed.
+
+[tester::#RG2] Running tests for Stage #RG2 (Respond to PING)
+[tester::#RG2] $ ./your_program.sh
+[your_program] Logs from your program will appear here!
+[tester::#RG2] [client] $ redis-cli PING
+[tester::#RG2] [client] ✔︎ Received "PONG"
+[tester::#RG2] Test passed.
+
+[tester::#JM1] Running tests for Stage #JM1 (Bind to a port)
+[tester::#JM1] $ ./your_program.sh
+[tester::#JM1] Connecting to port 6379...
+[your_program] Logs from your program will appear here!
+[tester::#JM1] Test passed.
+
+Test passed. Congrats!
+
+Mark step as complete in your browser.
+
+PS C:\Users\vinee\projects\codecrafters-redis-rust>
+
+
+Handling Multiple Clients
+In addition to handling multiple commands from the same client, Redis servers can also handle multiple clients at once.
+
+To implement this, you'll need to either use threads or, if you're feeling adventurous, implement an Event Loop (like the official Redis implementation does).
+
+Tests
+The tester will execute your program like this:
+
+$ ./your_program.sh
+It'll then send two PING commands concurrently using two different connections:
+
+# These two will be sent concurrently so that we can test your server's ability to handle concurrent clients.
+$ redis-cli PING
+$ redis-cli PING
+The tester will expect to receive two separate +PONG\r\n responses.
+
+Notes
+Since the tester client only sends the PING command at the moment, it's okay to ignore what the client sends and hardcode a response. We'll get to parsing client input in later stages.
+
+
+Concepts to expand on
+https://en.wikipedia.org/wiki/Event_loop
+Related to this stage
+TCP Servers in Rust
+Network Protocols
+TCP Servers in Go
+TCP: An Overview
+TCP Servers in Java
+TCP Servers in C++
+TCP Servers in Python

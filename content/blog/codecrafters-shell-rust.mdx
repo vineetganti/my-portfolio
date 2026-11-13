@@ -13,26 +13,515 @@ languages i picked on for this was Rust and i intend to justify why i picked the
 learning it from scratch while working on this guided project from Codecrafters.
 
 
+Introduction
+Welcome to the Build your own Shell challenge!
+
+A shell is the program that interprets what you type into the terminal. It reads your commands, runs programs, and prints their output. Popular examples are Bash and ZSH.
+
+In this challenge, you'll build your own shell from scratch.
+
+Your shell will run a REPL, parse commands, spawn processes, and more.
+
+What exactly will I build?
+You’ll start by implementing the core building blocks of every shell:
+
+Reading and parsing user input
+Built-in commands like pwd and cd
+Launching external programs
+At this stage, your shell will already feel usable. You’ll be able to type commands into it, see their output, and navigate within your filesystem.
+
+As you progress, you’ll implement advanced features like:
+
+Piping and redirection
+Command history
+Autocompletion
+… and more
+At the end, you'll have a GitHub repo to show off.
+
+What exactly will I learn?
+In the first 10 stages, you'll learn:
+
+How a shell reads, parses, and runs commands (it’s not magic!)
+What a REPL is and how it works under the hood
+How commands like echo run, vs. external ones (like cursor)
+What $PATH means and its role in identifying executable files
+How running commands require spawning OS processes and exits
+In the advanced stages, you'll discover new programming ideas, such as parsing complex syntax and process management.
+
+As your code gets complex, you’ll be forced to structure and refactor it - to avoid regressions and to make adding new features easier.
+
+Why should I build such a project?
+Building your own shell blends system design, advanced programming practice, and real-world computing knowledge (shell + OS). If you’ve mostly only worked on web or application code, you'll get a chance to be closer to how your computer actually runs software.
+
+Beyond technical depth, there’s something uniquely satisfying about understanding a tool you use every day. You'll come out of it as a more confident and interesting developer.
+
+What are the pre-requisites for this challenge?
+You should be comfortable writing code in any one language and using Git. No prior experience with shells or operating systems is required.
+
+Most learners pick up required concepts (e.g processes) as they go.
+
+What matters most is curiosity and persistence. You’ll develop intuition by exploring, debugging, and discovering solutions yourself.
+
+While we will make it extremely simple to get started, don't expect this to be a follow-along tutorial.
+
+Local Setup
+Completed
+Follow these steps to set up your Rust project locally.
+
+Clone the repository
+command line
+
+copy
+git clone https://git.codecrafters.io/308297abf6277d69 codecrafters-shell-rust
+cd codecrafters-shell-rust
+Troubleshoot
+Test CLI connection
+PowerShell
+Linux / macOS
+
+copy
+irm https://codecrafters.io/install.ps1 | iex # Install CodeCrafters CLI
+codecrafters ping
+
+Print a prompt
+Every shell starts with a prompt (usually $) that signals it’s ready for your command.
+
+In this stage, you’ll print that prompt.
+
+How to pass this stage
+Uncomment code in src/main.rs
+To simplify getting started, we're providing you with the solution to this first stage.
+
+Uncomment the relevant code in src/main.rs, save your file, and submit your changes by following the step below.
+
+Submit code
+command line
+
+copy
+codecrafters submit
 
 
-Regular paragraphs go here. You can write as much as you want.
+Handle invalid commands
+In this stage, you'll implement support for printing error messages for invalid commands.
 
-**Bold text** looks like this. *Italic text* looks like this.
+Example:
 
-### Subheading
+$ xyz
+xyz: command not found
+Your program should:
 
-- Bullet point one
-- Bullet point two
+Display the prompt $ (keep the code from the previous stage)
+Read the user's input
+Print an error message in exactly this format: {command}: command not found
+e.g. if the user types xyz, print xyz: command not found
+For now, we'll treat all commands as "invalid". In later stages we'll handle executing "valid" commands like echo, cd etc.
 
-1. Numbered item one
-2. Numbered item two
 
-> This is a blockquote — great for highlighting a key idea.
+Implement a REPL
+The REPL
+A REPL (Read-Eval-Print Loop) is an interactive loop that forms the core of a shell. It follows a repeating cycle:
 
-You can add code like this:
+Read: Display a prompt and wait for user input
+Eval: Parse and execute the command
+Print: Display the output or error message
+Loop: Return to step 1 and wait for the next command
+This cycle continues indefinitely until the shell process is terminated.
 
-```python
-print("Hello, world!")
-```
+Your shell should follow this same cycle:
 
-And [links look like this](https://example.com).
+Display the prompt $, then wait for a line of input.
+Print <command_name>: command not found for any command the user enters, like with the previous stages.
+Return to step 1.
+For example, if the user types hello, your shell should print hello: command not found, then display the prompt ($) again.
+
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a series of commands to your shell:
+
+$ invalid_command_1
+invalid_command_1: command not found
+$ invalid_command_2
+invalid_command_2: command not found
+$ invalid_command_3
+invalid_command_3: command not found
+$
+After each command, the tester will verify that your shell:
+
+Prints the message <command_name>: command not found.
+Displays a new prompt ($) before the tester sends the next command
+Notes
+The exact number of commands sent and the command names will be random.
+The loop should run indefinitely. The tester will terminate your program when the test is complete.
+
+
+The exit Builtin
+The exit builtin terminates the shell. Builtin commands are handled directly by the shell without starting a new process.
+
+When your shell receives the exit command, it should terminate immediately.
+
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send an invalid command to your shell, followed by the exit command:
+
+$ invalid_command_1
+invalid_command_1: command not found
+$ exit
+The tester will verify that your shell terminates after receiving the exit command.
+
+The echo Builtin
+The echo builtin prints its arguments to stdout, with spaces between them, and a newline (\n) at the end.
+
+Example usage:
+
+$ echo hello world
+hello world
+$ echo one two three
+one two three
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a series of echo commands to your shell:
+
+$ echo hello world
+hello world
+$ echo pineapple strawberry
+pineapple strawberry
+$
+After each command, the tester will verify that the echo command correctly prints the provided text back.
+
+Notes
+Most languages' standard output functions like console.log() (JavaScript), print() (Python), or println() (Java) automatically add a newline, which is what you want here. If your language requires explicit newlines (like C's printf()), make sure to add \n at the end.
+
+The type Builtin
+The type builtin is used to determine how a command would be interpreted if it were used. It checks whether a command is a builtin, an executable file, or unrecognized.
+
+For example:
+
+$ type echo
+echo is a shell builtin
+$ type exit
+exit is a shell builtin
+$ type invalid_command
+invalid_command: not found
+For this stage, you'll handle two cases:
+
+For builtin commands (like echo, exit, and type), print <command> is a shell builtin.
+For unrecognized commands that don't match any builtin, print <command>: not found.
+We'll handle executable files in later stages.
+
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a series of type commands to your shell:
+
+$ type echo
+echo is a shell builtin
+$ type exit
+exit is a shell builtin
+$ type type
+type is a shell builtin
+$ type invalid_command
+invalid_command: not found
+$
+The tester will verify that:
+
+Builtin commands print: <command> is a shell builtin
+Unrecognized commands print: <command>: not found
+Notes
+The tester will only check for builtin commands and unrecognized commands in this stage.
+type itself is a shell builtin command, so $ type type should print type is a shell builtin.
+
+
+Your Task
+Completed
+Share Feedback
+Medium
+In this stage, you'll extend the type builtin to search for executable files using PATH.
+
+The PATH Environment Variable
+The PATH environment variable specifies a list of directories where the shell should look for executable programs.
+
+For example, if the PATH is set to /dir1:/dir2:/dir3, the shell would search for executables in /dir1, then /dir2, and finally /dir3, in that order.
+
+Searching for Executables
+When type receives a command input, your shell must follow these steps:
+
+Check if the command is a builtin command (like exit or echo). If it is, report it as a builtin (<command> is a shell builtin) and stop.
+If the command is not a builtin, your shell must go through every directory in PATH. For each directory:
+Check if a file with the command name exists.
+Check if the file has execute permissions.
+If the file exists and has execute permissions, print <command> is <full_path> and stop.
+If the file exists but lacks execute permissions, skip it and continue to the next directory.
+If no executable is found in any directory, print <command>: not found.
+For example:
+
+$ type grep
+grep is /usr/bin/grep
+$ type invalid_command
+invalid_command: not found
+$ type echo
+echo is a shell builtin
+Tests
+The tester will execute your program with a custom PATH like this:
+PATH="/usr/bin:/usr/local/bin:$PATH" ./your_program.sh
+It will then send a series of type commands to your shell:
+
+$ type ls
+ls is /usr/bin/ls
+$ type valid_command
+valid_command is /usr/local/bin/valid_command
+$ type invalid_command
+invalid_command: not found
+$
+The tester will verify that the type command correctly identifies executable files in the PATH:
+
+Executable files in PATH are reported with their full path (<command> is <full_path>).
+Files without execute permissions are skipped.
+Non-existent commands print the <command>: not found message.
+Notes
+Most languages provide functions to check execute permissions for a file (like os.access(path, os.X_OK) in Python, or Files.isExecutable() in Java).
+
+PATH can include directories that don’t exist on disk, so your code should handle such cases gracefully.
+
+When parsing the PATH environment variable, remember that the delimiter (usually : or ;) can vary by operating system. Use OS-agnostic path handling provided by your language (like os.pathsep in Python, File.pathSeparator in Java, or path.delimiter in Node.js) to correctly split the directories.
+
+In this stage, you'll add support for running external programs with arguments.
+
+Running External Programs
+So far, you've implemented builtin commands that your shell executes directly. Now you'll handle external programs that your shell needs to find and run.
+
+When a command isn't a builtin, your shell should:
+
+Determine if the given command is an executable (you can reuse the logic from type)
+If it is, execute the program
+Pass any arguments from the command line to the program
+
+For example, if the user types custom_exe arg1 arg2, your shell should:
+
+Determine if custom_exe is an executable in PATH
+Execute it with three arguments: custom_exe (the program name), arg1, and arg2
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a command that you need to execute:
+
+$ custom_exe_1234 alice
+Program was passed 2 args (including program name).
+Arg #0 (program name): custom_exe_1234
+Arg #1: alice
+Program Signature: 5998595441
+
+The output shown above comes from the executable itself. Your shell just needs to run it and let its output display.
+
+The tester will verify that:
+
+Your shell correctly finds and executes the program
+The program's output appears in your shell
+The arguments are passed correctly
+The tester will run multiple commands and use a random number of arguments each time.
+
+Notes
+The program name, arguments, and the expected output will be random for each test case.
+The output in the example ("Program was passed N args…") comes from the executable. It's not something you need to implement manually.
+You'll need to use your operating system's API to execute external programs (like exec family in Unix, subprocess in Python, child_process in Node.js, etc.)
+
+In this stage, you'll implement the pwd builtin.
+
+The pwd Builtin
+The pwd (print working directory) builtin prints the full, absolute path of the current working directory to stdout.
+
+When your shell starts, its current working directory is typically the directory from which it was executed. Your pwd implementation needs to retrieve this information from the operating system and print it.
+
+For example:
+
+$ pwd
+/home/user/projects
+$ pwd
+/usr/local/bin
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a pwd command to your shell:
+
+$ pwd
+/path/to/current/directory
+$
+The tester will verify that the pwd command correctly displays the current working directory.
+
+Notes
+The pwd command must print the full absolute path of the current working directory.
+
+Concepts to elaborate on: 
+What is PATH?
+What is a shell prompt?
+What are builtin commands?
+What is Shell quoting?
+
+Your Task
+Completed
+Share Feedback
+Medium
+In this stage, you'll implement the cd builtin to handle absolute paths.
+
+The cd Builtin
+The cd (change directory) builtin is used to change the current working directory.
+
+The cd command can handle different types of arguments:
+
+Absolute paths, like /usr/local/bin.
+Relative paths, like ./, ../, ./dir.
+The ~ character, which represents the user's home directory.
+For this stage, we'll focus on absolute paths.
+
+Handling Absolute Paths
+An absolute path starts with / and specifies a location from the root of the filesystem.
+
+When cd receives an absolute path:
+
+If the directory exists, change to that directory.
+If the directory doesn't exist, print cd: <directory>: No such file or directory.
+
+For example:
+
+$ pwd
+/home/user
+$ cd /usr/local/bin
+$ pwd
+/usr/local/bin
+$ cd /does_not_exist
+cd: /does_not_exist: No such file or directory
+$ pwd
+/usr/local/bin
+If the directory change fails, the current directory should remain unchanged.
+
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a series of cd commands to your shell:
+
+$ cd /usr/local/bin
+$ pwd
+/usr/local/bin
+$ cd /does_not_exist
+cd: /does_not_exist: No such file or directory
+$
+The tester will verify that:
+
+Valid paths change the directory.
+Invalid paths print the error message cd: <directory>: No such file or directory.
+Invalid paths don't change the current directory.
+Notes
+Check if the directory exists before attempting to change to it, or handle the error if the change fails.
+
+In this stage, you'll extend your cd builtin to handle relative paths.
+
+The cd Builtin (Recap)
+As a recap, cd can receive multiple argument types:
+
+Absolute paths, like /usr/local/bin. (Handled in previous stages)
+Relative paths, like ./, ../, ./dir.
+The ~ character.
+For this stage, you'll handle the second argument type.
+
+Relative Paths
+A relative path specifies a location relative to the current working directory, rather than from the root of the filesystem.
+
+Your shell must correctly interpret and navigate the following components of a relative path:
+
+./ (Current Directory): Refers to the current working directory itself.
+../ (Parent Directory): Refers to the directory immediately above the current working directory in the file system hierarchy.
+Subdirectories: Paths like ./dirname or dirname are treated as relative to the current directory.
+Here are some examples:
+
+$ pwd
+/usr
+$ cd ./local/bin    # Go to "local/bin" inside current directory (/usr)
+$ pwd
+/usr/local/bin
+$ cd ../../         # Go up two levels
+$ pwd
+/usr
+$ cd local          # "local" is shorthand for "./local"
+$ pwd
+/usr/local
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a series of cd commands to your shell:
+
+$ cd /usr
+$ pwd
+/usr
+$ cd ./local/bin
+$ pwd
+/usr/local/bin
+$ cd ../../
+$ pwd
+/usr
+$
+The tester will verify that:
+
+Valid relative paths change the directory correctly.
+Invalid relative paths print the error message cd: <directory>: No such file or directory.
+The directory remains unchanged when cd fails.
+Notes
+The actual directory names used will be random, so you can't hardcode the expected output.
+
+In this stage, you'll extend your cd builtin to handle the ~ character.
+
+The cd Builtin (Recap)
+As a recap, cd can receive multiple argument types:
+
+Absolute paths, like /usr/local/bin. (Handled in earlier stages)
+Relative paths, like ./, ../, ./dir. (Handled in previous stages)
+The ~ character.
+The ~ Character
+The ~ (tilde) character is shorthand for the user's home directory. It's a convenient way to quickly navigate back to your home directory from anywhere in the filesystem.
+
+The home directory is specified by the HOME environment variable. When your shell sees cd ~, it should:
+
+Read the value of the HOME environment variable
+Change to that directory
+For example:
+
+$ pwd
+/usr/local/bin
+$ cd ~
+$ pwd
+/home/user
+$ cd /var/log
+$ pwd
+/var/log
+$ cd ~
+$ pwd
+/home/user
+Tests
+The tester will execute your program like this:
+
+./your_program.sh
+It will then send a series of cd commands to your shell:
+
+$ cd /usr/local/bin
+$ pwd
+/usr/local/bin
+$ cd ~
+$ pwd
+/home/user
+$
+The tester will verify that:
+
+cd ~ changes to the home directory.
+The home directory matches the value of the HOME environment variable.
+Notes
+Most languages provide functions to read environment variables (like process.env.HOME in Node.js, os.getenv('HOME') in Python, or getenv("HOME") in C).
+

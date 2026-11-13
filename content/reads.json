@@ -1,0 +1,9 @@
+[
+  {
+    "title": "How Uber serves over 40 million reads per second using an integrated cache",
+    "url": "https://www.uber.com/gb/en/blog/how-uber-serves-over-40-million-reads-per-second-using-an-integrated-cache/",
+    "source": "Uber Engineering",
+    "topic": "Databases and caching",
+    "note": "Cited in the Database Engineering series."
+  }
+]
