@@ -1,0 +1,21 @@
+# Private data: this folder lives inside a PUBLIC repository. Nothing here may ever be committed.
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+data/
+!data/**/.gitkeep
+*.sqlite
+*.sqlite3
+*.pem
+__pycache__/
+.venv/
+.chroma/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.claude/
+.vscode/
+evals/results/*
+!evals/results/.gitkeep

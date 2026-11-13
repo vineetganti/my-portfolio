@@ -1,0 +1,53 @@
+{
+ "version": "https://jsonfeed.org/version/1.1",
+ "title": "Vineet Ganti: Engineering and AI reading list (Good reads)",
+ "home_page_url": "https://www.vineetganti.com/second-brain#good-reads",
+ "feed_url": "https://www.vineetganti.com/second-brain/good-reads.json",
+ "description": "Articles picked from company engineering and AI research blogs. Summaries are generated from the article text and checked automatically; follow each link for the original.",
+ "language": "en",
+ "_schema": 1,
+ "_generated_at": "2026-11-02T12:00:00+00:00",
+ "_count": 2,
+ "items": [
+  {
+   "id": "a:f40574f2d402",
+   "url": "https://www.vineetganti.com/second-brain#a:f40574f2d402",
+   "external_url": "https://x.dev/alpha",
+   "title": "Post alpha",
+   "content_text": "A grounded summary.",
+   "date_published": "2026-11-01T12:00:00+00:00",
+   "tags": [
+    "distributed_systems"
+   ],
+   "authors": [
+    {
+     "name": "a"
+    }
+   ],
+   "_ai_note": {
+    "label": "Written by an AI model, not the article's author",
+    "why_it_matters": "Because."
+   }
+  },
+  {
+   "id": "a:5c24d0927fe5",
+   "url": "https://www.vineetganti.com/second-brain#a:5c24d0927fe5",
+   "external_url": "https://x.dev/beta",
+   "title": "Post beta",
+   "content_text": "A grounded summary.",
+   "date_published": "2026-11-01T12:00:00+00:00",
+   "tags": [
+    "distributed_systems"
+   ],
+   "authors": [
+    {
+     "name": "a"
+    }
+   ],
+   "_ai_note": {
+    "label": "Written by an AI model, not the article's author",
+    "why_it_matters": "Because."
+   }
+  }
+ ]
+}

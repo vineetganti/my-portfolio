@@ -1,0 +1,34 @@
+{
+ "version": "https://jsonfeed.org/version/1.1",
+ "title": "Vineet Ganti: Engineering and AI reading list",
+ "home_page_url": "https://www.vineetganti.com/second-brain",
+ "feed_url": "https://www.vineetganti.com/second-brain/feed.json",
+ "description": "Articles picked from company engineering and AI research blogs. Summaries are generated from the article text and checked automatically; follow each link for the original.",
+ "language": "en",
+ "_schema": 1,
+ "_generated_at": "2026-11-02T12:00:00+00:00",
+ "_count": 1,
+ "items": [
+  {
+   "id": "a:23393c285257",
+   "url": "https://www.vineetganti.com/second-brain#a:23393c285257",
+   "external_url": "https://x.dev/daily",
+   "title": "Post daily",
+   "content_text": "A grounded summary.",
+   "date_published": "2026-11-01T12:00:00+00:00",
+   "tags": [
+    "applied_guide",
+    "raft"
+   ],
+   "authors": [
+    {
+     "name": "a"
+    }
+   ],
+   "_ai_note": {
+    "label": "Written by an AI model, not the article's author",
+    "why_it_matters": "Because."
+   }
+  }
+ ]
+}

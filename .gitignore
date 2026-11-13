@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -47,3 +48,20 @@ next-env.d.ts
 raw/
 # PGlite runtime, copied from node_modules at build time
 public/pglite/
+
+# Second brain pipeline (second-brain/): private data must never reach this public repo
+second-brain/data/
+second-brain/.env*
+!second-brain/.env.example
+second-brain/.venv/
+second-brain/.claude/
+second-brain/.vscode/
+credentials.json
+token.json
+*.sqlite
+*.sqlite3
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.chroma/

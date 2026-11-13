@@ -8,7 +8,10 @@
     "prebuild": "node scripts/copy-pglite.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:second-brain": "node --test scripts/second-brain.test.mjs",
+    "check:safety": "node scripts/check-public-safety.mjs",
+    "second-brain:upload": "node --env-file=.env.local scripts/upload-second-brain.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.15",
