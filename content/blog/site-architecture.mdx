@@ -16,7 +16,7 @@ This site started as a portfolio with a blog in October 2026. Since then it has 
 
 1. **The architecture** (this post): files in, static pages out, and the few parts that run in the browser.
 2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
-3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+3. [Listen to this post](/blog/site-audio): a browser voice on every post, and AI podcasts on their own pages.
 4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
@@ -72,7 +72,7 @@ There are two paths, and the first one carries almost all the traffic.
 
 **Request time.** The [Second brain page](/blog/site-second-brain-page) shows a feed the owner publishes from a separate pipeline, so its data changes without a push. Its data function is marked `'use cache'` with a 15-minute revalidation ([cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife)), so the page fetches and verifies the files at most four times an hour and serves the cached result in between.
 
-✅ The production build on 2026-11-13 generated 74 pages. Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
+✅ The production build on 2026-11-13 generated 90 pages. Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
 
 ```text title="Output: next build, route table (trimmed)"
 Route (app)                              Revalidate  Expire
@@ -86,6 +86,12 @@ Route (app)                              Revalidate  Expire
 │ ├ ○ /blog/series/building-this-site           15m      1y
 │ └ ◐ [+4 more paths]
 ├ ○ /notes/feed.xml
+├ ○ /podcasts                                   15m      1y
+├   /podcasts/[slug]                            15m      1y
+│ ├ ◐ /podcasts/[slug]                          15m      1y
+│ ├ ○ /podcasts/trip-buddy-agent                15m      1y
+│ ├ ○ /podcasts/agent-evaluation                15m      1y
+│ └ ◐ [+12 more paths]
 ├ ○ /second-brain                               15m      1d
 └ ƒ /second-brain/feed.xml
 
@@ -119,6 +125,7 @@ content/
   sql-traces/      generated step-throughs for the SQL posts
   db-lab/          recorded database runs for the Database Engineering posts
   audio.json       which posts have a podcast recording
+  audio-durations.json  the length of each recording, measured with ffprobe
   reads.json       hand-picked reads shown on the Second brain page
 public/images/     diagrams and screenshots, by section / series / post
 scripts/           generators, recorders, upload scripts, checks and tests
@@ -330,6 +337,8 @@ Every change to the site is logged here under the day it was made, oldest first.
 | --- | --- |
 | **Feature** | **Second brain page (beta).** A curated reading feed published as signed files and verified by the site before it renders anything |
 | **Content** | **This series.** The single build-log post became nine parts, one per feature, with the checks re-run. The old address redirects to the series page |
+| **Change** | **Podcasts moved to their own pages.** `/podcasts` lists the episodes and each has a page with one shared player. Every post keeps the browser voice and links to its episode, so the two players never share a screen ([part 3](/blog/site-audio)) |
+| **Fix** | **Audio kept playing after you left its page**, because Next hides a page instead of removing it. The podcast player now pauses when its page is hidden, and the browser voice resets its state ([part 3](/blog/site-audio)) |
 
 ## What's next
 

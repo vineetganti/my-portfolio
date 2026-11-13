@@ -38,12 +38,13 @@ docs/
 public/
   images/<section>/<series>/<post-slug>/   diagrams and screenshots, by post
 src/
-  app/             routes: /, /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series], /projects, /about
-  components/      Header, PostCard, SectionNav, SeriesStrip, SeriesNav, AudioPlayer, Callout, TableOfContents, ...
+  app/             routes: /, /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series], /podcasts, /podcasts/[slug], /projects, /about
+  components/      Header, PostCard, SectionNav, SeriesStrip, SeriesNav, AudioPlayer, PodcastProvider, PodcastRow, Callout, TableOfContents, ...
   lib/
     blog.ts        reads posts, builds the table of contents, series and section queries
     sections.ts    the list of sections and series (edit this to add one)
     speech.ts      turns the rendered post into chunks for the audio player
+    podcasts.ts    lists the posts that have a recording, with their lengths, grouped by series
     projects.ts    reads project files
     secondBrain.ts       fetches and verifies the Second brain snapshot (server only)
     secondBrainCore.mjs  signature check and validation, shared by the site, the upload script and the tests
@@ -115,9 +116,9 @@ Every post has a **Listen to this post** button under its title. It uses the bro
 - Voice quality depends on the browser and device: Edge and Chrome offer "Natural" or "Online" voices that sound far better than the defaults. Browsers without speech support simply don't show the button.
 - A post can't be downloaded as audio with this approach. If that's wanted later, generate an MP3 per post and let the player prefer it when present.
 
-### Recorded audio
+### Recorded audio (podcasts)
 
-Some posts have an AI podcast version (an m4a made with NotebookLM). The files are large, so they are not in git: they live in Vercel Blob, and `content/audio.json` lists which posts have one. `AUDIO_BASE_URL` (set in Vercel and `.env.local`) is the storage address; without it the site falls back to `public/audio/`. Upload with `node --env-file=.env.local scripts/upload-audio.mjs`. See the writing guide for the steps.
+Some posts have an AI podcast version (an m4a made with NotebookLM). It does not replace the browser voice: every post keeps **Listen to this post**, and a post with a recording also links to its episode. Episodes are on their own pages, `/podcasts` (the list, grouped by series, linked from a Podcasts chip on `/blog`) and `/podcasts/<slug>`, which share one player (`PodcastProvider`) that pauses when you leave. The files are large, so they are not in git: they live in Vercel Blob, and `content/audio.json` lists which posts have one, with `content/audio-durations.json` holding each length (measured with `ffprobe`). `AUDIO_BASE_URL` (set in Vercel and `.env.local`) is the storage address; without it the site falls back to `public/audio/`. Upload with `node --env-file=.env.local scripts/upload-audio.mjs`, which also refreshes the lengths. See the writing guide for the steps.
 
 ### Data Engineering SQL posts
 
@@ -141,6 +142,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 | Date | What changed |
 | --- | --- |
+| 2026-11-13 | **Podcasts on their own pages.** The AI podcasts moved to `/podcasts` and `/podcasts/<slug>` with one shared player, so every post keeps the browser voice (they had replaced it on the 14 posts with a recording) and links to its episode. A new Podcasts chip on `/blog` leads to the list. Episode lengths are measured with `ffprobe` into `content/audio-durations.json`. Testing leaving a page found that Next keeps the old page hidden, so audio kept playing with its controls hidden; the podcast player now pauses when hidden, and the browser voice resets its state. |
 | 2026-11-13 | **Building this site series.** The single build-log post became nine parts, one per feature: architecture, sections and series, audio, nuggets and feeds, diagrams, generated content, live Postgres, the Second brain page, and the Second brain pipeline built with Claude Code. Checks and measurements were re-run for it, which found the PGlite download fix still holding at 5.74 MB, the SQL bank reproducing exactly, and three issues listed under Open items. The project card now links to the series. |
 | 2026-11-05 | **Database Engineering series.** Fourteen posts following Hussein Nasser's *Fundamentals of Database Engineering*, with its Q&A folded in and corrections to the course where a real run or the docs disagreed. Demos were re-run on real PostgreSQL, MySQL, MongoDB, Redis and Memcached in Docker by `scripts/db-lab/` and shown through `src/components/db/`: multi-session step-throughs, measured charts, simulators, and live PostgreSQL in the browser with PGlite. Four new 50-card decks fold into one entry on the home page chooser. |
 | 2026-11-03 | **Data Engineering SQL series.** A new *Data Engineering* section and a six-post practice bank (92 questions) generated by `scripts/sql-bank/build.py`, which runs every answer on its sample data in DuckDB. Answers sit in dropdowns with an interactive `<DataTrace>` step-through (`src/components/sql/`) built from the real query results, plus pattern diagrams. |

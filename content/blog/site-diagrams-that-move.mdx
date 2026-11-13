@@ -8,7 +8,7 @@ seriesOrder: 5
 tags: ["SVG", "CSS", "Animation", "React", "Accessibility"]
 ---
 
-Most posts on this site lean on diagrams, and there are now 320 of them. They are plain SVG files, drawn by hand or by small scripts, and yet they switch colours with the theme, fade in as you scroll, and some of them animate a message travelling along their arrows. None of that needs a diagram library. This part explains how.
+Most posts on this site lean on diagrams, and there are now 321 of them. They are plain SVG files, drawn by hand or by small scripts, and yet they switch colours with the theme, fade in as you scroll, and some of them animate a message travelling along their arrows. None of that needs a diagram library. This part explains how.
 
 {/* series:start */}
 
@@ -16,7 +16,7 @@ Most posts on this site lean on diagrams, and there are now 320 of them. They ar
 
 1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
 2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
-3. [Listen to this post](/blog/site-audio): a browser voice for every post and AI podcast versions for some.
+3. [Listen to this post](/blog/site-audio): a browser voice on every post, and AI podcasts on their own pages.
 4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
 5. **Diagrams that move** (this post): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
@@ -35,7 +35,7 @@ Each part explains one feature from its code, and marks where every result comes
 - **SVGs are inlined, not linked.** `MdxContent` reads each local SVG at build time and puts its markup in the page, so the page's CSS can recolour it.
 - **Colours come from a fixed palette.** Each palette hex has a CSS rule that swaps it for a theme token, and the dark theme redefines the tokens. ✅ All but one of the site's SVGs stay inside the palette; the exception is a heat map.
 - **Diagrams fade in once,** in drawing order, when they first scroll into view, and never with reduced motion, without JavaScript, or in print.
-- **A `.flow.json` beside an SVG adds a looping message animation.** It names boxes by their text; the component finds the boxes and arrows by geometry, so the SVG needs no ids. ✅ 63 flow files, 279 steps, every one matched.
+- **A `.flow.json` beside an SVG adds a looping message animation.** It names boxes by their text; the component finds the boxes and arrows by geometry, so the SVG needs no ids. ✅ 63 flow files, 280 steps, every one matched.
 - **Live charts are React components** with sliders and a sentence that restates the numbers. 📜 Four of them broke hydration because the server and the browser rounded a sine differently in the last digit; coordinates are now rounded.
 
 ## From a Markdown image to an inlined SVG
@@ -172,7 +172,7 @@ Because the picture depends only on `elapsed`, **pausing means "stop adding time
 
 The final review of the Database Engineering posts loaded every page in a browser and collected console warnings. One warning repeated: `[flow] durability path | label "WAL record" not found; shown without a label`. A step's label is matched against the text in the drawing, and that arrow's label said "write". A script then checked every flow file against its SVG and found **20 more** steps whose labels didn't exist, and a second browser pass found one label that sat inside a box, where the matcher deliberately ignores text. The animations still ran; the arrows just didn't light their labels.
 
-All 22 were fixed, and the drawing script now refuses to write a diagram whose flow names text that isn't there, or a label inside a box, so the mistake can't return silently. ✅ Today every flow file on the site matches: 63 files, 279 steps, 0 mismatches.
+All 22 were fixed, and the drawing script now refuses to write a diagram whose flow names text that isn't there, or a label inside a box, so the mistake can't return silently. ✅ Today every flow file on the site matches: 63 files, 280 steps, 0 mismatches.
 
 ## Live charts
 

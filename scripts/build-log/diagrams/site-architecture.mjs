@@ -49,7 +49,7 @@ const post = {
         c.rect(370, 46, 330, 262, { tone: "cream" });
         c.text(386, 70, "Client: hydrates in the browser", { size: 12.5, weight: 700, fill: AMBER });
         const client = [
-          ["AudioPlayer, RecordedAudio", "speech and the m4a bar"],
+          ["AudioPlayer, PodcastProvider", "speech and the podcast bar"],
           ["TableOfContents", "scrollspy, progress bar"],
           ["DiagramMotion, FlowDiagram", "reveal and message flow"],
           ["charts, db labs, flash cards", "state that changes on input"],

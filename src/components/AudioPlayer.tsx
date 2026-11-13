@@ -312,10 +312,13 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
     return () => clearInterval(id);
   }, [playing]);
 
-  // Stop speaking when leaving the post or closing the tab.
+  // Stop speaking when leaving the post or closing the tab. Next keeps a hidden copy of the post after
+  // you navigate away (Cache Components), which runs this cleanup without unmounting, so the player's
+  // own state is reset too; otherwise coming back shows "Pause" while nothing is being spoken.
   useEffect(() => {
     const generation = genRef;
     const lit = litRef;
+    const index = indexRef;
     const cancel = () => window.speechSynthesis?.cancel();
     window.addEventListener("pagehide", cancel);
     return () => {
@@ -323,6 +326,13 @@ export default function AudioPlayer({ minutes }: { minutes: number }) {
       generation.current++;
       cancel();
       lit.current?.classList.remove(ACTIVE_CLASS);
+      lit.current = null;
+      index.current = 0;
+      setIndex(0);
+      setPlaying(false);
+      setActive(false);
+      setShowSettings(false);
+      setNotice("");
     };
   }, []);
 

@@ -1,6 +1,6 @@
 ---
 title: "Listen to this post: a browser voice and an AI podcast"
-description: "Part 3 of the build log for this site. Two ways to listen: the browser's own text-to-speech for every post, and recorded AI podcast versions for some. What gets read, the state machine that keeps pause and skip honest, the four fixes that made it work on phones, and how recordings are encoded, stored and chosen, with every number re-measured."
+description: "Part 3 of the build log for this site. Two ways to listen: the browser's own text-to-speech on every post, and AI podcasts on their own pages. What gets read, the state machine that keeps pause and skip honest, the four fixes that made it work on phones, how recordings are encoded, stored and listed, and the bug where audio kept playing after the page was hidden, with every number re-measured."
 date: "2026-11-13"
 section: "build-logs"
 series: "building-this-site"
@@ -8,7 +8,7 @@ seriesOrder: 3
 tags: ["Web Speech API", "Audio", "React", "Vercel Blob", "NotebookLM"]
 ---
 
-The posts on this site are long: the old build-log post took about 31 minutes to listen to, and some database posts take longer. So every post has a **Listen to this post** button, and fourteen posts have a recorded **AI podcast version** instead. This part explains both players, and re-measures what they do today, which found one thing the original write-up got wrong.
+The posts on this site are long: the old build-log post took about 31 minutes to listen to, and some database posts take longer. So every post has a **Listen to this post** button, and fourteen posts also have a recorded **AI podcast version**, which lives on its own [/podcasts](/podcasts) pages. This part explains both players and how they are kept apart, and re-measures what they do today, which found two things to fix and one thing the original write-up got wrong.
 
 {/* series:start */}
 
@@ -16,7 +16,7 @@ The posts on this site are long: the old build-log post took about 31 minutes to
 
 1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
 2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
-3. **Listen to this post** (this post): a browser voice for every post and AI podcast versions for some.
+3. **Listen to this post** (this post): a browser voice on every post, and AI podcasts on their own pages.
 4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
@@ -35,12 +35,13 @@ Each part explains one feature from its code, and marks where every result comes
 - **Every post can be read aloud by the browser** with the [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API). It reads the rendered prose and each diagram's description, and says "Code example skipped" or "Table skipped" instead of reading code and tables.
 - **A generation counter** keeps pause, skip and speed changes reliable: every `speak` call takes a new number, and a late end event from an older utterance does nothing.
 - **Phones needed four fixes and a watchdog.** They were tested in an emulated phone with a stubbed speech engine, never on a real handset.
-- **Fourteen posts have a NotebookLM recording.** ✅ Measured on 2026-11-13: mono AAC at 64 kbps, 41 to 70 minutes each, 390.6 MB in Vercel Blob, which is 39% of the Hobby plan's 1 GB.
+- **Fourteen posts have a NotebookLM recording, on their own pages.** A post shows the browser voice and one quiet link to its episode, so the two players are never on the same page. ✅ Measured on 2026-11-13: mono AAC at 64 kbps, 41 to 70 minutes each, 390.6 MB in Vercel Blob, which is 39% of the Hobby plan's 1 GB.
+- ✅ **Next keeps the previous page alive but hidden**, and `display: none` doesn't stop audio. Before a fix, an episode kept playing two seconds after leaving, with its controls hidden. The browser voice had a smaller version of the same problem.
 - ✅ **A correction:** the player was described as keeping every spoken chunk under 180 characters. It doesn't: the longest chunk sent in today's test was 327 characters, because a single long sentence is never split.
 
-## Two players, one per post
+## Two ways to listen, in two places
 
-![How a post gets its audio. A recording saved as the post's slug in public/audio is uploaded by upload-audio.mjs to Vercel Blob and listed in content/audio.json. At build time parsePost looks the slug up and sets audioSrc. The post page then shows the podcast player if there is an audioSrc, and the browser-voice player if not.](/images/build-logs/building-this-site/site-audio/which-player.svg)
+![Where a post's audio comes from. A recording saved as the post's slug in public/audio is uploaded by upload-audio.mjs to Vercel Blob, and its slug and length are listed in audio.json and audio-durations.json. At build time parsePost sets audioSrc. Every post page shows the browser-voice player; a post with an audioSrc also gets a link to its episode. The /podcasts pages list every episode and hold the one podcast player.](/images/build-logs/building-this-site/site-audio/which-player.svg)
 
 | | Browser voice (Listen to this post) | AI podcast version |
 | --- | --- | --- |
@@ -50,17 +51,23 @@ Each part explains one feature from its code, and marks where every result comes
 | Cost per post | None | Storage and transfer, plus my time to check it |
 | Works offline | No | Yes, after a download |
 
-The post page shows one or the other, never both, with one conditional:
+A post page always has the browser voice. If the post has a recording, it also gets one quiet line under the button:
 
-```tsx title="src/app/blog/[slug]/page.tsx"
-{post.audioSrc ? (
-  <RecordedAudio src={post.audioSrc} title={post.title} />
-) : (
-  <AudioPlayer minutes={post.listenMinutes} />
+```tsx title="src/app/blog/[slug]/page.tsx (styling classes left out)"
+<AudioPlayer minutes={post.listenMinutes} />
+{podcast && (
+  <p>
+    Prefer two voices?{" "}
+    <Link href={`/podcasts/${post.slug}`}>
+      Listen to the AI podcast · {formatLength(podcast.seconds)}
+    </Link>
+  </p>
 )}
 ```
 
-Two voices at once would be a mess, and the browser voice highlights paragraphs as it reads, which a recording can't do.
+📘 Until 2026-11-13 this was a conditional that showed the podcast player *instead of* the browser voice. That meant the fourteen posts with a recording lost the voice that highlights each paragraph as it reads, which a recording can't do. The two players also draw the same bar at the bottom of the screen, so showing both on one page would have made them overlap. Giving the podcasts their own pages fixes both: the two players can no longer meet.
+
+The header has no new item for it. ✅ Measured in a 390 px emulated phone, the header is already 483 px wide, so About and the theme toggle are off-screen on every page, and another item would make that worse. The entry points are a **Podcasts** chip beside the section chips on the blog page, and the link in each post.
 
 ## The browser voice
 
@@ -191,11 +198,11 @@ The goal was two commands and no code: no frontmatter to edit, no component to w
 
 ```bash title="Commands"
 # 1. save the file as public/audio/<post-slug>.m4a (git-ignored)
-# 2. upload it and list it
+# 2. upload it, list it and measure its length
 node --env-file=.env.local scripts/upload-audio.mjs
 ```
 
-`upload-audio.mjs` sends each file to Vercel Blob with the read-write token from `.env.local`, and adds the slug to `content/audio.json`, which is committed:
+`upload-audio.mjs` sends each file to Vercel Blob with the read-write token from `.env.local`, adds the slug to `content/audio.json`, and then runs `scripts/audio-durations.mjs`. Both lists are committed:
 
 ```json title="content/audio.json (first entries)"
 {
@@ -203,6 +210,15 @@ node --env-file=.env.local scripts/upload-audio.mjs
   "agents-to-production": "agents-to-production.m4a"
 }
 ```
+
+```json title="content/audio-durations.json (first entries, in seconds)"
+{
+  "agent-evaluation": 3652,
+  "agents-to-production": 3953
+}
+```
+
+The lengths come from `ffprobe`, which the episode list shows as "54 min" and the post link as "· 54 min". ✅ Checked by hand on two files: `ffprobe` reported 3231.73 s and 3496.86 s, and the file has 3,232 and 3,497.
 
 At build time `parsePost` looks the slug up and builds the address from `AUDIO_BASE_URL`, falling back to `/audio` so local files play in development:
 
@@ -218,13 +234,40 @@ function findAudio(slug: string, declared: unknown): string | undefined {
 
 The code doesn't depend on Blob: moving to another store is copying the files and changing one setting.
 
-### The player bar
+### The podcast pages and their player
 
-`RecordedAudio` looks like the speech player on purpose, with play and pause, back 15 seconds, forward 30, a seek bar, speeds 1, 1.25, 1.5, 2 and 0.75, and a download link. Three details matter:
+`/podcasts` lists the episodes grouped by series. Each row has a Play button, the length, and a link to the post. `/podcasts/<slug>` is an episode page: a large Play button, links to the post and the download, an "In this episode" list, and the previous and next episode in the series. That list is the post's own headings, with a note that the hosts don't follow them in order, because there are no timestamps to promise anything more.
 
-- **The `<audio>` element is always on the page, hidden.** Phones allow audio only from a tap, so the button calls `play()` on an element that already exists.
-- **[`preload="none"`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/audio#preload)**: nothing is downloaded until someone presses the button, so a 30 MB recording costs nothing to readers who don't listen.
+Both pages share one player. A client component, `PodcastProvider`, owns the only `<audio>` element and the bar fixed to the bottom of the screen, and it sits in `app/podcasts/layout.tsx`. A [layout is shared between its pages and keeps its state when you navigate](https://nextjs.org/docs/app/getting-started/layouts-and-pages#creating-a-layout), so ✅ pressing Play in the list and then opening that episode kept it playing: the position went from 2.9 s to 5.4 s across the navigation.
+
+The bar looks like the speech player on purpose, with play and pause, back 15 seconds, forward 30, a seek bar, speeds 1, 1.25, 1.5, 2 and 0.75, a download link and a close button. Three details matter:
+
+- **The `<audio>` element is always mounted, and its source is set inside the click handler.** Phones allow audio only from a tap, so `toggle` sets `src` and calls `play()` in the same event, on an element that already exists.
+- **[`preload="none"`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/audio#preload)**: nothing is downloaded until someone presses Play, so a 30 MB recording costs nothing to readers who don't listen.
 - **The download link adds `?download=1`** for files on another origin, because browsers ignore the `download` attribute across origins and would play the file instead.
+
+### A bug that only shows when you leave
+
+![Before and after for leaving the podcasts pages while an episode plays. Before: you click a link to a post, Next hides the page with display none instead of removing it, and the audio element keeps playing while its player bar is hidden, so there is no way to stop it. After: the same hide runs a layout-effect cleanup that pauses the audio, and coming back shows the episode paused where it was.](/images/build-logs/building-this-site/site-audio/hidden-route.svg)
+
+The first version passed every check I wrote for it, and then I tested the one thing a listener does last: leaving. This version of Next.js, with Cache Components on, doesn't unmount a page when you navigate away. It hides it with React's `<Activity>`, which keeps the DOM in the page with `display: none` ([Preserving UI state](https://nextjs.org/docs/app/guides/preserving-ui-state)). A hidden `<audio>` element doesn't stop playing, and the player bar is part of the hidden page, so nothing could stop it.
+
+✅ In a headless browser on the production build, before the fix: start an episode, click a link to a post, wait two seconds. The audio element was still there, not paused, and its position had moved from 5.4 s to 7.4 s.
+
+The same guide names this case: effect cleanups run when a page is hidden, as they do on unmount, and media needs an explicit pause in one:
+
+```tsx title="src/components/PodcastProvider.tsx"
+useLayoutEffect(() => {
+  const audio = audioRef.current;
+  return () => audio?.pause();
+}, []);
+```
+
+✅ After the fix, leaving pauses the episode, and pressing the browser's Back button shows it paused at the same place, with the bar ready to resume.
+
+The browser voice had a smaller version of the same bug. ✅ With a stubbed speech engine: it was already cancelled when leaving, because the player's cleanup called `speechSynthesis.cancel()`, but coming back showed "Stop listening" and a Pause button while nothing was speaking. The cleanup stopped the engine and left the player's own state saying "playing". It now resets that state in the same cleanup.
+
+What I'd do differently: I read the layouts guide before writing the layout and missed the guide on hidden pages, which has a section on exactly this. A persistent player is the case to search the docs for first.
 
 ### What the recordings cost now
 
@@ -265,19 +308,22 @@ The encoding is as intended; the length is what changed. Against [Vercel Blob's 
 - **Testing speech on a laptop only.** Phones differ: speech must start from a tap, and events can go missing.
 - **A recording that drifts from its post.** Regenerate it after a material edit; the hosts paraphrase whatever version they were given.
 - **Long recordings on a free plan.** Size scales with minutes, not with the post. Check the Blob usage page before adding more.
+- **Testing only what happens when a page opens.** With Cache Components, a page you leave is hidden, not removed, so anything that keeps running (audio, timers, subscriptions) keeps running. Test leaving and coming back.
+- **Two players that draw the same bar.** Give each its own page, or one shared bar, before a page can show both.
 
 ## Reproduce this yourself
 
 1. ✅ **Play a post with a stubbed voice.** In a headless browser, replace `window.speechSynthesis` before the page loads with an object whose `speak` records `utterance.text` and calls `onend` a moment later, press **Listen to this post**, and read the recorded list. That is how the table above was made.
 2. ✅ **Measure a recording.** `ffprobe` on the Blob URL, as above. `ffprobe` can read over HTTPS without downloading the file first.
-3. ✅ **Add a recording.** Save `public/audio/<slug>.m4a`, run `node --env-file=.env.local scripts/upload-audio.mjs`, commit `content/audio.json`. It needs `BLOB_READ_WRITE_TOKEN` in `.env.local` and `AUDIO_BASE_URL` in Vercel.
-4. 📘 **Read the API.** [SpeechSynthesis on MDN](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis) lists the methods and events the player relies on.
+3. ✅ **Add a recording.** Save `public/audio/<slug>.m4a`, run `node --env-file=.env.local scripts/upload-audio.mjs`, commit `content/audio.json` and `content/audio-durations.json`. It needs `BLOB_READ_WRITE_TOKEN` in `.env.local` and `AUDIO_BASE_URL` in Vercel, and `ffprobe` on the PATH for the length. To refresh only the lengths, run `node scripts/audio-durations.mjs`.
+4. ✅ **Test leaving.** Build and start the site, start an episode on `/podcasts`, click a link to a post, and read the audio element's `paused` and `currentTime` a few seconds later. It should be paused. Press Back and it should still be paused, with the bar showing it.
+5. 📘 **Read the API.** [SpeechSynthesis on MDN](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis) lists the methods and events the player relies on.
 
 ## Summary
 
-Every post can be listened to for free: the browser voice reads the rendered prose and diagram descriptions, says what it skips, and stays reliable through pauses and skips because each `speak` call takes a generation number. Phones needed four fixes and a watchdog, tested only in emulation. Fourteen posts carry a NotebookLM recording instead, chosen by one list in `content/audio.json`, stored in Vercel Blob and fetched only when someone presses play. Re-measuring found two things to act on: chunks can exceed the 180-character target, and the recordings now use 39% of the free storage.
+Every post can be listened to for free: the browser voice reads the rendered prose and diagram descriptions, says what it skips, and stays reliable through pauses and skips because each `speak` call takes a generation number. Phones needed four fixes and a watchdog, tested only in emulation. Fourteen posts also carry a NotebookLM recording, listed in `content/audio.json`, stored in Vercel Blob and fetched only when someone presses play. It has its own pages with one shared player, and each post links to its episode, so the two players never share a screen. Re-measuring found three things to act on: audio kept playing after the page was hidden (fixed, and the browser voice's state with it), chunks can exceed the 180-character target, and the recordings now use 39% of the free storage.
 
-![A map of the audio post. Browser voice: the Web Speech API reads the rendered prose and diagram descriptions and skips code and tables with a note. Robustness: a generation counter, phone fixes and a watchdog. Podcast: NotebookLM recordings, re-encoded to mono 64 kbps and stored in Vercel Blob. The switch: content/audio.json decides which player a post shows.](/images/build-logs/building-this-site/site-audio/summary-map.svg)
+![A map of the audio post. Browser voice: the Web Speech API reads the rendered prose and diagram descriptions and skips code and tables with a note, on every post. Robustness: a generation counter, phone fixes, a watchdog and a reset when the post is hidden. Podcast: NotebookLM recordings, re-encoded to mono 64 kbps and stored in Vercel Blob. Podcasts pages: one provider owns the audio element, so the list and episodes share a player that pauses when the route is hidden.](/images/build-logs/building-this-site/site-audio/summary-map.svg)
 
 ### Key takeaways
 
@@ -285,6 +331,8 @@ Every post can be listened to for free: the browser voice reads the rendered pro
 - A generation number beats a flag for "is this callback still wanted?".
 - Measure what you ship: the recordings tripled in length without anyone noticing the storage.
 - A limit that is applied only when joining things is not a limit on each thing.
+- Test leaving as well as arriving: a framework that hides pages instead of removing them keeps their media playing.
+- Two players that look alike belong on different pages, not behind a conditional.
 
 ### Concepts at a glance
 
@@ -295,6 +343,8 @@ Every post can be listened to for free: the browser voice reads the rendered pro
 | **Generation counter** | A number each `speak` takes, so older callbacks can tell they are stale |
 | **Watchdog** | A timer that notices speech that never started or never ended |
 | **Audio Overview** | NotebookLM's two-host conversation about your sources |
+| **`PodcastProvider`** | The client component in the podcasts layout that owns the one `<audio>` element and its bar |
+| **Activity** | React's component that hides a page with `display: none` and keeps its state; Next uses it to keep the previous page |
 | **`preload="none"`** | The browser downloads nothing until play is pressed |
 | **faststart** | An MP4's index moved to the front, so playback starts before the download ends |
 
@@ -322,6 +372,13 @@ The limit applies when joining sentences. A single sentence longer than 180 char
 </details>
 
 <details>
+<summary>An episode is playing and you click a link to a post. Why did it keep playing before the fix, and what stops it now?</summary>
+
+Next hides the page you left with `display: none` instead of removing it, and a hidden `<audio>` element keeps playing, with its bar hidden too. A `useLayoutEffect` cleanup in the provider runs when the page is hidden, as on unmount, and pauses the audio.
+
+</details>
+
+<details>
 <summary>Why does the podcast player keep a hidden audio element on the page?</summary>
 
 Phones allow audio only when a tap starts it. The button's click handler calls `play()` on an element that already exists, so playback counts as started by the tap.
@@ -332,6 +389,7 @@ Phones allow audio only when a tap starts it. The button's click handler calls `
 
 - MDN: [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API), [SpeechSynthesis](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesis), [the audio element](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/audio)
 - React: [useSyncExternalStore](https://react.dev/reference/react/useSyncExternalStore)
+- Next.js: [Layouts and pages](https://nextjs.org/docs/app/getting-started/layouts-and-pages) and [Preserving UI state](https://nextjs.org/docs/app/guides/preserving-ui-state)
 - Vercel: [Blob usage and pricing](https://vercel.com/docs/vercel-blob/usage-and-pricing)
 - [ffmpeg: MP4 muxer options](https://ffmpeg.org/ffmpeg-formats.html#mov_002c-mp4_002c-ismv) and [ffprobe](https://ffmpeg.org/ffprobe.html)
 - [NotebookLM](https://notebooklm.google.com)

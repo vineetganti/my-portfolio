@@ -22,6 +22,11 @@
     },
     {
       "from": "parsePost",
+      "to": "/podcasts",
+      "type": "uri"
+    },
+    {
+      "from": "parsePost",
       "to": "post page",
       "type": "uri"
     }

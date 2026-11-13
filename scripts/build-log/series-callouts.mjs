@@ -6,7 +6,7 @@ import path from "node:path";
 const POSTS = [
   ["site-architecture", "The architecture", "files in, static pages out, and the few parts that run in the browser."],
   ["site-sections-and-series", "Sections, series and URLs", "shelves, reading orders, redirects and image folders."],
-  ["site-audio", "Listen to this post", "a browser voice for every post and AI podcast versions for some."],
+  ["site-audio", "Listen to this post", "a browser voice on every post, and AI podcasts on their own pages."],
   ["site-notes-and-feeds", "Nuggets and feeds", "short notes, one list for three pages, and RSS."],
   ["site-diagrams-that-move", "Diagrams that move", "inlined SVGs, theme tokens, message-flow animation and live charts."],
   ["site-generated-content", "Content generated from real runs", "the DuckDB SQL bank and the database recording harness."],

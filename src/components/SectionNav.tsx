@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Podcast } from "lucide-react";
 import { getAllPosts } from "@/lib/blog";
 import { SECTIONS } from "@/lib/sections";
 
@@ -8,6 +9,7 @@ const chip =
 /** The row of section links shown above the post list. `active` is a section slug, or undefined for "All". */
 export default function SectionNav({ active }: { active?: string }) {
   const posts = getAllPosts();
+  const podcastCount = posts.filter((p) => p.audioSrc).length;
 
   const items = [
     { href: "/blog", label: "All", count: posts.length, key: undefined as string | undefined },
@@ -39,6 +41,16 @@ export default function SectionNav({ active }: { active?: string }) {
           </Link>
         );
       })}
+      {podcastCount > 0 && (
+        <Link
+          href="/podcasts"
+          className={`${chip} border-border bg-card text-ink-2 hover:border-accent hover:text-ink`}
+        >
+          <Podcast size={14} aria-hidden="true" />
+          Podcasts
+          <span className="text-xs font-bold text-ink-muted">{podcastCount}</span>
+        </Link>
+      )}
     </nav>
   );
 }

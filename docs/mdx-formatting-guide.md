@@ -440,10 +440,10 @@ node scripts/db-lab/series-callouts.mjs                    # refresh the series 
 Recordings are kept out of git and served from Vercel Blob. To attach one to a post:
 
 1. Save the file as `<post-slug>.m4a` in `public/audio/` (git-ignored), for example `public/audio/hello-agent.m4a`. Shrink it first: mono AAC at 64 kbps with fast-start is plenty for speech (`ffmpeg -i in.m4a -ac 1 -c:a aac -b:a 64k -movflags +faststart out.m4a`).
-2. Run `node --env-file=.env.local scripts/upload-audio.mjs`. It uploads the files and adds the slug to `content/audio.json`. It needs `BLOB_READ_WRITE_TOKEN` in `.env.local`.
-3. Make sure `AUDIO_BASE_URL` is set in Vercel (the script prints the value). Then commit `content/audio.json` and push.
+2. Run `node --env-file=.env.local scripts/upload-audio.mjs`. It uploads the files, adds the slug to `content/audio.json`, and measures each recording's length into `content/audio-durations.json` (needs `ffprobe`, which comes with FFmpeg). It needs `BLOB_READ_WRITE_TOKEN` in `.env.local`. To refresh only the lengths, run `node scripts/audio-durations.mjs`.
+3. Make sure `AUDIO_BASE_URL` is set in Vercel (the script prints the value). Then commit `content/audio.json` and `content/audio-durations.json` and push.
 
-A post listed in `content/audio.json` shows a "Listen to AI podcast version" button in place of the text-to-speech player. To point one post at a different file, set `audio: https://...` (or a `/path`) in its frontmatter. With `AUDIO_BASE_URL` unset, files are read from `public/audio/`, which is how local development works.
+A post listed in `content/audio.json` keeps its **Listen to this post** (browser voice) button and also gets a line under it, "Prefer two voices? Listen to the AI podcast", linking to its episode at `/podcasts/<slug>`. The recordings are listed at `/podcasts`, grouped by series, and linked from a **Podcasts** chip next to the section chips on `/blog`. The two players are on different pages on purpose: they draw the same bar at the bottom of the screen. To point one post at a different file, set `audio: https://...` (or a `/path`) in its frontmatter. With `AUDIO_BASE_URL` unset, files are read from `public/audio/`, which is how local development works.
 
 ## 9. Blockquotes
 

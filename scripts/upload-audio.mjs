@@ -44,4 +44,12 @@ for (const file of files) {
 
 const sorted = Object.fromEntries(Object.entries(manifest).sort(([a], [b]) => a.localeCompare(b)));
 fs.writeFileSync(manifestPath, JSON.stringify(sorted, null, 2) + "\n");
+try {
+  // Episode lengths for the Podcasts pages; needs ffprobe, so a missing one only skips this step.
+  const { writeDurations } = await import("./audio-durations.mjs");
+  writeDurations(dir);
+  console.log("Updated content/audio-durations.json.");
+} catch {
+  console.warn("Could not measure lengths (is ffprobe installed?). Run node scripts/audio-durations.mjs later.");
+}
 console.log(`\nUpdated ${path.relative(process.cwd(), manifestPath)}.\nSet this in Vercel (Production and Preview) and in .env.local:\n  AUDIO_BASE_URL=${baseUrl}`);
