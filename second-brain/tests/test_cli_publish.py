@@ -85,3 +85,14 @@ def test_health_needs_a_storage_address(env):
     with pytest.raises(SystemExit) as exc:
         env.nb("health")
     assert "SECOND_BRAIN_BASE_URL" in str(exc.value)
+
+
+def test_signed_files_use_unix_line_endings_on_every_os(env):
+    """Regression: on Windows Python turned "\n" into "\r\n", the signature covered the CRLF bytes, and the same files failed
+    verification on Linux after git normalised them. The published bytes must be identical everywhere."""
+    env.nb("publish", "--days", "3650")
+    for name in PUBLIC_FILES:
+        for path in (env.out / name, env.out / (name + ".sig")):
+            assert b"\r" not in path.read_bytes(), f"{path.name} contains a carriage return"
+    assert b"\r" not in (env.keys / sign.PUBLIC_RAW).read_bytes()
+    assert all(sign.verify_file(env.out / n, env.keys) for n in PUBLIC_FILES)

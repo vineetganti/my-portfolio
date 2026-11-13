@@ -112,10 +112,16 @@ def write_public_feed(items: list[DigestItem], out_dir: Path, site: str = SITE, 
     """Write the public files; returns how many daily items were written. Good reads files are written when `shelf` is given.
     `status.json` is always written; pass enabled=False to pause the page."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "status.json").write_text(json.dumps(to_status(enabled, note, now), indent=1, ensure_ascii=False), encoding="utf-8")
-    (out_dir / "feed.json").write_text(json.dumps(to_json_feed(items, site, now), indent=1, ensure_ascii=False), encoding="utf-8")
-    (out_dir / "feed.xml").write_text(to_rss(items, site), encoding="utf-8")
+
+    def write(name: str, text: str) -> None:
+        # newline="\n": Python on Windows would otherwise turn every "\n" into "\r\n". These bytes are signed, so they must be the
+        # same bytes on every operating system (a signature made over CRLF fails once git or another OS changes the line endings).
+        (out_dir / name).write_text(text, encoding="utf-8", newline="\n")
+
+    write("status.json", json.dumps(to_status(enabled, note, now), indent=1, ensure_ascii=False))
+    write("feed.json", json.dumps(to_json_feed(items, site, now), indent=1, ensure_ascii=False))
+    write("feed.xml", to_rss(items, site))
     if shelf is not None:
-        (out_dir / "good-reads.json").write_text(json.dumps(to_good_reads_json(shelf, site, now), indent=1, ensure_ascii=False), encoding="utf-8")
-        (out_dir / "good-reads.xml").write_text(to_good_reads_rss(shelf, site, now), encoding="utf-8")
+        write("good-reads.json", json.dumps(to_good_reads_json(shelf, site, now), indent=1, ensure_ascii=False))
+        write("good-reads.xml", to_good_reads_rss(shelf, site, now))
     return len(public_items(items))

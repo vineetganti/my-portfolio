@@ -29,7 +29,7 @@ def generate_keys(key_dir: Path | None = None, force: bool = False) -> Path:
     pub = key.public_key()
     (key_dir / PUBLIC).write_bytes(pub.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
     raw = pub.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    (key_dir / PUBLIC_RAW).write_text(base64.b64encode(raw).decode() + "\n", encoding="ascii")
+    (key_dir / PUBLIC_RAW).write_text(base64.b64encode(raw).decode() + "\n", encoding="ascii", newline="\n")
     return key_dir
 
 
@@ -37,7 +37,7 @@ def sign_file(path: Path, key_dir: Path | None = None) -> Path:
     key_dir = key_dir or KEY_DIR
     key = serialization.load_pem_private_key((key_dir / PRIVATE).read_bytes(), password=None)
     sig_path = path.with_name(path.name + ".sig")
-    sig_path.write_text(base64.b64encode(key.sign(path.read_bytes())).decode() + "\n", encoding="ascii")
+    sig_path.write_text(base64.b64encode(key.sign(path.read_bytes())).decode() + "\n", encoding="ascii", newline="\n")
     return sig_path
 
 

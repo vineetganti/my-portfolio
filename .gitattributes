@@ -1,0 +1,3 @@
+# The Second brain test fixtures are SIGNED files. A signature covers the exact bytes, so git must never convert their line
+# endings (core.autocrlf on Windows would otherwise change them on checkout or commit, and the signature would stop verifying).
+scripts/fixtures/second-brain/** -text
