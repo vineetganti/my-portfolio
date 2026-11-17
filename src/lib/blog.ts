@@ -90,13 +90,30 @@ const AUDIO_MANIFEST = path.join(process.cwd(), "content/audio.json");
  */
 const AUDIO_BASE_URL = (process.env.AUDIO_BASE_URL || "/audio").replace(/\/+$/, "");
 
-/** Slug to file name for every post that has a recording, from `content/audio.json`. */
-function readAudioManifest(): Record<string, string> {
+/** Identifies a file's current contents cheaply: a changed or missing file gives a different value. */
+function fileStamp(file: string): string {
   try {
-    return JSON.parse(fs.readFileSync(AUDIO_MANIFEST, "utf-8"));
+    const st = fs.statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
   } catch {
-    return {};
+    return "missing";
   }
+}
+
+let manifestCache: { stamp: string; value: Record<string, string> } | null = null;
+
+/** Slug to file name for every post that has a recording, from `content/audio.json`. Re-read only when the file changes. */
+function readAudioManifest(): Record<string, string> {
+  const stamp = fileStamp(AUDIO_MANIFEST);
+  if (manifestCache?.stamp === stamp) return manifestCache.value;
+  let value: Record<string, string> = {};
+  try {
+    value = JSON.parse(fs.readFileSync(AUDIO_MANIFEST, "utf-8"));
+  } catch {
+    // no manifest, or one that doesn't parse: no recordings
+  }
+  manifestCache = { stamp, value };
+  return value;
 }
 
 /** A recording named in frontmatter (`/path` or `https://` URL), else the one listed for this slug in the manifest. */
@@ -128,21 +145,31 @@ function parsePost(slug: string, fileContent: string): BlogPost {
   };
 }
 
+let postsCache: { stamp: string; posts: BlogPost[] } | null = null;
+
+/**
+ * Every post, newest first. One pass parses all of them (about 0.3 s), and a single page can ask for the list a dozen times
+ * (the section nav, the post list, one call per series card), so the result is kept until a post, or the audio manifest,
+ * changes on disk. Without this, the blog's list pages took over 60 s each on a one-worker Vercel build and failed it.
+ */
 export function getAllPosts(): BlogPost[] {
   if (!fs.existsSync(BLOG_DIR)) return [];
 
-  const files = fs.readdirSync(BLOG_DIR).filter((f) => f.endsWith(".mdx"));
+  const files = fs.readdirSync(BLOG_DIR).filter((f) => f.endsWith(".mdx")).sort();
+  const stamp = [fileStamp(AUDIO_MANIFEST), ...files.map((f) => `${f}:${fileStamp(path.join(BLOG_DIR, f))}`)].join("|");
+  if (postsCache?.stamp === stamp) return [...postsCache.posts];
 
-  const posts = files.map((filename) =>
-    parsePost(
-      filename.replace(/\.mdx$/, ""),
-      fs.readFileSync(path.join(BLOG_DIR, filename), "utf-8")
+  const posts = files
+    .map((filename) =>
+      parsePost(
+        filename.replace(/\.mdx$/, ""),
+        fs.readFileSync(path.join(BLOG_DIR, filename), "utf-8")
+      )
     )
-  );
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  return posts.sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-  );
+  postsCache = { stamp, posts };
+  return [...posts];
 }
 
 export function getPostBySlug(slug: string): BlogPost | undefined {
