@@ -13,7 +13,7 @@ Update 2026-11-13: `nb publish` now also writes a Good reads shelf and signs eve
 | Where | `nb brief`, a page on `localhost:7860` on your machine | a new section of vineetganti.com |
 | Who | only you | anyone (or only you, see decision 1 below) |
 | Can do | approve, skip, mark top learning, mark "not a vendor announcement", tag, choose what is public | read, follow links, subscribe by RSS |
-| Holds | your judgments, notes, scores, flags | only what you marked "Publish on my site" |
+| Holds | your judgments, notes, scores, flags | only what you approved or marked "Publish on my site" |
 
 The curator is never deployed: it carries controls and opinions the public site must not have.
 
@@ -22,7 +22,7 @@ flowchart LR
   A[Daily run<br/>nb daily] --> B[(SQLite<br/>items, labels)]
   B --> C[Curator<br/>nb brief, local only]
   C -->|labels| B
-  B --> D[nb publish<br/>whitelist, items marked public only]
+  B --> D[nb publish<br/>whitelist, approved or marked public only]
   D --> E[feed.json + feed.xml<br/>local files]
   E -.->|later, after your OK| F[Vercel Blob<br/>already used by the site]
   F -.-> G[/reading page + RSS<br/>in my-portfolio/]
@@ -49,7 +49,7 @@ Strict whitelist, enforced and tested in `publish/feed.py`:
 Not touched yet: the `my-portfolio` repo.
 
 ## Decisions
-**Answered 2026-11-02:** (1) a **curated public section**: only items you mark "Publish on my site" are public, your full daily reading stays local; (2) the path is **`/reading`**. **Still open:** (3) attribution wording on the page. The original options, for the record:
+**Answered 2026-11-02:** (1) a **curated public section**: only items you chose are public (changed 2026-11-17: approved items count too, not only ones ticked "Publish on my site"), your full daily reading stays local; (2) the path is **`/reading`**. **Still open:** (3) attribution wording on the page. The original options, for the record:
 1. **Public or private reading page?** You want this as your primary daily reading. Two ways to do it:
    - **Curated public section** (recommended): only what you mark "Publish on my site" is public; your full daily reading stays in the local digest or curator page.
    - **Everything on the site, behind a login or a secret address:** convenient on any device, but you would need an access layer on the site (a middleware check, a password or a token), and it must stay private because it republishes summaries of many third-party articles.

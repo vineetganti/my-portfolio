@@ -1729,7 +1729,65 @@ body {
   text-transform: lowercase;
 }
 
+/* A fence's meta string can add a title (file and lines, or the command) and mark the block as output.
+   See lib/rehypeCodeMeta.ts and section 6 of docs/mdx-formatting-guide.md. */
+.code-block .code-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.code-block .code-kind {
+  flex: none;
+}
+
+.code-block .code-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--code-ink);
+  font-weight: 500;
+  text-transform: none;
+}
+
+/* On phones a cut-off title would hide the line range, so it wraps instead. */
+@media (max-width: 640px) {
+  .code-block .code-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+  }
+}
+
+.code-block--output {
+  background: color-mix(in srgb, var(--code-bg) 78%, #000);
+}
+
+.code-block--output .code-kind {
+  color: #a9cfa0;
+}
+
+/* Output straight after the code that printed it reads as one panel. */
+.code-block:has(+ .code-block--output) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.code-block + .code-block--output {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.code-block + .code-block--output .code-bar {
+  border-top: 1px dashed rgba(255, 255, 255, 0.14);
+}
+
 .code-block .copy-btn {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;

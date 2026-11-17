@@ -1,0 +1,1030 @@
+---
+title: "A bug-fixing agent: run, crash, fix, repeat"
+description: "A LangGraph agent that runs a Python function, asks an LLM to rewrite it when it crashes, and runs the new version, at most three times. I ported it to Groq, broke it, and fixed what broke. The failures: a model Groq had already shut down, a stray bracket that beat the retry loop, a brake that saves 5,000 calls, two Pythons on one machine, and a diff that disappeared in dark mode."
+date: "2026-11-17"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 9
+tags: ["Agentic AI", "LangGraph", "LangChain", "Groq", "Gradio", "Claude Code"]
+---
+
+You give this agent a Python function and the inputs that make it crash. It runs the function, sees the crash, and asks an LLM to rewrite the function so it handles that error. Then it loads the rewrite, runs it again, and stops when it works or after three tries. The design is two nodes and a router, which is about the smallest program that still behaves like a coding agent.
+
+The agent, its code and the walkthrough this post leans on are by **Shivank Agarwal** ([Future with Shivank](https://www.linkedin.com/in/shivankagrawal/)), from his AI Bootcamp at **Scaler Academy**, the course this whole series follows. All credit for the design, the code and the teaching material goes to them. Shivank's explainer covers an OpenAI version. I ported it back to Groq, packaged it, and published my copy at [github.com/vineetganti/agentic-bug-fixing](https://github.com/vineetganti/agentic-bug-fixing). The repo's LICENSE file is a credit notice for Future with Shivank and Scaler. It isn't an open-source licence.
+
+As in the rest of the series, most of what I learned came from things going wrong, and this post keeps every one of them. The bugs I found are now fixed in the repo, and each one is shown before and after.
+
+<Callout type="note" title="TL;DR">
+
+- **What it does:** a LangGraph graph with two nodes, `code_execution_node` (run it) and `code_fix_node` (ask the LLM for a rewrite and load it). A router sends a crash to the fix node and a success to the end, and it stops after `MAX_FIX_ATTEMPTS = 3`.
+- **Bug 1, the model:** the course's model, `llama-3.3-70b-versatile`, returned a **404**. Groq had shut it down on 16 August 2026. Claude Code listed the models my key could use and switched to `openai/gpt-oss-120b`.
+- **Bug 2, the stray bracket:** about **3 replies in 10** ended the fix with an extra `)`, which is a `SyntaxError`. The retry sent the *same* prompt, so **4 of 13 retries failed again**, and one run gave up after three tries. When I sent the load error back with the next request, **6 of 6 retries worked**. That change is now in the repo, and in 24 more runs **4 of 4 retries loaded** and none gave up.
+- **The brake, measured:** without it, a model that keeps failing loops **5,003 times** before LangGraph stops it. LangGraph's default limit is now 10,007 steps.
+- **Smaller bugs:** when the agent gave up, the demo said "(no fix was needed)" and the app showed a green "No errors detected". The project's `.venv` didn't have the Groq client. And in dark mode, the app's diff lost every line except the added ones. All of these are fixed in the repo now.
+
+</Callout>
+
+<Callout type="info" title="This is part of a series">
+
+1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
+3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
+4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+6. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+7. [Evaluating, observing and governing agents](/blog/agent-evaluation): traces, LLM judges, guardrails and policy.
+8. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+9. **A bug-fixing agent** (this post): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+
+</Callout>
+
+<Callout type="note" title="How this was run, and how to read the labels">
+
+On Windows 11, with Python 3.14.8, `langgraph` 1.2.22, `langchain-core` 1.8.1, `langchain-groq` 1.2.0 and Gradio 6.31, against Groq's `openai/gpt-oss-120b`. There are three sources, labelled throughout:
+
+- **📜 log:** the Claude Code session where I asked for the reorganisation, the switch to Groq and the setup check (17 November 2026). Every command and output marked 📜 is copied from it.
+- **✅ re-run:** things I ran again the same evening for this post, to find causes the log didn't capture. That came to 81 calls to Groq, plus a few runs with a stand-in model that cost nothing, all against the repo as first published, with my scripts kept outside it. I then fixed the bugs in the repo ([Part 6](#part-6-what-i-fixed-in-the-repo)) and checked the fixes with about 30 more calls.
+- **📘 docs or explainer:** taken from official documentation or from Shivank's explainer, and not run by me.
+
+The API key never appears. Long outputs are trimmed, and I say where.
+
+</Callout>
+
+## The goal: an agent that repairs crashing functions
+
+Here's the whole idea in one function:
+
+```python title="the running example"
+def divide_two_numbers(a, b):
+    return a / b          # divide_two_numbers(10, 0) -> ZeroDivisionError
+```
+
+The agent runs it with `[10, 0]` and it crashes with `ZeroDivisionError: division by zero`. The agent then sends the model the code, the arguments and the error, and asks for a version that "handles this error gracefully by returning an error message (a string) instead of crashing". It loads the rewrite, runs it again, and gets `'Error: division by zero'`. If the rewrite still crashes, it goes round again with the newest code, at most three times.
+
+<Callout type="analogy" title="The mechanic's test drive (Shivank's analogy)">
+
+A mechanic test-drives the car (**run**). If there's a strange noise, they fix it (**ask the LLM**) and drive again. After three failed attempts they stop and call the customer, instead of working on it for ever. Fix, re-test, stop after N tries: that loop is the heart of most coding agents.
+
+</Callout>
+
+![The agent's graph. START leads to code_execution_node, which runs the function and records the result or the error. The error_router then decides: if the run worked, or three fix attempts have been used, it goes to END. If the function crashed, it goes to code_fix_node, which asks the LLM for a rewrite and loads the new code, and an edge always leads back to code_execution_node to run the new version. Every node reads one shared State and returns only the fields it changed](/images/ai-llms/agentic-ai/agentic-bug-fixing/agent-loop.svg)
+
+Shivank's explainer maps the four parts of any agent onto this code. Here's his table, with my Groq model in it:
+
+| Agent part | In plain words | In this code |
+| --- | --- | --- |
+| **Brain** | Decides what to write | `openai/gpt-oss-120b` on Groq, through `ChatGroq`, used only in `code_fix_node` |
+| **Hands** | Acts in the world | Calling the function, and loading new code with `exec()` |
+| **Memory** | Remembers what happened so far | The `State` object |
+| **Loop and brakes** | Keeps going until done, but not for ever | LangGraph edges, `error_router` and `MAX_FIX_ATTEMPTS` |
+
+![What talks to what. You start the agent from a terminal or open the Gradio app in a browser. Both call the Agent, a LangGraph graph with its State, in one Python process. Only the fix step goes over the network: it sends a prompt to the Groq API, model openai/gpt-oss-120b, using the GROQ_API_KEY loaded from the git-ignored .env file, and gets code back as text. The Agent then runs that text with exec() in the same process, which is the trust boundary](/images/ai-llms/agentic-ai/agentic-bug-fixing/system-map.svg)
+
+### Agent or workflow?
+
+Anthropic's [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) separates two kinds of system. **Workflows** are "systems where LLMs and tools are orchestrated through predefined code paths". **Agents** are systems where "LLMs dynamically direct their own processes and tool usage".
+
+By those definitions, this program is a **workflow**. The model never picks the next step: the graph and the router do. The model only decides what code to write. The shape it follows is the one Anthropic calls **evaluator-optimizer**, where "one LLM call generates a response while another provides evaluation and feedback in a loop". Here the evaluator isn't an LLM at all. It's the Python interpreter, which either runs the code or raises an exception. That's a cheap, strict and honest judge, and it's why the same article notes that "code solutions are verifiable through automated tests".
+
+## Where the code came from
+
+![Where the code came from, in three versions. The course original from Scaler Academy used Groq with llama-3.3-70b-versatile and an old langchain.schema import. Shivank Agarwal of Future with Shivank rewrote it for OpenAI's gpt-5-mini with 14 changes and wrote the explainer. My port moved it back to Groq on openai/gpt-oss-120b, as a package with a setup check, and published it on GitHub. I have the last two versions; the first is known only from the explainer's change table](/images/ai-llms/agentic-ai/agentic-bug-fixing/three-versions.svg)
+
+There are three versions of this program, and I only have two of them. The course original ran on Groq. Shivank rewrote it for OpenAI, kept the same design and the same graph, and listed every change in his explainer. I've reproduced his table here, because each row is a small lesson in agent hygiene. It's 📘 from the explainer, since the original file isn't in my log. Where I could check a row myself, the last column says so.
+
+| # | Original | Shivank's version | Why | Checked |
+| --- | --- | --- | --- | --- |
+| 1 | `ChatGroq(model="llama-3.3-70b-versatile")` | `ChatOpenAI(model="gpt-5-mini")` | The switch to OpenAI. The model is set once, in `MODEL_NAME` | I went back to Groq: see bug 1 |
+| 2 | `from langchain.schema import HumanMessage` | Removed; the prompt is piped into the model | "That import no longer exists in LangChain 1.x" | ✅ On `langchain` 1.5.0: `ModuleNotFoundError: No module named 'langchain.schema'` |
+| 3 | No limit on fix attempts | `attempts` plus `MAX_FIX_ATTEMPTS = 3` | A fix that keeps failing loops until LangGraph's own limit | ✅ 5,003 attempts without it, below |
+| 4 | The fix node ran the new function itself | The fix node only loads it; the loop re-runs it | A second crash inside the fix node killed the program | 📘 Drawn below |
+| 5 | Every retry sent the original code | Sends the latest version | So attempt 2 builds on attempt 1 | ✅ But a fix that wouldn't load was dropped: bug 2, now fixed |
+| 6 | The reply was `exec`'d as it came | `clean_llm_code()` strips fences and indentation | Models add markdown fences even when told not to | ✅ On a fenced, chatty reply |
+| 7 | `inspect.getsource()` used directly | Wrapped in `textwrap.dedent()` | A nested function's source comes back indented | ✅ `IndentationError` without it |
+| 8 | Error text was `str(e)` | `f"{type(e).__name__}: {e}"` | For a missing coupon, `str(e)` is just `'INVALID'` | ✅ The model got `KeyError: 'INVALID'` |
+| 9 | The prompt had code and error | It also has the arguments | The model can see which input broke the code | Read in the code |
+| 10 | The function ran again after the graph (twice more) | The result is kept in `state.result` | No wasted re-runs, no surprise side effects | Read in the code |
+| 11 | The UI took the "first callable" | `ast` finds the first `def` | More reliable with imports or classes in the paste | Read in the code |
+| 12 | The script ended on an uncaught crash | Wrapped in `try`/`except`; prints both results | The original always ended with a traceback | ✅ Full demo output below |
+| 13 | The app launch was commented out | A `--ui` flag | Run the demo or the app without editing code | ✅ Ran both |
+| 14 | API errors crashed the UI | Caught and shown in red | A wrong key shows a message, not a stack trace | 📘 Not triggered |
+
+Row 2 is worth a sentence. The LangChain v1 release notes say "Legacy functionality has moved to langchain-classic to keep the core packages lean and focused" ([LangChain v1](https://docs.langchain.com/oss/python/releases/langchain-v1)). In a scratch environment with `langchain` 1.5.0, the old import fails and the new home works:
+
+```text output title="✅ re-run: the old import against LangChain 1.5.0"
+ModuleNotFoundError: No module named 'langchain.schema'
+langchain_core.messages.HumanMessage ok
+```
+
+## Part 1: Setup, from the log
+
+My only instruction for the first request was: *"Check if i can run python code in this project and organize into a better folder structure for publishing on Github."* The folder held Shivank's OpenAI file, his HTML explainer, and the course's setup guide, `check_setup.py`, `requirements.txt` and `env_template.txt`.
+
+### What Claude Code found
+
+[Claude Code](https://code.claude.com/docs/en/overview) "is an agentic coding tool that reads your codebase, edits files, runs commands, and integrates with your development tools." Its first move was to look before touching anything:
+
+```bash title="📜 Claude Code ran (Git Bash, trimmed)"
+ls -la && find . -type f ... ; python --version; py --version; pip --version
+```
+
+```text output
+Python 3.14.8
+Python 3.14.2
+pip 26.2.1 from C:\Python314\Lib\site-packages\pip (python 3.14)
+```
+
+The first line already hinted at a later bug. `python` and the `py` launcher were **different builds**, 3.14.8 and 3.14.2, so this machine had more than one Python. Claude Code then ran the course's own setup check, which tests the whole course rather than this project:
+
+```text output title="📜 python check_setup.py (the course-wide version, trimmed)"
+Python 3.14.8
+
+1) Libraries
+  [OK]   openai
+  [FAIL] langchain_core: No module named 'langchain_core'
+  [FAIL] langchain_openai: No module named 'langchain_openai'
+  …                                   (8 more FAIL lines, 3 more OK)
+  [OK]   dotenv
+
+Install the missing libraries with:  pip install -r 00_Setup/requirements.txt
+```
+
+Ten of the fifteen libraries were missing. Most of them (Chroma, sentence-transformers, gensim) belong to other modules of the course and aren't needed here. A narrower check asked only about what this file imports:
+
+```text output title="📜 import check, then py_compile"
+OK dotenv
+MISSING langchain_core
+MISSING langchain_openai
+MISSING langgraph
+OK pydantic
+OK gradio
+OK openai
+syntax-ok
+```
+
+Two findings mattered. The file compiles, so the code itself was fine. And the course's `requirements.txt` was written for a RAG module: it listed `langchain-text-splitters`, `chromadb` and `gensim`, but **not `langgraph`**, which this program can't run without.
+
+### Reorganising it for GitHub
+
+Claude Code moved the files into a package and wrote the supporting files in one command:
+
+```text title="📜 before"
+agentic_bug_fixing_openai.py
+agentic_bug_fixing_code_explainer.html
+Setup_Guide_for_Learners.html
+check_setup.py  env_template.txt  requirements.txt
+```
+
+```text title="📜 after"
+.env.example  .gitignore  README.md  requirements.txt
+agentic_bug_fixing/   __init__.py, __main__.py, agent.py
+docs/                 code_explainer.html, setup_guide.html
+scripts/              check_setup.py
+```
+
+- **An entry point.** The `if __name__ == "__main__":` block became a `main()` function, and `__main__.py` calls it. That's what makes `python -m agentic_bug_fixing` work, with `--ui` for the app.
+- **Requirements trimmed** to what the code imports: `langchain-core`, the provider's client, `langgraph`, `pydantic`, `gradio` and `python-dotenv`.
+- **A `.gitignore`** that excludes `.env` (the key) and `.claude/settings.local.json`. Claude Code's docs describe that file as "Personal overrides for one project", and say "Claude Code keeps it out of git when it creates the file" ([settings](https://code.claude.com/docs/en/settings)). Mine held three allow rules written as `Tool(specifier)`, for example `Bash(python check_setup.py)` ([permissions](https://code.claude.com/docs/en/permissions)). Those rules are commands I'd let it run without asking.
+
+It also flagged two things for me before publishing. The course-wide `check_setup.py` wouldn't pass for this project, and there was no licence.
+
+### Switching to Groq, and an empty `.env`
+
+My second request was: *"I pasted a groq API key. Change the script wherever necessary."* The switch was a handful of text replacements in `agent.py`, plus new requirements and a new `.env.example`. These are the lines that changed:
+
+```diff title="📜 agentic_bug_fixing/agent.py, the provider lines"
+-from langchain_openai import ChatOpenAI                # <-- the OpenAI chat model (was ChatGroq)
++from langchain_groq import ChatGroq                    # the Groq chat model
+-MODEL_NAME = "gpt-5-mini"   # the OpenAI model that writes the fixes
++MODEL_NAME = "llama-3.3-70b-versatile"   # the Groq model that writes the fixes
+-        self.llm = ChatOpenAI(model=model_name)   # <-- the swap: was ChatGroq(model=...)
++        self.llm = ChatGroq(model=model_name)
+```
+
+One of the replacements was a blanket `s.replace("GPT", "the LLM")` over the whole file. That's why one docstring in the repo now starts with a lowercase "the LLM sometimes wraps code…". It's harmless, but it shows the cost of search-and-replace edits.
+
+Then it checked the module imported and that the key was there:
+
+```text output title="📜 import check, then: grep -c GROQ_API_KEY .env; wc -c .env"
+import ok llama-3.3-70b-versatile
+0
+0 .env
+```
+
+The `.env` file was **0 bytes**. I had pasted the key into the editor but hadn't saved the file. Claude Code said so instead of carrying on, which matters because the next step would have failed with a misleading "key not found". `load_dotenv()` can only read what's on disk.
+
+### Bug 1: a model that no longer exists
+
+My third request: *"Rewrite check_setup.py for this project and for LISENCE, just credit Future with Shivank and Scaler."* The new `scripts/check_setup.py` checks Python 3.10 or newer and the six libraries, then loads `GROQ_API_KEY` and makes one tiny test call. That test call is what caught the problem:
+
+```text output title="📜 python scripts/check_setup.py"
+2) Groq API key
+  [OK]   GROQ_API_KEY is set
+  [FAIL] Groq call failed: Error code: 404 - {'error': {'message': 'The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.', 'type': 'invalid_request_error', 'code': 'model_not_found'}}
+```
+
+Read it part by part. **`Error code: 404`** is the HTTP status: the URL was fine, but the thing asked for wasn't there. **`'code': 'model_not_found'`** is Groq's own error code, which is more specific than the 404. **"does not exist or you do not have access to it"** covers two causes with one message, and the check can't tell which.
+
+Claude Code didn't guess a replacement. It asked the API which models this key can use. Groq's API is "mostly compatible with OpenAI's client libraries" ([OpenAI compatibility](https://console.groq.com/docs/openai)), so the list is at the same path OpenAI uses, `GET https://api.groq.com/openai/v1/models` ([API reference](https://console.groq.com/docs/api-reference)):
+
+```python title="📜 Claude Code ran (the key comes from .env and is never printed)"
+r = urllib.request.Request("https://api.groq.com/openai/v1/models",
+                           headers={"Authorization": "Bearer " + os.environ["GROQ_API_KEY"], "User-Agent": "python"})
+print([m["id"] for m in json.load(urllib.request.urlopen(r))["data"]])
+```
+
+```text output
+['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'meta-llama/llama-prompt-guard-2-86m', 'whisper-large-v3', 'whisper-large-v3-turbo', 'openai/gpt-oss-safeguard-20b', 'meta-llama/llama-prompt-guard-2-22m', 'canopylabs/orpheus-v1-english', 'allam-2-7b', 'openai/gpt-oss-20b', 'canopylabs/orpheus-arabic-saudi']
+```
+
+There's no Llama 3.3 in that list. The cause became clear later, from Groq's [deprecations page](https://console.groq.com/docs/deprecations): `llama-3.3-70b-versatile` was shut down on **16 August 2026**, three months before my run, and the recommended replacements are "openai/gpt-oss-120b or qwen/qwen3.6-27b". The course code named a model that had already gone. One more detail, flagged as a contradiction: on the same day, Groq's [models page](https://console.groq.com/docs/models) still listed `llama-3.3-70b-versatile` under production models. The API and the deprecations page were right.
+
+![Before and after for the model error. Before: MODEL_NAME was llama-3.3-70b-versatile, the setup check's one test call came back 404 model_not_found, because Groq shut that model down on 16 August 2026. After: a GET to the models endpoint listed the models this key can use, MODEL_NAME became openai/gpt-oss-120b, which Groq names as a replacement, and the check's test call replied OK](/images/ai-llms/agentic-ai/agentic-bug-fixing/bug-model-404.svg)
+
+One `sed` changed the model name in both files, and the check passed:
+
+```text output title="📜 python scripts/check_setup.py, after the switch"
+2) Groq API key
+  [OK]   GROQ_API_KEY is set
+  [OK]   openai/gpt-oss-120b replied: 'OK'
+
+All good. Run:  python -m agentic_bug_fixing
+```
+
+### The first real run: two failures, then a fix
+
+In the same command, Claude Code ran the demo. It kept only the last 25 lines (`| tail -25`), so the first part of the output, where the original function is called directly, isn't in my log:
+
+```text output title="📜 python -m agentic_bug_fixing (last 25 lines only)"
+=== 2) The SAME call, through the bug-fixing agent ===
+[run]  divide_two_numbers(10, 0)
+[run]  crashed -> ZeroDivisionError: division by zero
+[fix]  attempt 1/3: asking openai/gpt-oss-120b to fix it
+[fix]  the new code could not be loaded (SyntaxError: unmatched ')' (<string>, line 5))
+[run]  divide_two_numbers(10, 0)
+[run]  crashed -> ZeroDivisionError: division by zero
+[fix]  attempt 2/3: asking openai/gpt-oss-120b to fix it
+[fix]  the new code could not be loaded (SyntaxError: unmatched ')' (<string>, line 5))
+[run]  divide_two_numbers(10, 0)
+[run]  crashed -> ZeroDivisionError: division by zero
+[fix]  attempt 3/3: asking openai/gpt-oss-120b to fix it
+[fix]  new version loaded, running it again
+[run]  divide_two_numbers(10, 0)
+[run]  ok -> 'Error: division by zero'
+
+--- Fixed code written by the LLM ---
+def divide_two_numbers(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return "Error: division by zero"
+
+--- Final answer ---
+'Error: division by zero'
+```
+
+It worked, but only on the last allowed attempt. Claude Code's summary said so plainly: "a slightly less lucky run could fail." The log doesn't show *why* attempts 1 and 2 failed, because the program never prints the model's raw reply. Finding that out is Part 4. First, the code.
+
+## Part 2: The code, step by step
+
+Everything is in one file, `agentic_bug_fixing/agent.py`, split into STEP 0–6 comments. Each block below is copied from the repo, with its line numbers, as it is after the fixes in Part 6, so you can follow along in an editor. Where a fix changed a block, I say what it was before.
+
+### Step 0: imports and settings
+
+```python title="agentic_bug_fixing/agent.py · lines 44–63 (trimmed)"
+import ast          # reads Python code as a tree, so we can find the "def" name
+import difflib      # makes a git-style "before vs after" diff
+import inspect      # gets the source code (text) of a Python function
+import textwrap     # removes extra indentation from code
+# … html, json, re, sys, typing
+
+from dotenv import load_dotenv                         # loads GROQ_API_KEY from the .env file
+from langchain_core.prompts import ChatPromptTemplate  # a prompt with {blanks} to fill
+from langchain_groq import ChatGroq                    # the Groq chat model
+from langgraph.graph import StateGraph, END            # builds the agent's flowchart
+from pydantic import BaseModel                         # defines the shape of our "State"
+
+load_dotenv()
+
+MODEL_NAME = "openai/gpt-oss-120b"   # the Groq model that writes the fixes
+MAX_FIX_ATTEMPTS = 3        # safety brake: never ask the LLM more than 3 times for one function
+```
+
+- The standard library does the plumbing. Only one line names a provider, `from langchain_groq import ChatGroq`, which is why switching providers took two changed lines.
+- `load_dotenv()` copies `.env` into environment variables, and `ChatGroq` reads `GROQ_API_KEY` from there ([ChatGroq](https://docs.langchain.com/oss/python/integrations/chat/groq)). The key is never written in the code.
+- `MAX_FIX_ATTEMPTS` is the brake. Part 4 measures what it's worth.
+
+### Step 1: the State, a shared job card
+
+```python title="agentic_bug_fixing/agent.py · lines 69–79"
+class State(BaseModel):
+    function: Callable              # the actual Python function object we will run
+    function_string: str            # the ORIGINAL source code, as text
+    arguments: list                 # inputs to call the function with, e.g. [10, 0]
+    error: bool = False             # did the last run crash?
+    error_description: str = ""     # the crash message, e.g. "ZeroDivisionError: division by zero"
+    new_function_string: str = ""   # the fixed code written by the LLM ("" = no fix needed)
+    attempts: int = 0               # how many times we have asked the LLM to fix it
+    load_error: str = ""            # why the LLM's last rewrite would not load, e.g. "SyntaxError: ..."
+    bad_reply: str = ""             # that rewrite, so the next request can show the LLM its mistake
+    result: Any = None              # what the function returned on its last good run
+```
+
+The State is everything the agent knows right now. It holds the function twice, on purpose. `function` is the object Python runs, and `function_string` is the text the model reads. `load_error` and `bad_reply` are new: they carry a rewrite that wouldn't load into the next request (bug 2). The comment on `new_function_string` says `""` means "no fix needed", which isn't true when the agent gives up, so the demo and the app now check `error` first (bug 3).
+
+LangGraph's docs describe how the State changes: "Nodes return partial updates. LangGraph applies those updates through each channel's reducer", and with no reducer, updates simply overwrite ([Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)). So a node returns a small dict of the fields it changed, never the whole State. A Pydantic model is allowed "when you need validation". The same page says to "Prefer `TypedDict` or `dataclass` for performance", but for a demo, getting a loud error on a typo like `state.erorr` is worth it.
+
+### Step 2: the prompt
+
+```python title="agentic_bug_fixing/agent.py · lines 86–98"
+# {feedback} stays empty unless the LLM's previous rewrite would not load (see code_fix_node).
+FIX_PROMPT = ChatPromptTemplate.from_template(
+    "You are fixing a Python function that crashed.\n\n"
+    "Function:\n{function_string}\n\n"
+    "It was called with these arguments: {arguments}\n"
+    "It raised this error: {error_description}\n\n"
+    "{feedback}"
+    "Rewrite the function so it handles this error gracefully by returning an "
+    "error message (a string) instead of crashing.\n"
+    "Rules:\n"
+    "- Use the exact same function name and parameters.\n"
+    "- Return only the function definition: no explanation, no markdown, no ``` fences."
+)
+```
+
+It's a fill-in-the-blanks letter. Shivank's teaching point holds: **the prompt is part of your code**. "Same name and parameters" matters because the code later looks the function up by name. "No markdown" is a request, not a guarantee, which is why Step 3 still strips fences. The fourth blank, `{feedback}`, is my fix for bug 2. In the explainer's version and in my log, the prompt had only three blanks, so nothing told the model what had happened on its *previous* attempt.
+
+### Step 3: turning LLM text into running code
+
+```python title="agentic_bug_fixing/agent.py · lines 104–111"
+def clean_llm_code(text: str) -> str:
+    """the LLM sometimes wraps code in ```python ... ``` even when told not to. Remove that."""
+    text = text.strip()
+    fenced = re.search(r"```(?:python|py)?[ \t]*\n(.*?)```", text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1)
+    # dedent: if the code arrives indented, exec() would fail with "unexpected indent"
+    return textwrap.dedent(text).strip()
+```
+
+If the reply contains a fenced block, keep only what's inside it. Then [`textwrap.dedent`](https://docs.python.org/3/library/textwrap.html#textwrap.dedent) will "Remove any common leading whitespace from every line in text." I fed it a chatty, fenced reply to check:
+
+```text output title="✅ re-run: clean_llm_code on a fenced reply"
+in:  'Sure! Here is the fix:\n```python\ndef f(x):\n    return x\n```\nHope this helps.'
+out: 'def f(x):\n    return x'
+```
+
+```python title="agentic_bug_fixing/agent.py · lines 114–135"
+def first_function_name(code: str) -> str:
+    tree = ast.parse(code)
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return node.name
+    raise ValueError("No function definition (def ...) found in the code.")
+
+
+def load_function_from_code(code: str, function_name: str | None = None) -> Callable:
+    namespace: dict = {}
+    exec(code, namespace)  # <-- runs the LLM-written code: see the SAFETY NOTE at the top
+    name = function_name or first_function_name(code)
+    function = namespace.get(name)
+    if not callable(function):
+        raise ValueError(f"The code does not define a function called '{name}'.")
+    return function
+```
+
+[`ast.parse`](https://docs.python.org/3/library/ast.html#ast.parse) reads code the way Python does, into "a tree of objects whose classes all inherit from ast.AST", without running it. That's a safe way to find the first `def`. `exec()` is the opposite: it **runs** the text. Running a `def` doesn't call the function. It creates it and stores it in the `namespace` dictionary, where the code picks it up by name. Python's docs put the risk bluntly: "This function executes arbitrary code. Calling it with untrusted user-supplied input will lead to security vulnerabilities" ([`exec`](https://docs.python.org/3/library/functions.html#exec)). The model's reply is exactly that kind of input. Every `SyntaxError` in this post was raised on this line.
+
+### Step 4: the agent, two nodes and a router
+
+```python title="agentic_bug_fixing/agent.py · lines 142–145"
+    def __init__(self, model_name: str = MODEL_NAME):
+        self.llm = ChatGroq(model=model_name)
+        self.fix_chain = FIX_PROMPT | self.llm     # "pipe" = fill the prompt, then send it to the LLM
+        self.graph = self.build_graph()
+```
+
+`FIX_PROMPT | self.llm` is LangChain's pipe: the filled-in prompt flows into the model, like a Unix pipe. I checked what it builds:
+
+```text output title="✅ re-run: type(agent.fix_chain), and its steps"
+fix_chain type: RunnableSequence -> ['ChatPromptTemplate', 'ChatGroq']
+graph type: CompiledStateGraph
+```
+
+**Node 1** runs the function and records what happened:
+
+```python title="agentic_bug_fixing/agent.py · lines 148–158"
+    def code_execution_node(self, state: State) -> dict:
+        print(f"[run]  {state.function.__name__}{tuple(state.arguments)}")
+        try:
+            result = state.function(*state.arguments)
+        except Exception as e:
+            # Keep the error TYPE too: "KeyError: 'INVALID'" tells the LLM far more than "'INVALID'"
+            description = f"{type(e).__name__}: {e}"
+            print(f"[run]  crashed -> {description}")
+            return {"error": True, "error_description": description}
+        print(f"[run]  ok -> {result!r}")
+        return {"error": False, "error_description": "", "result": result}
+```
+
+`*state.arguments` unpacks `[10, 0]` into `(10, 0)`. The node returns only the fields it changed. Because the `try`/`except` is here, a crash becomes *data in the State*, not an exception that ends the program.
+
+**Node 2** asks the model:
+
+```python title="agentic_bug_fixing/agent.py · lines 162–195"
+    def code_fix_node(self, state: State) -> dict:
+        attempt = state.attempts + 1
+        print(f"[fix]  attempt {attempt}/{MAX_FIX_ATTEMPTS}: asking {self.llm.model_name} to fix it")
+
+        # If an earlier fix still crashed, send the LATEST code, not the original one.
+        code_to_fix = state.new_function_string or state.function_string
+
+        # If the LLM's last rewrite would not even load, tell it why and show it what it sent.
+        # Without this, a retry sends the exact same prompt and can get the exact same mistake back.
+        feedback = ""
+        if state.load_error:
+            feedback = (f"Your previous rewrite could not be loaded by Python ({state.load_error}). "
+                        f"This is what you sent:\n{state.bad_reply}\n\n")
+
+        reply = self.fix_chain.invoke({
+            "function_string": code_to_fix,
+            "arguments": json.dumps(state.arguments, default=str),
+            "error_description": state.error_description,
+            "feedback": feedback,
+        })
+        new_code = clean_llm_code(reply.content)
+
+        try:
+            new_function = load_function_from_code(new_code, state.function.__name__)
+        except Exception as e:
+            # The LLM wrote code that doesn't even load. Count the attempt, keep the previous
+            # version, and remember the error and the reply so the next request can show them.
+            load_error = f"{type(e).__name__}: {e}"
+            print(f"[fix]  the new code could not be loaded ({load_error})")
+            return {"attempts": attempt, "load_error": load_error, "bad_reply": new_code}
+
+        print("[fix]  new version loaded, running it again")
+        return {"attempts": attempt, "function": new_function, "new_function_string": new_code,
+                "load_error": "", "bad_reply": ""}
+```
+
+`self.fix_chain.invoke(...)` is the only line that talks to the network. Look closely at the `except` branch. When a reply won't load, it saves the error and the broken code in the State, and the next request shows them to the model through `{feedback}`. Before the fix, that branch returned only `{"attempts": attempt}`: the broken reply and the `SyntaxError` were printed, then **thrown away**, and the next attempt rebuilt exactly the same prompt. Part 4 shows what that cost.
+
+**The router** decides, and changes nothing:
+
+```python title="agentic_bug_fixing/agent.py · lines 198–204"
+    def error_router(self, state: State) -> str:
+        if not state.error:
+            return END                                  # it worked, we're done
+        if state.attempts >= MAX_FIX_ATTEMPTS:
+            print(f"[stop] still failing after {state.attempts} fix attempts, giving up")
+            return END                                  # safety brake
+        return "code_fix_node"                          # crashed: go fix it
+```
+
+**Wiring:**
+
+```python title="agentic_bug_fixing/agent.py · lines 207–217"
+    def build_graph(self):
+        builder = StateGraph(State)
+        builder.add_node("code_execution_node", self.code_execution_node)
+        builder.add_node("code_fix_node", self.code_fix_node)
+
+        builder.set_entry_point("code_execution_node")                 # always start by running it
+        # then ask the router; naming where it can go lets get_graph().draw_mermaid() draw the loop
+        builder.add_conditional_edges("code_execution_node", self.error_router, ["code_fix_node", END])
+        builder.add_edge("code_fix_node", "code_execution_node")       # after a fix, run again
+
+        return builder.compile()
+```
+
+| Line | Meaning |
+| --- | --- |
+| `StateGraph(State)` | This graph passes a `State` around |
+| `add_node(name, function)` | Register a step |
+| `set_entry_point(...)` | Always start by running the code |
+| `add_conditional_edges(node, router, [...])` | After running, ask the router. The docs: "If you want to optionally route to one or more nodes (or terminate), use `add_conditional_edges`". The list of places it can go was added as a fix, so the graph can be drawn (Part 3) |
+| `add_edge(fix, execution)` | After every fix, always run again. **This edge makes the loop** |
+| `compile()` | Check the wiring and return a runnable graph |
+
+Finally, `run()` builds the starting State, getting the function's text with `textwrap.dedent(inspect.getsource(function))` (lines 220–227). [`inspect.getsource`](https://docs.python.org/3/library/inspect.html#inspect.getsource) will "Return the text of the source code for an object", including its indentation. The demo's function is defined *inside* another function, so its text arrives indented:
+
+```text output title="✅ re-run: getsource on a nested function, then exec"
+'    def f(x):\n        return 1 / x\n'
+   exec without dedent -> IndentationError unexpected indent (<string>, line 1)
+   exec with textwrap.dedent -> ok
+```
+
+### Step 5: the Gradio app
+
+```python title="agentic_bug_fixing/agent.py · lines 247–292 (trimmed)"
+    def run_agent_and_show_diff(self, code_string: str, arguments_str: str):
+        arguments = json.loads(arguments_str)              # 5a. "[10, 0]" -> [10, 0]
+        function = load_function_from_code(code_string)    # 5b. pasted text -> a function
+        final_state = self.agent.run(function, arguments, function_string=code_string)  # 5c.
+        self.fixed_code = final_state.get("new_function_string", "")                   # 5d.
+        gave_up = final_state.get("error")   # still crashing when the loop stopped
+        if self.fixed_code:
+            diff = self._generate_colored_diff_html(self.original_code, self.fixed_code)
+        elif gave_up:
+            # No rewrite ever loaded. Say so, rather than showing the "no errors" message below.
+            diff = self._error_html(f"No working fix after {attempts} attempt(s). …")
+        else:
+            diff = ('<pre style="… background-color: #f6f8fa; … color: #1a7f37;">'
+                    'No errors detected - code executed successfully!</pre>')
+        # … result text, then return the four outputs
+```
+
+I've removed the `try`/`except` around each step to show the flow. In the repo, each step catches its own errors and shows them in red, for example a wrong key or no internet. The diff comes from [`difflib.unified_diff`](https://docs.python.org/3/library/difflib.html#difflib.unified_diff), which returns "a delta … in unified diff format": `-` for removed lines and `+` for added lines. Each line is then wrapped in a `div` with its own colour. Two parts of this changed after Part 4: the `elif gave_up:` branch (bug 3), and giving every diff line a text colour (bug 5).
+
+Gradio in one breath, from Shivank: `gr.Blocks` is the page, `gr.Row` and `gr.Column` arrange things, and `run_btn.click(fn=..., inputs=[...], outputs=[...])` means "when clicked, call this function with these widgets' values, and put what it returns into those widgets."
+
+### Step 6: the terminal demo
+
+The demo calls the original function directly, to show the crash, and then runs the same call through the agent. Here's a full run, with the beginning the log had cut off. It ran from the project's `.venv`, after fixing bug 4:
+
+```text output title="✅ re-run with the fixed repo: .venv\Scripts\python.exe -m agentic_bug_fixing"
+=== 1) The ORIGINAL function, called directly ===
+Crashed as expected: ZeroDivisionError: division by zero
+
+=== 2) The SAME call, through the bug-fixing agent ===
+[run]  divide_two_numbers(10, 0)
+[run]  crashed -> ZeroDivisionError: division by zero
+[fix]  attempt 1/3: asking openai/gpt-oss-120b to fix it
+[fix]  new version loaded, running it again
+[run]  divide_two_numbers(10, 0)
+[run]  ok -> 'Error: division by zero'
+
+--- Fixed code written by the LLM ---
+def divide_two_numbers(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return "Error: division by zero"
+
+--- Final answer ---
+'Error: division by zero'
+```
+
+## Part 3: Watching it think
+
+`graph.stream(state, stream_mode="updates")` "streams the updates to the state after each step of the graph" ([streaming](https://docs.langchain.com/oss/python/langgraph/streaming)). I streamed one real run before the fixes, and it happened to hit the stray bracket once:
+
+```python title="✅ re-run: streaming one run"
+for i, update in enumerate(agent.graph.stream(state, stream_mode="updates"), 1):
+    for node, changes in update.items():
+        print(f"### STEP {i}: {node} returned -> {changes}")
+```
+
+```text output title="openai/gpt-oss-120b, 2026-11-17 (function objects shortened)"
+[run]  crashed -> ZeroDivisionError: division by zero
+### STEP 1: code_execution_node returned -> {'error': True, 'error_description': 'ZeroDivisionError: division by zero'}
+[fix]  the new code could not be loaded (SyntaxError: unmatched ')' (<string>, line 5))
+### STEP 2: code_fix_node returned -> {'attempts': 1}
+[run]  crashed -> ZeroDivisionError: division by zero
+### STEP 3: code_execution_node returned -> {'error': True, 'error_description': 'ZeroDivisionError: division by zero'}
+[fix]  new version loaded, running it again
+### STEP 4: code_fix_node returned -> {'attempts': 2, 'function': '<function divide_two_numbers> (new version)', 'new_function_string': 'def divide_two_numbers(a, b):\n    try: …'}
+[run]  ok -> 'Error: division by zero'
+### STEP 5: code_execution_node returned -> {'error': False, 'error_description': '', 'result': 'Error: division by zero'}
+```
+
+Here's the same run as the State after each step. The "Next" column is what the router decides from that State, since the stream shows node outputs, not router decisions:
+
+| After | `error` | `attempts` | `function` | `new_function_string` | `result` | Next |
+| --- | --- | --- | --- | --- | --- | --- |
+| Start | `False` | 0 | original | `""` | `None` | run it |
+| Step 1: run | `True` | 0 | original | `""` | `None` | fix (crashed, 0 < 3) |
+| Step 2: fix, reply wouldn't load | `True` | **1** | original (kept) | `""` | `None` | run again (fixed edge) |
+| Step 3: run | `True` | 1 | original | `""` | `None` | fix (crashed, 1 < 3) |
+| Step 4: fix, loaded | `True` | 2 | **new** | the `try`/`except` code | `None` | run again |
+| Step 5: run | **`False`** | 2 | new | same | `'Error: division by zero'` | END |
+
+Five node runs and two LLM calls. Step 2 is the important row: `attempts` went up, and nothing else changed. With the fixed repo, step 2 also stores `load_error` and `bad_reply`, and step 4's request carries them.
+
+Shivank's exercise list ends with "Draw the graph", using `draw_mermaid()`. Before the fix, the drawing was wrong:
+
+```text output title="✅ re-run before the fix: draw_mermaid(), edges only"
+	__start__ --> code_execution_node;
+	code_execution_node --> __end__;
+```
+
+There's no edge to `code_fix_node`, and no loop back. The router is a plain function that returns a string, so LangGraph can't know which nodes it might return. When I named them, by passing a list of destinations as the third argument, the loop appeared, with dotted conditional edges. The repo does this now:
+
+```python title="agentic_bug_fixing/agent.py · line 214"
+builder.add_conditional_edges("code_execution_node", self.error_router, ["code_fix_node", END])
+```
+
+```text output
+	__start__ --> code_execution_node;
+	code_execution_node -.-> __end__;
+	code_execution_node -.-> code_fix_node;
+	code_fix_node --> code_execution_node;
+```
+
+The agent ran the same either way. Only the drawing needed the hint.
+
+## Part 4: The bugs, re-run
+
+### Bug 2: the stray bracket
+
+The log showed two `SyntaxError: unmatched ')' … line 5` failures and no reply to look at. To see the reply, I wrapped the agent's chain from outside the repo, so the code stayed untouched, and recorded every reply before `clean_llm_code` and `exec` saw it:
+
+```python title="✅ re-run: rerun_raw.py, the part that matters"
+agent = A.Agent()
+original_chain = agent.fix_chain
+
+class Recorder:
+    def invoke(self, inputs):
+        reply = original_chain.invoke(inputs)
+        calls.append({"raw": reply.content, "finish_reason": reply.response_metadata.get("finish_reason"),
+                      "usage": reply.usage_metadata, "extra": sorted(reply.additional_kwargs)})
+        return reply
+
+agent.fix_chain = Recorder()      # code_fix_node only calls .invoke(), so this is all it needs
+```
+
+The first six runs all fixed the function on the first try, so the bug didn't show at all. The next 24 found it straight away:
+
+```text output title="✅ re-run: 24 runs of divide_two_numbers(10, 0) (first 10 shown)"
+run 1: attempts=2 error=False loads=["SyntaxError: unmatched ')' (<string>, line 5)", 'ok']
+run 2: attempts=1 error=False loads=['ok']
+run 3: attempts=1 error=False loads=['ok']
+run 4: attempts=2 error=False loads=["SyntaxError: unmatched ')' (<string>, line 5)", 'ok']
+run 5: attempts=1 error=False loads=['ok']
+run 6: attempts=1 error=False loads=['ok']
+run 7: attempts=1 error=False loads=['ok']
+run 8: attempts=1 error=False loads=['ok']
+run 9: attempts=2 error=False loads=["SyntaxError: unmatched ')' (<string>, line 5)", 'ok']
+run 10: attempts=3 error=True loads=["SyntaxError: unmatched ')' (<string>, line 5)", "SyntaxError: unmatched ')' (<string>, line 5)", "SyntaxError: unmatched ')' (<string>, line 5)"]
+```
+
+Run 10 gave up. And this was the reply, the same text in all 10 failures in that batch:
+
+```python title="✅ the raw reply behind every SyntaxError"
+def divide_two_numbers(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return "Error: division by zero")
+```
+
+There's one extra `)` at the end of line 5. Everything else is identical to a good reply. A few things the recording rules out:
+
+- **It isn't cut off.** `finish_reason` was `stop`, and the output was about 88 tokens.
+- **It isn't reasoning leaking into the code.** gpt-oss models return their reasoning separately: Groq's [reasoning docs](https://console.groq.com/docs/reasoning) say it comes "in the `reasoning` field". In LangChain it arrived in `additional_kwargs["reasoning_content"]`, about 42–85 tokens of it, and `reply.content` held only the code.
+- **It isn't the fence-stripping.** There were no fences to strip.
+
+**Why** the model adds the bracket, I can't say. The recording shows what happened, not why, and I won't guess at the model's internals. What I *can* explain is why the retry so often failed again. The `except` branch in `code_fix_node` throws the bad reply away, so attempt 2 sends **exactly the same prompt** as attempt 1. A retry without new information is just a second roll of the same dice. Here's every run of the division example that sent no feedback, the log included:
+
+| Runs | Runs | LLM calls | Replies with the stray `)` | Outcome |
+| --- | --- | --- | --- | --- |
+| 📜 The log | 1 | 3 | 2 | Fixed on attempt 3 |
+| ✅ Re-run, batch 1 | 6 | 6 | 0 | All on attempt 1 |
+| ✅ Re-run, batch 2 | 24 | 33 | 10 | 17 on attempt 1, 5 on 2, 1 on 3, **1 gave up** |
+| ✅ The examples run (division) | 1 | 2 | 1 | Fixed on attempt 2 |
+| ✅ The full demo | 1 | 1 | 0 | Attempt 1 |
+| ✅ The streamed run | 1 | 2 | 1 | Fixed on attempt 2 |
+| **Total** | **34** | **47** | **14 (about 3 in 10)** | **1 gave up** |
+
+Thirteen of those calls were retries after a failed load, and **4 of the 13 failed again**. That's about the same rate as a first attempt, which is what you'd expect if a retry learns nothing.
+
+**The experiment.** I subclassed the agent outside the repo and changed one thing. When a reply won't load, the next request's error text also carries the load error and the reply that broke:
+
+```python title="✅ re-run: rerun_feedback.py, the changed part of code_fix_node"
+error_text = state.error_description
+if self.feedback:
+    error_text += "\n" + self.feedback
+# … same invoke, same clean_llm_code, same load …
+except Exception as e:
+    load = f"{type(e).__name__}: {e}"
+    self.feedback = ("Your previous rewrite could not be loaded by Python (" + load + "). "
+                     "This is what you sent:\n" + reply.content)
+    return {"attempts": attempt}
+```
+
+```text output title="✅ re-run: 24 runs with feedback (the six that needed it)"
+run 10: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 11: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 13: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 16: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 21: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 23: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+```
+
+The model still made the mistake on 6 of 24 first attempts. But each time it was told what went wrong, the retry loaded: **6 of 6**. That's a small sample, so it doesn't prove the change is perfect. It does show the direction clearly, and it matches the line from Anthropic's article that this design is built on: the evaluator gives "evaluation and *feedback* in a loop". In the published version, the evaluator gave a verdict but no feedback when a fix wouldn't load.
+
+![Before and after for the stray bracket. Before: the model's reply ends the fix with an extra closing bracket, exec raises SyntaxError, the agent keeps the old code, re-runs it, sees the same crash, and sends the same prompt again, so the model can send the same broken reply. In my runs 4 of 13 such retries failed again and one run gave up after three. After: the error and the broken reply are saved, the next request carries them, and 10 of 10 retries loaded, 6 in an experiment and 4 in the fixed repo](/images/ai-llms/agentic-ai/agentic-bug-fixing/bug-stray-paren.svg)
+
+There's a parallel with bug 1 here. When Claude Code got the 404, it didn't retry the same call. It listed the models first, and so gathered new information before the second attempt. The published bug-fixing agent couldn't do that, because its loop had nowhere to put what it learned.
+
+**The fix, now in the repo.** I moved the experiment into `code_fix_node` properly. The State keeps `load_error` and `bad_reply`, and the prompt has a `{feedback}` blank (Steps 1, 2 and 4 above). With a stand-in model that sends the broken reply and then a good one, the second request now carries this:
+
+```text output title="✅ the added part of request 2 (stand-in model)"
+Your previous rewrite could not be loaded by Python (SyntaxError: unmatched ')' (<string>, line 5)). This is what you sent:
+def divide_two_numbers(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return "Error: division by zero")
+```
+
+Then 24 real runs against the fixed repo:
+
+```text output title="✅ re-run: the fixed repo, 24 runs (the four that needed a retry)"
+run 3: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 6: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 12: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+run 21: attempts=2 error=False loads=[("SyntaxError: unmatched ')' (<s", False), ('ok', True)]
+```
+
+The model still made the mistake on 4 of 24 first attempts, and all **4 retries loaded**. No run gave up. With the experiment, that's 10 of 10 retries that carried the error, against 9 of 13 that didn't.
+
+### Bug 3: giving up looks like success
+
+When all three replies failed to load, `new_function_string` stayed `""`. Two places treated `""` as "no fix was needed". I checked with a stand-in model that always returns the broken reply: `FakeListChatModel` from `langchain_core`, which needs no key and costs nothing.
+
+```text output title="✅ before the fix: the terminal demo with the stand-in model (end of output)"
+[stop] still failing after 3 fix attempts, giving up
+
+--- Fixed code written by the LLM ---
+(no fix was needed)
+
+--- Final answer ---
+Still failing: ZeroDivisionError: division by zero
+```
+
+```text output title="✅ before the fix: the Gradio handler's four outputs, same stand-in"
+fixed box : 'No fix needed'
+diff box  : <pre style="…; color: #1a7f37;">No errors detected - code executed successfully!</pre>
+result box: Still failing after 3 fix attempt(s): ZeroDivisionError: division by zero
+```
+
+The app would show a green success message right above a failure. Both places tested `new_function_string` instead of checking `final_state["error"]` first. The stand-in's lines also print "asking openai/gpt-oss-120b", because `self.llm` is still the real client. I only replaced the chain.
+
+**Fixed in the repo.** Both places now check `error` before saying anything about the fix. The same stand-in now gives:
+
+```text output title="✅ after the fix: the terminal demo (end of output)"
+--- Fixed code written by the LLM ---
+(none: no rewrite loaded in 3 attempt(s))
+
+--- Final answer ---
+Still failing: ZeroDivisionError: division by zero
+```
+
+```text output title="✅ after the fix: the Gradio handler's four outputs"
+fixed box : 'No fix loaded'
+diff box  : <pre style="color: red;">No working fix after 3 attempt(s). Last load error: SyntaxError: unmatched &#x27;)&#x27; (&lt;string&gt;, line 5)</pre>
+result box: Still failing after 3 fix attempt(s): ZeroDivisionError: division by zero
+```
+
+### The brake, measured
+
+How much is `MAX_FIX_ATTEMPTS = 3` worth? I used the same stand-in, which never produces a working fix, and set the limit to three and then to a million:
+
+```text output title="✅ re-run: nokey_checks.py, no API calls"
+MAX_FIX_ATTEMPTS=3: stopped, attempts=3, error=True
+MAX_FIX_ATTEMPTS=1000000: GraphRecursionError after 5003 fix attempts: Recursion limit of 10007 reached without hitting a stop condition. You can increase the limit by setting the `recursion_limit` config key.
+```
+
+Without the brake, the only thing that stopped the loop was LangGraph's recursion limit, which "caps how many super-steps one run may execute". Since version 1.1.4 "the default is 10,007 super-steps" ([Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)). Each lap is two steps, a fix and a run, so that's **5,003 calls to the model** before the error. If you remember the limit as 25, that's `langchain-core`'s default (`DEFAULT_RECURSION_LIMIT = 25` in `langchain_core/runnables/config.py`), which LangGraph replaces with its own. Anthropic's advice to "include stopping conditions (such as a maximum number of iterations) to maintain control" is about exactly this. LangGraph's limit protects against infinite loops. It doesn't protect your bill.
+
+![Before and after for the attempt limit, run with a stand-in model that always returns the broken reply, so no API calls. Before: with the limit set to a million, the agent made 5,003 fix attempts, one LLM call each with a real model, and stopped only when LangGraph raised GraphRecursionError at its default limit of 10,007 steps. After: with MAX_FIX_ATTEMPTS at 3, it stopped after three attempts and returned the State with error set to True, so the caller decides what to do](/images/ai-llms/agentic-ai/agentic-bug-fixing/bug-no-brake.svg)
+
+One of Shivank's changes protects the same loop from a different failure. In the course original, the fix node ran the new function itself, so a second crash escaped the graph. This one is 📘: I'm describing it from his table, not re-running it.
+
+![Before and after for one of Shivank's changes, from his explainer. Before: code_fix_node asked the LLM, then ran the new function itself; if that still crashed, the exception escaped the graph and the program stopped. After: code_fix_node only loads the new code, and the loop sends it back to code_execution_node, which runs it inside try and except, records the error in the State, and lets the router decide](/images/ai-llms/agentic-ai/agentic-bug-fixing/bug-fix-node-crash.svg)
+
+### Bug 4: two Pythons, one project
+
+The project folder had a `.venv` that I'd made myself. It isn't in the log, but its timestamp falls between Claude Code's first answer and my second request. Running the agent with that venv's Python fails:
+
+```text output title="✅ re-run: .venv\Scripts\python.exe -m agentic_bug_fixing"
+    from langchain_groq import ChatGroq                    # the Groq chat model
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ModuleNotFoundError: No module named 'langchain_groq'
+```
+
+The venv has `langchain-openai` 1.8.0, `langgraph` and Gradio, which matches the OpenAI requirements from the first answer. During the Groq switch, Claude Code ran `pip install -q -r requirements.txt` with no venv active, so `langchain-groq` went into the global Python 3.14 instead. Everything in the log, and every re-run above, used the global Python. The first command had already hinted at this, with `python` and `py` reporting different builds.
+
+![Two Pythons, one project. The global Python 3.14 is where the Groq switch installed the requirements, so it has langchain-groq 1.2.0 and python -m agentic_bug_fixing works there. The project's .venv was built earlier from the OpenAI requirements, so it has langchain-openai but no langchain-groq, and running the agent from it fails with ModuleNotFoundError: No module named langchain_groq](/images/ai-llms/agentic-ai/agentic-bug-fixing/two-pythons.svg)
+
+A fresh clone doesn't have this problem, because the README's steps create the venv and install into it. It was a problem with my folder, not the repo. **Fixed** by installing with the venv's own Python, `.venv\Scripts\python.exe -m pip install -r requirements.txt`. The full demo in Step 6 ran from `.venv` afterwards. The README now says to install with the venv active, and how to check with `sys.prefix`.
+
+### Bug 5: the diff that disappeared in dark mode
+
+I opened the app in a headless browser, picked **Invalid Coupon Code** and clicked **Run Agent & Show Diff**. The app was on port **7861**, not 7860, because another of my Gradio apps already had 7860. Gradio's docs explain why: with no port set, it "will search for an available port starting at 7860" ([Blocks.launch](https://www.gradio.app/docs/gradio/blocks)). The browser was in dark mode, and most of the diff was unreadable. The diff's `pre` sets `background-color: #f6f8fa`, a light grey, but only the added and removed lines had their own text colour, and in Gradio's dark theme the page's text is nearly white.
+
+My first fix set a dark text colour on the `pre`. It looked right in the code and changed nothing on screen. Checking the page itself showed why:
+
+```text output title="✅ the diff's colours in dark mode, after the first fix"
+pre colour:            rgb(31, 35, 40)
+an unchanged line:     rgb(244, 244, 245)
+the rule that set it:  .gradio-container-6-32-0 .prose * -> var(--body-text-color)
+```
+
+Gradio's theme sets the text colour on **every** element inside the HTML box with a `.prose *` rule, so the lines never inherit the `pre`'s colour. The fix that works gives each line its own:
+
+```python title="agentic_bug_fixing/agent.py · in _generate_colored_diff_html (shortened)"
+ink = "color: #1f2328;"
+# … file headers, @@ lines, removed and added lines as before …
+html_lines.append(f'<div style="font-weight: bold; {ink}">{escaped}</div>')    # file headers
+html_lines.append(f'<div style="{ink}">{escaped}</div>')                       # unchanged
+```
+
+![The diff panel in the dark theme, twice. Before the fix, the panel keeps its light grey background but the text turns light too, so the file headers and unchanged lines almost vanish and only the two green added lines can be read. After the fix, in the same dark theme, every line is dark on the light background and readable: the file headers, the hunk line, the context lines, the two added lines that check the coupon exists, and the last two lines. The model worded the error message differently in the two runs, because it writes a fresh fix every time](/images/ai-llms/agentic-ai/agentic-bug-fixing/gradio-diff-dark-fix.png)
+
+Here's the whole app in light mode after that run:
+
+![The Agentic Bug Fixing app in light mode after one run. At the top is a Load Example dropdown set to Invalid Coupon Code. Below it the function code, apply_coupon_code with a dictionary of three coupons, and the arguments 100 and "INVALID". Then a Run Agent and Show Diff button, a git-style diff whose two green lines add an if coupon_code not in coupons check that returns an error string, the original and fixed code side by side, and the execution result: Error: 'INVALID' is not a valid coupon code](/images/ai-llms/agentic-ai/agentic-bug-fixing/gradio-coupon-fix.png)
+
+## Part 5: The seven built-in examples, on Groq
+
+The app ships seven ready-made bugs. Shivank's explainer describes what "a good fix" does for each. I put each one through the Groq agent once, using the exact code and arguments from `launch()`, read from the file with `ast`:
+
+| Example | Error sent to the model | Tries | What the fix did | Result |
+| --- | --- | --- | --- | --- |
+| Division by Zero, `[10, 0]` | `ZeroDivisionError: division by zero` | 2 (a stray `)` first) | `try`/`except ZeroDivisionError` | `'Error: division by zero'` |
+| E-commerce, 100% off | `ZeroDivisionError: division by zero` | 1 | Wrapped the **unused** `margin` line in `try` | `'Error: discount_percent results in division by zero'` |
+| Invalid Coupon, `[100, "INVALID"]` | `KeyError: 'INVALID'` | 1 | Checks the coupon exists first | `"Error: 'INVALID' is not a valid coupon code."` |
+| Product Index, id 5 of 2 | `IndexError: list index out of range` | 1 | Catches `IndexError`, `KeyError`, `TypeError` | `'Error: list index out of range'` |
+| Bulk Discount, quantity 0 | `ZeroDivisionError: division by zero` | 1 | Wrapped the **unused** `avg_discount` line in `try` | `'Error: quantity must be greater than zero'` |
+| Format Price, `[null]` | `TypeError: unsupported format string passed to NoneType.__format__` | 1 | Catches `TypeError` and `ValueError` | `'Error: price must be a number'` |
+| Inventory, missing SKU | none: it doesn't crash | 0 | Nothing | `None` |
+
+Each model call took between 0.8 and 3.4 seconds. Three lessons stand out, and the first two are Shivank's.
+
+<Callout type="warn" title="The silent bug">
+
+The inventory example returns `None` instead of a stock count. That's wrong, but nothing crashes, so the agent reports "no errors". **This agent can only fix bugs that raise exceptions.** To catch a silent bug you need expected outputs, which means tests. That's why real coding agents run test suites, not just the code.
+
+</Callout>
+
+<Callout type="warn" title="Fixed isn't the same as correct">
+
+The prompt asks for "an error message (a string) instead of crashing". So `calculate_total_price` now returns a number on success and a sentence on failure, and any caller that adds up totals will break later and somewhere else. The agent did what the prompt said, which means the prompt carries your engineering decisions: raise a clear error, return `None`, or log it and alert someone.
+
+</Callout>
+
+The third lesson is mine. The explainer says a sharp fix to the e-commerce example "also notices `margin` is never used". In my single run of each, `gpt-oss-120b` didn't do that, in either example with a dead line. It kept the useless division and wrapped it in `try`. That's the smallest change that stops the crash, and the prompt never asked for more.
+
+## Safety: this runs AI-written code
+
+`exec()` runs whatever text it's given, with your permissions. It could delete files, read `.env`, or call the internet. For toy functions in a demo, that's acceptable. For anything real, Anthropic's advice is "extensive testing in sandboxed environments, along with the appropriate guardrails": a container or VM with no secrets, no network and a time limit. The app is also an open door. In Shivank's words, "anyone who can open it can run code on your machine, so don't share its link publicly."
+
+## Part 6: What I fixed in the repo
+
+| Bug | Change | Checked by |
+| --- | --- | --- |
+| **2.** A retry learns nothing | `load_error` and `bad_reply` in the State, and a `{feedback}` blank in the prompt, filled when the last rewrite wouldn't load | A stand-in model: request 2 carries the error. ✅ 24 real runs: 4 of 4 retries loaded, none gave up |
+| **3.** Giving up looks like success | The demo and the app check `error` before saying "no fix needed" | A stand-in model: "(none: no rewrite loaded in 3 attempt(s))" and "No fix loaded" |
+| **5.** The diff vanishes in dark mode | Every diff line sets its own text colour | ✅ The dark screenshot after the fix |
+| The graph draws no loop | `add_conditional_edges(..., ["code_fix_node", END])` | ✅ `draw_mermaid()` shows both conditional edges |
+| **4.** Two Pythons | Not in the code: installed into `.venv`, and the README says to install with the venv active | ✅ The demo ran from `.venv` |
+| The docs describe OpenAI | A README section says how this repo differs from Shivank's explainer | Read through |
+
+The README lists the same changes. Bug 1 needed no code change after the switch to `openai/gpt-oss-120b`.
+
+## Reproduce this yourself
+
+**📜** means the step is in my log. **✅** means I re-ran it on 17 November 2026. **📘** means it comes from the linked docs or the README, and I haven't run it. The commands are for PowerShell on Windows.
+
+1. **Get the code.** 📘 `git clone https://github.com/vineetganti/agentic-bug-fixing.git`, then `cd agentic-bug-fixing`. I published the repo from my folder, so I haven't cloned it myself.
+2. **Make a venv and install into it.** 📘 `python -m venv .venv`, `.venv\Scripts\activate`, `python -m pip install -r requirements.txt` (from the README; see [venv](https://docs.python.org/3/library/venv.html)). 📜 In my run, `pip install -r requirements.txt` ran with no venv active, and bug 4 came from that. ✅ `.venv\Scripts\python.exe -m pip install -r requirements.txt` fixed my folder. To check where packages will go: 📘 `python -c "import sys; print(sys.prefix)"` should print a path ending in `.venv`.
+3. **Add a Groq key.** 📘 Create one in the [Groq console](https://console.groq.com). 📜 `Copy-Item .env.example .env`, then put `GROQ_API_KEY=<your key>` in it, and **save the file**. A 0-byte `.env` was my first problem.
+4. **Run the setup check.** 📜 `python scripts/check_setup.py`. It checks the libraries and makes one test call. You want `openai/gpt-oss-120b replied: 'OK'`. A 404 means the model name is out of date: see the next step.
+5. **See which models your key can use.** 📜 The Python one-liner from bug 1, or 📘 `curl.exe https://api.groq.com/openai/v1/models -H "Authorization: Bearer $env:GROQ_API_KEY"` ([API reference](https://console.groq.com/docs/api-reference)). Change `MODEL_NAME` in `agent.py`, and `MODEL` in `scripts/check_setup.py`, to a model in the list.
+6. **Run the terminal demo.** ✅ `python -m agentic_bug_fixing`. Some runs show a `SyntaxError` line and then a second attempt that loads. That's the stray bracket from bug 2, handled by the fix, not a broken install.
+7. **Run the app.** ✅ `python -m agentic_bug_fixing --ui`, then open the URL it prints. It's `http://127.0.0.1:7860`, or the next free port: mine was 7861. Stop it with Ctrl+C.
+8. **Watch each step.** ✅ Use the `graph.stream(..., stream_mode="updates")` loop from Part 3 in a scratch script, with `sys.path` pointing at the repo.
+9. **See the model's raw replies.** ✅ Wrap `agent.fix_chain` with the `Recorder` from bug 2. This is the only way to see what the model sent when a fix won't load.
+10. **Draw the graph.** ✅ `print(agent.graph.get_graph().draw_mermaid())` now draws the loop, and 📘 you can paste it into [mermaid.live](https://mermaid.live).
+
+**Where everything lives:**
+
+| What | Where | How to look |
+| --- | --- | --- |
+| The agent | `agentic_bug_fixing/agent.py` | Any editor; STEP 0–6 comments |
+| Settings and key | `.env` (git-ignored); the template is `.env.example` | Any editor; never commit it |
+| Model name and brake | `MODEL_NAME`, `MAX_FIX_ATTEMPTS` at the top of `agent.py` | Edit and re-run |
+| Setup check | `scripts/check_setup.py` | `python scripts/check_setup.py` |
+| Shivank's explainer and the setup guide | `docs/code_explainer.html`, `docs/setup_guide.html` | Open in a browser. **They describe the OpenAI version** |
+| Logs | Nowhere on disk: the `[run]`, `[fix]` and `[stop]` lines go to the terminal only | Keep the terminal open |
+| The app | `http://127.0.0.1:7860`, or the next free port | A browser |
+| Claude Code's allow rules | `.claude/settings.local.json` (git-ignored) | `/permissions` in Claude Code |
+
+## Things that can trip you up
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `404 … model_not_found` | The model was shut down (`llama-3.3-70b-versatile`, 16 August 2026) | List models with `GET /openai/v1/models`; pick a listed one |
+| `GROQ_API_KEY not found`, or a 0-byte `.env` | The editor hadn't saved | Save; check with `(Get-Item .env).Length` |
+| `ModuleNotFoundError: No module named 'langchain_groq'` | Running a different Python from the one you installed into | Activate `.venv`, then `python -m pip install -r requirements.txt` |
+| `ModuleNotFoundError: No module named 'langchain.schema'` | Old LangChain import in older course code | Import from `langchain_core` (`langchain_core.messages`, `langchain_core.prompts`) |
+| `SyntaxError: unmatched ')' (<string>, line 5)` | The model's reply has a stray bracket | The retry now carries the error and loads (bug 2) |
+| The same `SyntaxError` on every attempt | Before the fix, the retry resent an identical prompt | Fixed: the load error and the bad reply go into the next prompt |
+| "(no fix was needed)" next to "Still failing" | `new_function_string` is `""` when every fix failed | Fixed: both check `final_state["error"]` first |
+| `IndentationError: unexpected indent` from `exec` | Source of a nested function, or an indented reply | `textwrap.dedent` (already in the code) |
+| `GraphRecursionError … 10007` | A loop with no brake of its own | Your own attempt limit; `recursion_limit` only as a backstop |
+| `draw_mermaid()` shows no loop | The router's destinations weren't declared | Fixed: the repo passes `["code_fix_node", END]` |
+| The app is on 7861, not 7860 | Another app holds 7860 | Use the printed URL, or set `GRADIO_SERVER_PORT` |
+| The diff's lines vanish in dark mode | Gradio's `.prose *` rule colours every element, so a colour on the `pre` isn't inherited | Fixed: each line sets its own colour |
+| "No errors" for a wrong answer | The agent only sees exceptions | Expected outputs and tests |
+| A "fix" returns a string where a number was expected | The prompt asked for an error string | Decide the error contract and say it in the prompt |
+
+## What I learned
+
+- **A retry is only as good as the new information it carries.** The loop retried the same prompt and got the same broken reply 4 times in 13. Sending the error back fixed 10 of 10. Claude Code did the same thing with the 404: it listed the models before trying again.
+- **Bring your own brake.** LangGraph's limit is 10,007 steps, which stops an infinite loop but not a bill. Three attempts is a product decision. The framework won't make it for you.
+- **An LLM's reply is untrusted text.** It needs fence stripping, dedenting and an `ast` parse before it runs. `exec` is the point where text becomes power, so it belongs in a sandbox.
+- **Errors should become State, not exceptions.** Catching the crash in the run node, and keeping the error's *type* (`KeyError: 'INVALID'`), is what lets a loop reason about failure at all.
+- **"Agent" covers a range.** This is a fixed graph where the code chooses the path, which Anthropic would call a workflow. That's no criticism. It's a big part of why it's predictable enough to teach.
+- **A model name is a dependency, and it can be retired.** The setup check's one test call found that in seconds, before the demo ran.
+- **Honest output matters.** A run that gave up shouldn't say "no fix was needed", and a diff shouldn't depend on the reader's theme.
+- **Check a fix the way the bug was found.** My first dark-mode fix was correct CSS and changed nothing, because a theme rule coloured every element. Only a new screenshot showed it.
+
+## What I'd do differently
+
+- Print the model's raw reply whenever a fix won't load. I needed a wrapper to see a single character. The fixed repo sends it back to the model, but still doesn't print it.
+- Create and activate the venv **before** asking an agent to install anything, and check `sys.prefix`.
+- Take a new screenshot after every UI fix, instead of trusting the code change.
+- Parse each reply with `ast.parse` before `exec`, so a syntax error is caught without running anything.
+- Try Shivank's harder exercises next: cache fixes by a hash of the code and error, log tokens per fix, and add expected outputs so the silent bug gets caught.
+
+## Summary
+
+The agent is two LangGraph nodes and a router. One node runs the function and turns a crash into State, and the other sends the code, the arguments and the error to an LLM, then loads the rewrite with `exec`. The router sends a crash to the fix node and stops on success or after three attempts. I took Shivank Agarwal's OpenAI version (Future with Shivank, for Scaler Academy) back to Groq. The course's model had been shut down, so Claude Code listed the models the key could use and picked `openai/gpt-oss-120b`. That model's replies ended with a stray `)` about 3 times in 10. Because the loop throws the bad reply away and resends the same prompt, retries failed again 4 times in 13, and one run gave up. Sending the error back made 10 of 10 retries load, first in an experiment and then in the fixed repo. The brake earns its place: without it, a hopeless loop makes 5,003 calls before LangGraph's 10,007-step limit stops it. The smaller bugs were about honesty and environment: a give-up shown as "no fix needed", two Pythons with one stale venv, and a diff that disappeared in dark mode. All of them are fixed now: a retry carries the load error (4 of 4 loaded in 24 runs), a give-up says so, the diff sets its own colours, the graph draws its loop, and the venv has its packages.
+
+![A map of the post. The loop: run, route, fix, run; the State is a job card; nodes return only what changed; the router only decides. The brakes: MAX_FIX_ATTEMPTS is 3; LangGraph's own limit is 10,007 steps; a fix that won't load keeps the old code; the UI catches API errors. LLM output: strip fences and dedent; ast finds the def; exec is a trust boundary; about three replies in ten had a stray bracket. My run: a model shut down in August; list the models and pick one; two Pythons with a stale venv; dark mode hid the diff. Fixed since: the load error goes back to the model; a give-up says so; the diff is safe in dark mode; the graph draws its loop](/images/ai-llms/agentic-ai/agentic-bug-fixing/summary-map.svg)
+
+### Concepts at a glance
+
+| Concept | In one line | Where it showed up |
+| --- | --- | --- |
+| **LangGraph `StateGraph`** | A graph of steps that pass one State around | `build_graph()` |
+| **State** | The shared data every node reads; nodes return partial updates | Step 1, Part 3's table |
+| **Node** | A function that takes the State and returns the fields it changed | `code_execution_node`, `code_fix_node` |
+| **Conditional edge / router** | A function that reads the State and names the next node or `END` | `error_router` |
+| **`END`** | LangGraph's "stop here" destination | Success, or the brake |
+| **Recursion limit** | LangGraph's cap on steps per run: 10,007 by default | The brake, measured |
+| **Workflow vs agent** | Code picks the path vs the model picks the path | "Agent or workflow?" |
+| **Evaluator-optimizer** | One step generates, another judges and gives feedback, in a loop | The whole design; bug 2 |
+| **`ChatPromptTemplate`** | A prompt with `{blanks}` filled at run time | Step 2 |
+| **Pipe `\|` (`RunnableSequence`)** | Feed the left side's output into the right side | `FIX_PROMPT \| self.llm` |
+| **`exec()`** | Runs a string as Python, with your permissions | Step 3, safety |
+| **`ast.parse`** | Reads code as a tree without running it | `first_function_name` |
+| **`textwrap.dedent` / `inspect.getsource`** | Remove shared indentation / get a function's text | Steps 3 and 4 |
+| **Unified diff** | `-` removed, `+` added, with context lines | The app; bug 5 |
+| **Reasoning tokens** | gpt-oss's thinking, returned separately from the answer | Bug 2's recording |
+| **Model deprecation** | A provider retiring a model name | Bug 1 |
+| **Stand-in model** | A fake chat model with fixed replies, for tests without a key | Bug 3, the brake |
+| **Virtual environment** | A private set of packages for one project | Bug 4 |
+| **Claude Code permissions** | `Tool(specifier)` allow rules in `settings.local.json` | Part 1 |
+
+### Test yourself
+
+<details>
+<summary>In the log, attempts 1 and 2 failed with the same SyntaxError. Why did attempt 2 so often fail in exactly the same way?</summary>
+
+In the published version, when a reply wouldn't load, `code_fix_node` returned only `{"attempts": attempt}`. The broken reply and the error were thrown away, `new_function_string` stayed empty, and the next run crashed the same way. So attempt 2 built the identical prompt from the same original code and the same `ZeroDivisionError`, and the model can produce the same reply. In my runs, 4 of 13 such retries failed again. Sending the load error and the bad reply back made 6 of 6 retries load in an experiment. The fixed repo keeps both in the State and sends them with the next request: in 24 runs, 4 of 4 retries loaded.
+
+</details>
+
+<details>
+<summary>Remove MAX_FIX_ATTEMPTS and give the agent a model that never writes loadable code. What stops it, and after how many model calls (LangGraph 1.2.22)?</summary>
+
+LangGraph's recursion limit, with a `GraphRecursionError`. The default is 10,007 super-steps, and each lap is two steps (fix, then run), so it makes 5,003 fix attempts, each one a model call, before stopping. The brake of 3 stops it after three.
+
+</details>
+
+<details>
+<summary>The inventory example returns None for a missing SKU, and the agent says "no errors". Why, and what would catch it?</summary>
+
+`inventory.get(sku)` returns `None` without raising, so `code_execution_node` records `error=False` and the router goes straight to `END`. The agent only sees exceptions. To catch a wrong answer, you need an expected output (a test) and a run node that treats "result ≠ expected" as an error.
+
+</details>
+
+<details>
+<summary>One run printed "(no fix was needed)" just above "Still failing". Which State fields explain it?</summary>
+
+`error` was `True` (the last run still crashed) and `attempts` was 3, but `new_function_string` was `""`, because no reply ever loaded, so none was saved. The demo printed "(no fix was needed)" whenever `new_function_string` was empty. The fixed version checks `error` first and says that no rewrite loaded.
+
+</details>
+
+<details>
+<summary>Is this program an agent or a workflow by Anthropic's definitions, and which pattern does it follow?</summary>
+
+A workflow. The paths are fixed in code, and the model only writes the function and never chooses the next step. The pattern is evaluator-optimizer: one step generates (the LLM) and another evaluates (here the Python interpreter, by running the code), in a loop with a stopping condition.
+
+</details>
+
+## Sources
+
+- **The code and the teaching material:** Shivank Agarwal, [Future with Shivank](https://www.linkedin.com/in/shivankagrawal/), for Scaler Academy's Agentic AI course: the agent, its code explainer and the setup guide. My Groq port is at [vineetganti/agentic-bug-fixing](https://github.com/vineetganti/agentic-bug-fixing).
+- **Anthropic and Claude Code:** [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents), and the Claude Code [overview](https://code.claude.com/docs/en/overview), [permissions](https://code.claude.com/docs/en/permissions) and [settings](https://code.claude.com/docs/en/settings)
+- **LangGraph:** [Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api) (state, conditional edges, recursion limit), [streaming](https://docs.langchain.com/oss/python/langgraph/streaming), [GRAPH_RECURSION_LIMIT](https://docs.langchain.com/oss/python/langgraph/errors/GRAPH_RECURSION_LIMIT)
+- **LangChain:** [v1 release notes](https://docs.langchain.com/oss/python/releases/langchain-v1), [ChatGroq](https://docs.langchain.com/oss/python/integrations/chat/groq)
+- **Groq:** [models](https://console.groq.com/docs/models), [deprecations](https://console.groq.com/docs/deprecations), [API reference](https://console.groq.com/docs/api-reference), [OpenAI compatibility](https://console.groq.com/docs/openai), [reasoning](https://console.groq.com/docs/reasoning)
+- **Gradio:** [Blocks and launch()](https://www.gradio.app/docs/gradio/blocks)
+- **Python:** [`exec`](https://docs.python.org/3/library/functions.html#exec), [`ast`](https://docs.python.org/3/library/ast.html#ast.parse), [`textwrap.dedent`](https://docs.python.org/3/library/textwrap.html#textwrap.dedent), [`inspect.getsource`](https://docs.python.org/3/library/inspect.html#inspect.getsource), [`difflib.unified_diff`](https://docs.python.org/3/library/difflib.html#difflib.unified_diff), [`venv`](https://docs.python.org/3/library/venv.html)
+- **Earlier in the series:** [Building my first AI agent](/blog/hello-agent), [Giving an AI agent tools](/blog/giving-agents-tools), [How AI agents remember](/blog/how-ai-agents-remember), [Agents that work together](/blog/agents-working-together), [How agents talk](/blog/how-agents-talk), [Shipping agents to production](/blog/agents-to-production), [Evaluating, observing and governing agents](/blog/agent-evaluation), [Trip Buddy](/blog/trip-buddy-agent)

@@ -191,7 +191,8 @@ Conventions that work well:
 | -------------------------------- | -------------- |
 | Code the reader runs             | the real language (`python`, `rust`, …) |
 | Shell commands                   | `bash`         |
-| Program or model output, logs    | `text`         |
+| Program or model output, logs    | `text`, or `text output` right after the command that printed it |
+| An excerpt from a real file      | the language plus `title="path · lines N–M"` |
 | Before/after changes             | `diff` (lines starting with `+` / `-`) |
 | Config files                     | `json`, `yaml`, `toml` |
 
@@ -208,10 +209,50 @@ Bangalore: Sunday, 25 October 2026 09:16 PM IST
 ```
 ````
 
-Not supported: file-name titles, line numbers, highlighting specific lines.
-
 To show a fence inside a code block (as this guide does), use four backticks
 for the outer fence.
+
+### Titles and output panels
+
+Two options go after the language, in the fence's first line. They came from
+Shivank Agarwal's code explainer for the bug-fixing agent (Agentic AI, part 9),
+where every excerpt names its file and lines and its output sits right under it.
+
+````md
+```python title="agentic_bug_fixing/agent.py · lines 144–154"
+def code_execution_node(self, state: State) -> dict:
+    ...
+```
+
+```text output title="python -m agentic_bug_fixing"
+[run]  divide_two_numbers(10, 0)
+[run]  crashed -> ZeroDivisionError: division by zero
+```
+````
+
+- **`title="…"`** puts a label in the top bar, after the language: a file and
+  line range for an excerpt, the command for a terminal session, or where a
+  snippet came from (for example `title="📜 from the log"`). Use double quotes.
+  On wide screens a long title is cut with an ellipsis (the full text shows on
+  hover); on phones it wraps onto a second line. Put the important part first.
+- **`output`** (a bare word) marks the block as printed output. Its bar says
+  **output** in green instead of the language, the panel is a shade darker, and
+  when it comes straight after another code block the two join into one panel.
+  Give it a title only when the command isn't the block above.
+- Both are optional and work together. A fence without them looks as before.
+- The *Building this site* posts already put `title="…"` on 63 fences before the
+  site showed titles. Those titles appear now, with no change to the posts.
+- Line numbers inside the block and highlighting single lines are still not
+  supported; put the range in the title instead.
+
+Use them where the reader needs to know **which file** an excerpt is from, or
+**which command** printed something. Code-walkthrough and debugging posts need
+them most. A short, self-explanatory snippet doesn't need a title.
+
+How it works: `src/lib/rehypeCodeMeta.ts` reads the fence's meta string and
+passes it to the code block in `MdxContent.tsx`; the styles are under
+`/* ---------- Code blocks ---------- */` in `globals.css`. The read-aloud player
+skips the bar, and a code block plus its output count as one skipped block.
 
 ---
 
@@ -596,7 +637,8 @@ What you learned and where to go next.
 - [ ] Filename is kebab-case with no spaces
 - [ ] `title`, `description`, `date` (quoted `YYYY-MM-DD`), `section` and `tags` are set (plus `series` and `seriesOrder` for a series post)
 - [ ] Sections start at `##`, with no `#` in the body
-- [ ] Every code fence has a language; output is in `text` fences
+- [ ] Every code fence has a language; output is in `text` fences (`text output` when it follows its command)
+- [ ] Excerpts from real files say which file and lines, with `title="…"`, and those line numbers match the file
 - [ ] Links have no space between `]` and `(`
 - [ ] Images live in `public/images/<section>/<series>/<post-slug>/` and have descriptive alt text
 - [ ] Anything essential is also in the prose or the alt text: the audio player reads image alt text, and skips code, tables and `<details>`

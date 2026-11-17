@@ -1,4 +1,5 @@
-"""Public feed for vineetganti.com: JSON Feed 1.1 and RSS 2.0, built ONLY from items the user marked "Publish on my site".
+"""Public feed for vineetganti.com: JSON Feed 1.1 and RSS 2.0, built ONLY from items the user chose: ones marked "Publish on my
+site", and ones approved in the curator page (unless promotional).
 
 This writes local files and uploads nothing. The public contract is a strict whitelist: the original article's title and link,
 the source name, the date, a short summary grounded in the article text, the category and badges, and the model's "why it
@@ -25,10 +26,12 @@ SCHEMA_VERSION = 1  # the site rejects a file whose schema it does not know
 
 
 def public_items(items: list[DigestItem]) -> list[DigestItem]:
-    """Published, not skipped, once each, in the order of the digest's buckets. A good read is left out: it is shown in the
-    Good reads list, and an article is never listed twice."""
+    """The daily list: items you marked "Publish on my site", plus items you approved that are not promotional (a promotional one
+    needs the tick box). Never a skipped item, once each, in the order of the digest's buckets. A good read is left out: it is
+    shown in the Good reads list, and an article is never listed twice. An item nobody has reviewed is never public."""
     groups, _ = buckets(items)
-    return [i for _, rows in groups for i in rows if i.publish and i.decision != "skip" and not i.good_read]
+    return [i for _, rows in groups for i in rows
+            if i.decision != "skip" and not i.good_read and (i.publish or (i.decision == "approve" and not i.is_promotional))]
 
 
 def public_good_reads(shelf: list[DigestItem], now: datetime | None = None) -> list[DigestItem]:

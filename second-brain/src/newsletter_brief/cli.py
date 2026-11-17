@@ -239,7 +239,7 @@ def main() -> None:
     brief.add_argument("--publish-controls", action="store_true", help="show the 'Publish on my site' and Tag boxes (hidden during the rating phase)")
     brief.set_defaults(func=_brief)
 
-    publish = sub.add_parser("publish", help="write and sign the public files (daily items you marked public, plus Good reads); uploads nothing")
+    publish = sub.add_parser("publish", help="write and sign the public files (daily items you approved or marked public, plus Good reads); uploads nothing")
     publish.add_argument("--feed", default="engineering")
     publish.add_argument("--days", type=int, default=0, help="daily window; default 30, or 7 in automatic mode")
     publish.add_argument("--site", default="https://www.vineetganti.com")

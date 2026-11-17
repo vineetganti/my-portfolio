@@ -21,7 +21,7 @@ flowchart LR
 | File | Content |
 |---|---|
 | `good-reads.json`, `good-reads.xml` | The Good reads shelf, newest first, no date limit |
-| `feed.json`, `feed.xml` | The curated daily list: only items marked public, and never one already in Good reads |
+| `feed.json`, `feed.xml` | The curated daily list: items you **approved** in the curator page (not promotional ones) plus any you ticked "Publish on my site", never a skipped one, never one already in Good reads. An item nobody reviewed is never public (rule changed 2026-11-17; before that only ticked items were public) |
 | `status.json` | The **kill switch**: `{_schema, _generated_at, enabled, note}`. `enabled: false` makes the page show a pause notice |
 | `<name>.sig` | Detached Ed25519 signature: base64 of the 64 raw bytes, over the file's exact bytes |
 

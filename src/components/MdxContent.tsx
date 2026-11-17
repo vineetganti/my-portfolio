@@ -5,6 +5,7 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import rehypeHighlight from "rehype-highlight";
+import rehypeCodeMeta from "@/lib/rehypeCodeMeta";
 import Callout from "@/components/Callout";
 import CopyButton from "@/components/CopyButton";
 import DiagramMotion from "@/components/DiagramMotion";
@@ -54,16 +55,30 @@ function anchored(Tag: "h2" | "h3" | "h4") {
   };
 }
 
-function CodeBlock({ children, ...rest }: React.ComponentPropsWithoutRef<"pre">) {
+type CodeBlockProps = React.ComponentPropsWithoutRef<"pre"> & {
+  "data-title"?: string;
+  "data-output"?: string;
+};
+
+// `title` and `output` come from the fence's meta string (see lib/rehypeCodeMeta).
+function CodeBlock({ children, "data-title": title, "data-output": output, ...rest }: CodeBlockProps) {
   const className = isValidElement<{ className?: string }>(children)
     ? children.props.className ?? ""
     : "";
   const language = /language-([\w-]+)/.exec(className)?.[1] ?? "code";
+  const isOutput = output !== undefined;
 
   return (
-    <div className="code-block">
+    <div className={isOutput ? "code-block code-block--output" : "code-block"}>
       <div className="code-bar">
-        <span>{language}</span>
+        <span className="code-meta">
+          <span className="code-kind">{isOutput ? "output" : language}</span>
+          {title && (
+            <span className="code-title" title={title}>
+              {title}
+            </span>
+          )}
+        </span>
         <CopyButton />
       </div>
       <pre {...rest}>{children}</pre>
@@ -189,7 +204,7 @@ export default function MdxContent({ source }: { source: string }) {
         options={{
           mdxOptions: {
             remarkPlugins: [remarkGfm],
-            rehypePlugins: [rehypeSlug, rehypeHighlight],
+            rehypePlugins: [rehypeCodeMeta, rehypeSlug, rehypeHighlight],
           },
         }}
       />

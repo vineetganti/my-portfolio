@@ -1,0 +1,37 @@
+{
+  "steps": [
+    {
+      "from": "START",
+      "to": "code_execution_node",
+      "type": "request"
+    },
+    {
+      "from": "code_execution_node",
+      "to": "error_router",
+      "type": "metadata"
+    },
+    {
+      "from": "error_router",
+      "to": "code_fix_node",
+      "label": "crashed",
+      "type": "request"
+    },
+    {
+      "from": "code_fix_node",
+      "to": "code_execution_node",
+      "label": "run the new version",
+      "type": "data"
+    },
+    {
+      "from": "code_execution_node",
+      "to": "error_router",
+      "type": "metadata"
+    },
+    {
+      "from": "error_router",
+      "to": "END",
+      "label": "ok, or 3 tries",
+      "type": "metadata"
+    }
+  ]
+}

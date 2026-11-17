@@ -95,3 +95,15 @@ def test_public_feed_has_only_published_items_and_no_private_fields(tmp_path):
         assert private not in blob
     out = tmp_path / "public"
     assert write_public_feed(items, out) == 1 and (out / "feed.json").exists() and (out / "feed.xml").read_text(encoding="utf-8").count("<item>") == 1
+
+
+def test_daily_list_takes_approved_items_but_never_unreviewed_promotional_or_skipped_ones(tmp_path):
+    store = seed(tmp_path, {"approved": {}, "ticked": {}, "unreviewed": {}, "promo_approved": dict(promo=True),
+                            "promo_ticked": dict(promo=True), "skipped": {}})
+    store.set_label(key("approved"), decision="approve")  # approved, no tick box: public
+    store.set_label(key("ticked"), publish=True)  # the tick box alone still works
+    store.set_label(key("promo_approved"), decision="approve")  # approved but promotional: needs the tick box
+    store.set_label(key("promo_ticked"), decision="approve", publish=True)
+    store.set_label(key("skipped"), decision="skip", publish=True)  # a skip always wins
+    items = load_items(store, "engineering", 3, NOW)
+    assert {i.title for i in public_items(items)} == {"Post approved", "Post ticked", "Post promo_ticked"}  # "unreviewed" is never public

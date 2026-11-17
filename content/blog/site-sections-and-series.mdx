@@ -147,7 +147,7 @@ export function getSeriesPosition(post: BlogPost): SeriesPosition | null {
 
 A series is ordered by `seriesOrder`, **not by date**. All nine parts of this series share one date, and a date can change; an explicit order can't be confused by either.
 
-📘 These queries call `getAllPosts()` each time, which reads and parses every file. At 48 posts, during a build that runs once, that is cheaper than the cache it would take to avoid it. It would be the first thing to change if the blog grew into the thousands.
+📘 These queries call `getAllPosts()` each time, which reads and parses every file. At 49 posts, during a build that runs once, that is cheaper than the cache it would take to avoid it. It would be the first thing to change if the blog grew into the thousands.
 
 ## Two routes, kept apart by depth
 

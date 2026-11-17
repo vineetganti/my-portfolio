@@ -34,11 +34,17 @@ function getHandPicked(): HandPicked[] {
 
 const LINK_CLASS = "font-bold text-ink hover:text-accent transition-colors";
 
+// The north-east arrow after a link that leaves the site. JSX only knows the HTML 4 entity names, so `&nearr;` would print
+// as literal text; the numeric form works. It is decoration, so screen readers skip it.
+function ExternalMark() {
+  return <span aria-hidden="true">&#8599;</span>;
+}
+
 function ItemCard({ item }: { item: SecondBrainItem }) {
   return (
     <li id={item.id} className="rounded-xl border border-border bg-card p-4 scroll-mt-24">
       <a href={item.url} target="_blank" rel="noopener noreferrer nofollow" className={LINK_CLASS}>
-        {item.title} &nearr;
+        {item.title} <ExternalMark />
       </a>
       <p className="mt-1 text-sm text-ink-muted">
         {item.source} · <time dateTime={item.published}>{format(new Date(item.published), "MMM d, yyyy")}</time>
@@ -143,7 +149,7 @@ export default async function SecondBrainPage() {
               {handPicked.map((r) => (
                 <li key={r.url} className="rounded-xl border border-border bg-card p-4">
                   <a href={r.url} target="_blank" rel="noopener noreferrer nofollow" className={LINK_CLASS}>
-                    {r.title} &nearr;
+                    {r.title} <ExternalMark />
                   </a>
                   <p className="mt-1 text-sm text-ink-muted">
                     {r.source}

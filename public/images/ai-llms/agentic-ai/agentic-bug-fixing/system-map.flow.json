@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "from": "your browser",
+      "to": "Agent",
+      "type": "request"
+    },
+    {
+      "from": "Agent",
+      "to": "Groq API",
+      "type": "request"
+    },
+    {
+      "from": "Groq API",
+      "to": "Agent",
+      "type": "data"
+    },
+    {
+      "from": "Agent",
+      "to": "exec()",
+      "label": "new code",
+      "type": "data"
+    }
+  ]
+}

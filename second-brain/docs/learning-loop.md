@@ -26,7 +26,7 @@ Things to know:
 - **No fine rating:** there are only three choices on purpose. The scores behind them are skip = 1, good = 3, top learning = 5.
 - **Publish and Tag are hidden** during this phase. Anything saved for them earlier is kept untouched when you save. They come back with `nb brief --publish-controls` when you are ready to publish.
 - If **Save shows an error**, copy the terminal text. (One was fixed on 2026-11-02: the page's Save ran on a different thread from the database connection. Fixed and tested; if you started the page before that fix, restart it.)
-- `nb publish` never uploads: only `npm run second-brain:upload` does. With nothing on the Good reads shelf and no item marked public, it writes empty files (`0 daily items and 0 good reads`), so an upload then shows an empty feed on the site.
+- `nb publish` never uploads: only `npm run second-brain:upload` does. With nothing on the Good reads shelf and no item approved or marked public, it writes empty files (`0 daily items and 0 good reads`), so an upload then shows an empty feed on the site.
 
 ### What "the model learns" means here
 No fine-tuning. Your most recent ratings are shown to the triage model as labelled examples ("this article, you scored it 3, the reader rated it 5"), so its relevance scores and categories move toward your taste. Rules built in:

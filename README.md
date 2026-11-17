@@ -75,7 +75,7 @@ Three layers, each with one job:
 | Layer | Answers | Set in | Examples |
 | --- | --- | --- | --- |
 | **Section** | Which shelf is this on? | `section:` in frontmatter, defined in `src/lib/sections.ts` | AI & LLMs, Systems & Engineering, Data Engineering, Build Logs, Essays & Ideas |
-| **Series** | What's the reading order? | `series:` and `seriesOrder:` in frontmatter | LLM Architectures (6 posts), Agentic AI (5), MIT Distributed Systems (1 so far) |
+| **Series** | What's the reading order? | `series:` and `seriesOrder:` in frontmatter | LLM Architectures (6 posts), Agentic AI (9), MIT Distributed Systems (1 so far) |
 | **Tag** | What is it about, in detail? | `tags:` in frontmatter | Strands, MCP, Rust |
 
 - `/blog` shows every section, every series and the latest posts. `/blog/topic/<section>` and `/blog/series/<series>` list one section or series.
@@ -142,6 +142,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 | Date | What changed |
 | --- | --- |
+| 2026-11-17 | **Agentic AI part 9 and titled code blocks.** *A bug-fixing agent*: a LangGraph loop that repairs crashing Python, from Shivank Agarwal's (Future with Shivank) explainer for Scaler Academy, ported to Groq. Its failures were re-run and measured (a stray bracket in about 3 of 10 replies, a retry that resends the same prompt, 5,003 calls without the brake), with nine diagrams and a new project card linking the GitHub repo. Code fences now take `title="…"` and `output` (`src/lib/rehypeCodeMeta.ts`): a file-and-lines title in the bar, and an output panel joined to its command. `scripts/build-log/draw.mjs` also draws diagrams for `scripts/build-log/diagrams/agentic-ai/`. The first post of the series now credits Shivank's AI Bootcamp for the whole series. |
 | 2026-11-13 | **Podcasts on their own pages.** The AI podcasts moved to `/podcasts` and `/podcasts/<slug>` with one shared player, so every post keeps the browser voice (they had replaced it on the 14 posts with a recording) and links to its episode. A new Podcasts chip on `/blog` leads to the list. Episode lengths are measured with `ffprobe` into `content/audio-durations.json`. Testing leaving a page found that Next keeps the old page hidden, so audio kept playing with its controls hidden; the podcast player now pauses when hidden, and the browser voice resets its state. |
 | 2026-11-13 | **Building this site series.** The single build-log post became nine parts, one per feature: architecture, sections and series, audio, nuggets and feeds, diagrams, generated content, live Postgres, the Second brain page, and the Second brain pipeline built with Claude Code. Checks and measurements were re-run for it, which found the PGlite download fix still holding at 5.74 MB, the SQL bank reproducing exactly, and three issues listed under Open items. The project card now links to the series. |
 | 2026-11-05 | **Database Engineering series.** Fourteen posts following Hussein Nasser's *Fundamentals of Database Engineering*, with its Q&A folded in and corrections to the course where a real run or the docs disagreed. Demos were re-run on real PostgreSQL, MySQL, MongoDB, Redis and Memcached in Docker by `scripts/db-lab/` and shown through `src/components/db/`: multi-session step-throughs, measured charts, simulators, and live PostgreSQL in the browser with PGlite. Four new 50-card decks fold into one entry on the home page chooser. |
@@ -162,7 +163,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 ### Content today
 
-48 posts: 14 in AI & LLMs (two series), 20 in Data Engineering (two series), 10 in Build Logs (one series), 2 in Systems & Engineering and 2 in Essays & Ideas. 6 project cards.
+49 posts: 15 in AI & LLMs (two series), 20 in Data Engineering (two series), 10 in Build Logs (one series), 2 in Systems & Engineering and 2 in Essays & Ideas. 7 project cards.
 
 ## Open items
 
