@@ -58,6 +58,38 @@ def save_labels(store: Store, rows: list[dict]) -> int:
     return len(rows)
 
 
+def row_values(store: Store, items: list[DigestItem], widths: list[int], show_publish_and_tags: bool = False) -> list[list]:
+    """What each row's boxes should show, read from the database NOW (not when the page was built). One list per row, in
+    box order: rating, not-vendor, [publish, tag,] and an unticked Remove box on shelf rows (len(row) == its width)."""
+    labels = store.labels()
+    out = []
+    for it, width in zip(items, widths):
+        lab = labels.get(it.url_key, {})
+        start = user_score(int(lab.get("rating") or 0), lab.get("decision", "") or "", bool(lab.get("top_learning")))
+        v = [RATING_TO_CHOICE.get(start, "unrated"), bool(lab.get("not_vendor"))]
+        if show_publish_and_tags:
+            v += [bool(lab.get("publish")), lab.get("tag", "") or ""]
+        out.append(v + [False] * (width - len(v)))
+    return out
+
+
+def changed_rows(items: list[DigestItem], loaded: list[list], current: list[list], show_publish_and_tags: bool = False) -> list[dict]:
+    """The rows whose boxes differ from what the page showed when it loaded, as save_labels rows. Saving only these means
+    a page left open (or a second tab) can't write its old values over a newer rating, and an untouched row keeps the time
+    you actually rated it, which the learning examples and the 7-day gate depend on."""
+    out = []
+    for it, before, now in zip(items, loaded, current):
+        if list(before) == list(now):
+            continue
+        row = {"url_key": it.url_key, "rating": now[0], "not_vendor": bool(now[1])}
+        if show_publish_and_tags:
+            row |= {"publish": bool(now[2]), "tag": now[3] or ""}
+        if len(now) > (4 if show_publish_and_tags else 2):  # the Remove box exists only on shelf rows
+            row["remove_good_read"] = bool(now[-1])
+        out.append(row)
+    return out
+
+
 def _card(it: DigestItem) -> str:
     day = it.published.strftime("%b %d") if it.published else "date unknown"
     badges = " ".join(f"`{b}`" for b, on in (("BREAKTHROUGH", it.breakthrough), ("OPEN SOURCE", it.open_source)) if on)
@@ -99,19 +131,39 @@ def build_app(store: Store | None = None, feed: str = "engineering", days: int =
                 rows.append((it, comps))
         save = gr.Button("Save labels", variant="primary")
         status = gr.Markdown()
+        # What this browser tab showed when it loaded (or last saved). Per tab, so two tabs can't confuse each other.
+        loaded = gr.State([])
 
-        def on_save(*values):
+        page_items = [it for it, _ in rows]
+        widths = [len(comps) for _, comps in rows]
+        boxes = [c for _, comps in rows for c in comps]
+
+        def split(values) -> list[list]:
             out, pos = [], 0
-            for it, comps in rows:
-                c = values[pos:pos + len(comps)]
-                pos += len(comps)
-                row = {"url_key": it.url_key, "rating": c[0], "not_vendor": c[1]}
-                if show_publish_and_tags:
-                    row |= {"publish": c[2], "tag": c[3] or ""}
-                if len(c) > (4 if show_publish_and_tags else 2):  # the Remove box exists only on shelf rows
-                    row["remove_good_read"] = bool(c[-1])
-                out.append(row)
-            return f"Saved {save_labels(store, out)} labels at {datetime.now():%H:%M:%S}. Stop this page (Ctrl+C) and start `nb brief` again to see the new order."
+            for w in widths:
+                out.append(list(values[pos:pos + w]))
+                pos += w
+            return out
 
-        save.click(on_save, inputs=[c for _, comps in rows for c in comps], outputs=status)
+        def fresh() -> tuple[list[list], list]:
+            vals = row_values(store, page_items, widths, show_publish_and_tags)
+            return vals, [v for row in vals for v in row]
+
+        # Fill every box from the database each time the page opens, so a browser refresh shows what is saved,
+        # not what was stored when `nb brief` started.
+        def on_load():
+            vals, flat = fresh()
+            return [vals, *flat]
+
+        def on_save(before, *values):
+            before = before or fresh()[0]  # Save pressed before the page finished loading: compare with the database
+            todo = changed_rows(page_items, before, split(values), show_publish_and_tags)
+            n = save_labels(store, todo) if todo else 0
+            vals, flat = fresh()
+            note = (f"Saved {n} changed label{'s' if n != 1 else ''} at {datetime.now():%H:%M:%S}." if n
+                    else "Nothing changed since the page loaded; nothing saved.")
+            return [note + " Refreshing the page keeps them; restart `nb brief` to see the new order.", vals, *flat]
+
+        demo.load(on_load, outputs=[loaded, *boxes])
+        save.click(on_save, inputs=[loaded, *boxes], outputs=[status, loaded, *boxes])
     return demo

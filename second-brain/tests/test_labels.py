@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from newsletter_brief.brief.app import build_app, save_labels
+from newsletter_brief.brief.app import build_app, changed_rows, row_values, save_labels
 from newsletter_brief.brief.build import LOW_PRIORITY, TOP, buckets, load_items, render_markdown
 from newsletter_brief.daily import run_feed, url_key
 from newsletter_brief.db.store import Store
@@ -78,6 +78,45 @@ def test_save_labels_from_the_curator_page(tmp_path):
     assert labels[key("a1")]["top_learning"] == 1 and labels[key("a1")]["decision"] == "approve"  # rating 5 sets the layout fields
     assert labels[key("b2")]["decision"] == "skip" and labels[key("b2")]["rating"] == 1
     assert build_app(store) is not None  # the page builds from the stored items (not launched here)
+
+
+def test_a_refreshed_page_shows_saved_ratings_and_a_stale_page_cannot_overwrite_them(tmp_path):
+    store = seed(tmp_path, {"a1": {}, "b2": {}, "c3": {}})
+    items = [i for i in load_items(store, "engineering", 3, NOW)]
+    widths = [2] * len(items)
+    by_key = {i.url_key: n for n, i in enumerate(items)}
+    tab_a = row_values(store, items, widths)  # tab A opens: nothing rated yet
+    assert all(v == ["unrated", False] for v in tab_a)
+
+    # Tab A rates a1 "good" and saves: only that row is written.
+    now_a = [list(v) for v in tab_a]
+    now_a[by_key[key("a1")]][0] = "good"
+    todo = changed_rows(items, tab_a, now_a)
+    assert [r["url_key"] for r in todo] == [key("a1")]
+    save_labels(store, todo)
+
+    # A refresh reads the database again, so the saved rating shows (the bug: it showed the start-up value).
+    assert row_values(store, items, widths)[by_key[key("a1")]][0] == "good"
+
+    # Tab B was opened before that save and still shows a1 unrated. It rates b2 "skip" and saves:
+    # a1 is untouched in tab B, so its old "unrated" must not be written over "good".
+    now_b = [list(v) for v in tab_a]
+    now_b[by_key[key("b2")]][0] = "skip"
+    save_labels(store, changed_rows(items, tab_a, now_b))
+    labels = store.labels()
+    assert labels[key("a1")]["rating"] == 3 and labels[key("b2")]["rating"] == 1 and key("c3") not in labels
+
+
+def test_saving_an_unchanged_page_writes_nothing_and_keeps_when_you_rated(tmp_path):
+    store = seed(tmp_path, {"a1": {}})
+    save_labels(store, [{"url_key": key("a1"), "rating": "top learning", "not_vendor": False}])
+    store.db.execute("UPDATE labels SET labeled_at = '2026-11-01T09:00:00'")  # rated on an earlier day
+    store.db.commit()
+    items = load_items(store, "engineering", 3, NOW)
+    shown = row_values(store, items, [2])
+    assert shown == [["top learning", False]]
+    assert changed_rows(items, shown, [list(v) for v in shown]) == []
+    assert store.db.execute("SELECT labeled_at FROM labels").fetchone()[0] == "2026-11-01T09:00:00"
 
 
 def test_public_feed_has_only_published_items_and_no_private_fields(tmp_path):

@@ -13,7 +13,7 @@ Use **one** PowerShell window, opened in the **root** of the `my-portfolio` repo
    - **skip**: not interested (the article disappears from the digest);
    - **good**: useful;
    - **top learning**: deep material in LLM internals, distributed systems, core engineering challenges or AI (it goes to Top picks).
-   Tick **Not a vendor announcement** if the model wrongly put a normal article in the vendor section. Press **Save labels** and wait for the "Saved N labels" message. Then press **Ctrl+C** in the terminal to stop the page. To see the new order, start `nb brief` again.
+   Tick **Not a vendor announcement** if the model wrongly put a normal article in the vendor section. Press **Save labels** and wait for the "Saved N changed labels" message. Only the rows you changed are written, and you can keep rating and saving on the same page; a browser refresh shows what is saved. To see the new order, press **Ctrl+C** and start `nb brief` again.
 4. **`nb eval`**: shows how closely the model agrees with your ratings and which of the automation gates are met.
 5. Optional: read `data/out/engineering-<date>.md`; it follows your ratings (skips are left out, top learning is on top).
 6. **Publish to the site** (only when you want the website updated; skip it on days you only rate):
@@ -25,7 +25,7 @@ Things to know:
 - **Rate the dull ones as skip.** The model can only learn what you do not want from skips. Learning stays off until there are at least 3 good-or-top and 3 skip ratings.
 - **No fine rating:** there are only three choices on purpose. The scores behind them are skip = 1, good = 3, top learning = 5.
 - **Publish and Tag are hidden** during this phase. Anything saved for them earlier is kept untouched when you save. They come back with `nb brief --publish-controls` when you are ready to publish.
-- If **Save shows an error**, copy the terminal text. (One was fixed on 2026-11-02: the page's Save ran on a different thread from the database connection. Fixed and tested; if you started the page before that fix, restart it.)
+- If **Save shows an error**, copy the terminal text. (One was fixed on 2026-11-02: the page's Save ran on a different thread from the database connection. Fixed and tested; if you started the page before that fix, restart it.) Another was fixed on 2026-11-18: the page filled its boxes only when `nb brief` started, so a refresh showed the old ratings, and the next Save wrote all of them back over the new ones (every row, with a new time). The page now reads the database on every load and saves only changed rows.
 - `nb publish` never uploads: only `npm run second-brain:upload` does. With nothing on the Good reads shelf and no item approved or marked public, it writes empty files (`0 daily items and 0 good reads`), so an upload then shows an empty feed on the site.
 
 ### What "the model learns" means here
