@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "a document",
+      "to": "embedding model",
+      "type": "data"
+    },
+    {
+      "from": "the question",
+      "to": "embedding model",
+      "type": "data"
+    },
+    {
+      "from": "embedding model",
+      "to": "cosine similarity",
+      "type": "data"
+    }
+  ]
+}

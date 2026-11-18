@@ -4,7 +4,7 @@ description: "One trip-planning agent grown lesson by lesson, from a SQLite tabl
 date: "2026-11-01"
 section: "ai-llms"
 series: "agentic-ai"
-seriesOrder: 8
+seriesOrder: 12
 tags: ["Agentic AI", "LangChain", "Gemini", "MCP", "A2A", "RAG", "Memory", "Claude Code"]
 ---
 
@@ -44,14 +44,19 @@ The lesson code comes from Scaler Academy's AI Bootcamp, the course this series 
 <Callout type="info" title="This is part of a series">
 
 1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
-2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
-3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
-4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
-5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
-6. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
-7. [Evaluating, observing and governing agents](/blog/agent-evaluation): traces, LLM judges, guardrails and policy.
-8. **Trip Buddy: one agent, built up in 15 lessons** (this post): RAG, tools, MCP, memory and A2A in one app.
-9. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. [Finding the right text](/blog/retrieval-for-agents): embeddings, similarity search, reranking, chunking and HyDE.
+4. [How AI agents remember](/blog/how-ai-agents-remember): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+9. [Seeing inside an agent](/blog/observing-agents): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. **Trip Buddy: one agent, built up in 15 lessons** (this post): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
 
 </Callout>
 
@@ -718,7 +723,7 @@ Every number in the answer comes from the tool: ₹11,800 total and ₹200 left 
 
 ## Part 8: Lessons 09–10, the tools move into an MCP server
 
-[Post 5](/blog/how-agents-talk) covered MCP from scratch. Here the same idea is applied to Trip Buddy: the database and the three tools leave the agent's file and move into `trip_mcp_server.py`. The agent no longer contains any SQL. The server offers all three MCP building blocks, and the spec is precise about who controls each one:
+[The MCP and A2A post](/blog/how-agents-talk) covered MCP from scratch. Here the same idea is applied to Trip Buddy: the database and the three tools leave the agent's file and move into `trip_mcp_server.py`. The agent no longer contains any SQL. The server offers all three MCP building blocks, and the spec is precise about who controls each one:
 
 | Building block | Who decides to use it (MCP spec) | In this server |
 | --- | --- | --- |
@@ -866,7 +871,7 @@ All five match. The two tips (scooters, Matanga Hill at sunset) don't come from 
 
 ## Part 9: Lessons 11–13, a Trip Buddy that remembers
 
-[Post 3](/blog/how-ai-agents-remember) used Mem0 and LangGraph for memory. These lessons build the same ideas by hand, in a 236-line module, `trip_memory.py`, which makes every step visible. The vocabulary comes from cognitive science, by way of the CoALA paper, which organises a language agent's "information storage (divided into working and long-term memories)" ([Sumers et al., 2023](https://arxiv.org/abs/2309.02427)). Its long-term memory is split into episodic, semantic and procedural.
+[The memory posts](/blog/how-ai-agents-remember) used Mem0 and LangGraph for memory. These lessons build the same ideas by hand, in a 236-line module, `trip_memory.py`, which makes every step visible. The vocabulary comes from cognitive science, by way of the CoALA paper, which organises a language agent's "information storage (divided into working and long-term memories)" ([Sumers et al., 2023](https://arxiv.org/abs/2309.02427)). Its long-term memory is split into episodic, semantic and procedural.
 
 | Kind | The lesson's analogy | Trip Buddy example | Stored in |
 | --- | --- | --- | --- |
@@ -1063,7 +1068,7 @@ Here's what each round shows:
 
 ## Part 10: Lessons 14–15, asking another agent
 
-[Post 5](/blog/how-agents-talk) introduced A2A. The one-line difference that the lesson code itself states: **MCP = an agent uses tools; A2A = an agent asks another agent.** The A2A docs put it this way: "*A2A connects the agents to each other; MCP connects each agent to its own tools.*" ([A2A and MCP](https://a2a-protocol.org/latest/topics/a2a-and-mcp/)).
+[The MCP and A2A post](/blog/how-agents-talk) introduced A2A. The one-line difference that the lesson code itself states: **MCP = an agent uses tools; A2A = an agent asks another agent.** The A2A docs put it this way: "*A2A connects the agents to each other; MCP connects each agent to its own tools.*" ([A2A and MCP](https://a2a-protocol.org/latest/topics/a2a-and-mcp/)).
 
 ### The Local Guide agent
 

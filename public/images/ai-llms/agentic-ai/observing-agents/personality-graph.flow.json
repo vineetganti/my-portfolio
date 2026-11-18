@@ -1,0 +1,16 @@
+{
+  "steps": [
+    {
+      "from": "check_exact_cache",
+      "to": "check_semantic_cache",
+      "label": "miss",
+      "type": "request"
+    },
+    {
+      "from": "check_semantic_cache",
+      "to": "call_llm",
+      "label": "miss",
+      "type": "request"
+    }
+  ]
+}

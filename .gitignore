@@ -41,8 +41,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# recorded narrations live in object storage; see content/audio.json
-/public/audio/
 
 # Private raw source material (paid course transcripts): never commit
 raw/

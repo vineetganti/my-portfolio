@@ -1,0 +1,367 @@
+---
+title: "Finding the right text: embeddings, reranking, chunking and HyDE"
+description: "Before an agent can answer from your documents it has to find the right few sentences. Word vectors, sentence embeddings and cosine similarity, a fast search followed by a careful reranker, three ways to cut a document into chunks, and HyDE, all re-run on my laptop with the model calls on Groq and on Claude."
+date: "2026-11-18"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 3
+tags: ["Agentic AI", "RAG", "Embeddings", "LangChain", "AI Engineering"]
+---
+
+An agent that answers from your own documents never reads the whole pile. It searches, takes the few pieces that look most relevant, and puts only those in front of the model. If the search brings back the wrong pieces, the best model in the world answers the wrong question. This post is about that search step: how text becomes numbers, how those numbers are compared, how a second, slower model fixes the first one's ranking, how a document is cut into pieces, and a trick called HyDE that searches with a made-up answer.
+
+<Callout type="info" title="This is part of a series">
+
+1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. **Finding the right text** (this post): embeddings, similarity search, reranking, chunking and HyDE.
+4. [How AI agents remember](/blog/how-ai-agents-remember): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+9. [Seeing inside an agent](/blog/observing-agents): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+
+</Callout>
+
+<Callout type="note" title="Credit">
+
+The exercises, solutions and explainers here are from **Shivank Agarwal's** AI Bootcamp at **Scaler Academy** (sessions of 14 and 15 November 2026, modules 1 and 2). Shivank runs [Future with Shivank](https://www.linkedin.com/in/shivankagrawal/). I re-ran his solution code and wrote up what I saw; the explanations of *why* follow his explainers closely.
+
+</Callout>
+
+## TL;DR
+
+- **Embeddings turn text into lists of numbers** whose direction carries meaning. Cosine similarity compares the directions: "fruit and nutrition" scored 0.71 against "Apples and oranges are healthy fruits", 0.47 against a banana sentence that shares no word with it, and 0.10 against cricket. ✅
+- **Search in two stages.** A bi-encoder embeds every document once and finds candidates in milliseconds; a cross-encoder reads the question and each candidate together and reorders the short list. The reranker moved the sentence that actually lists COVID-19 symptoms from 4th to 1st. ✅
+- **A reranker judges relevance, not truth.** A false sentence saying COVID-19 causes memory loss rose to 2nd after reranking. ✅
+- **Chunk size decides what can be found.** At 50 characters the best hit was a fragment, at 150 a whole sentence, at 400 half the article. Splitting at headings keeps a heading with its text and records where each chunk came from. ✅
+- **HyDE searches with a made-up answer.** The plain query matched one product at 1.59; with a model's fake product titles added, Groq found three running shoes (top 8.09). Two Claude runs wrote different fake titles and got different top threes, and one of them pulled a casual shoe in. ✅
+- **Semantic chunking depends on the embedding model.** With the local model I used, it cut the sample into two chunks, not one per topic. ✅
+
+## Where the code came from, and how I ran it
+
+The folder is `Bootcamp_14th & 15th Nov`, with a `1_GIVE_FIRST` folder of exercises with TODOs and a `2_SHARE_AFTER` folder of solutions. I ran the solutions. Module 1 needs no model API at all: GloVe word vectors, and two small models from Hugging Face that run on the CPU. Module 2 makes one model call (the HyDE step) and uses an embedding model for semantic chunking.
+
+The course code calls OpenAI (`gpt-6-luna` and `text-embedding-3-small`). I have no OpenAI credits, so every lab in this series now goes through one small file, `llm.py`, with a switch: `LLM_PROVIDER=groq` uses `openai/gpt-oss-120b` on Groq, and `LLM_PROVIDER=claude` uses Claude Haiku 5.5 through my Claude subscription. Neither has an embeddings endpoint, so both use the local `all-MiniLM-L6-v2` model, which is the same model module 1 already uses. [The tools post](/blog/giving-agents-tools#the-same-loop-on-two-providers) explains the switch and what it had to fake.
+
+| Label | Meaning |
+| --- | --- |
+| ✅ | I ran it on 2026-11-18; the output is from my run |
+| 📘 | From Shivank's explainer or the library docs; not re-run by me |
+
+The modules ran in a Python 3.12 virtual environment. Timings from my run log: the similarity app took 22 s and the rerank app 53 s on their first run, nearly all of it downloading models; the chunking notebook took 32 s on Groq and 36 s on Claude. ✅
+
+## Part 1: words as numbers
+
+![Text becomes numbers before it can be compared. A sentence such as 'Bananas are a great source of potassium' goes into an embedding model, all-MiniLM-L6-v2, which returns 384 numbers. The question 'fruit and nutrition' goes through the same model. Cosine similarity compares the two lists: 0.47 for bananas, 0.71 for 'Apples and oranges are healthy fruits', and 0.10 for a cricket sentence, so the two fruit sentences win although the banana one shares no word with the question.](/images/ai-llms/agentic-ai/retrieval-for-agents/meaning-map.svg)
+
+Computers compare numbers, not meanings. An **embedding** is a list of numbers produced by a model trained on a lot of text, arranged so that texts used in similar ways end up with similar numbers. No single number means "royal" or "fruit"; the pattern across all of them does.
+
+<Callout type="analogy" title="Pins on a map of meanings">
+
+Think of every sentence as a pin on a giant map. "Train ticket refund" and "cancel my booking" land close together; "recipe for paneer tikka" lands far away. Search becomes: find the pins nearest the question's pin.
+
+</Callout>
+
+### GloVe: one vector per word
+
+The notebook loads [GloVe](https://nlp.stanford.edu/projects/glove/) vectors through gensim: 400,000 words, 50 numbers each, learned from Wikipedia and news text.
+
+```python title="1_word_embeddings.ipynb (solution)"
+model = api.load("glove-wiki-gigaword-50")
+v_king = model["king"]                       # word in, vector out, like a dictionary
+model.most_similar("king", topn=5)
+model.most_similar(positive=["king", "woman"], negative=["man"], topn=1)
+```
+
+```text output
+Shape of the 'king' vector: (50,)
+First 5 numbers: [ 0.50451   0.68607  -0.59517  -0.022801  0.60046 ]
+prince 0.824 · queen 0.784 · ii 0.775 · emperor 0.774 · son 0.767
+king - man + woman = [('queen', 0.8523604273796082)]
+paris - france + india = [('delhi', 0.8888585567474365)]
+```
+
+✅ The nearest words to *king* are other royals, and **word maths** works: start at *king*, remove the *man* direction, add the *woman* direction, and the closest word is *queen*. The model learned a "capital of" direction too, from reading alone.
+
+Two things in the same notebook keep that in proportion:
+
+- ✅ **Doing the maths by hand returns the starting word.** `king − man + woman` computed with numpy and searched directly gives `king` 0.886, then `queen` 0.861. The vector barely moved; `most_similar(positive=…, negative=…)` quietly drops the input words from its answers, which is why it shows *queen*.
+- ✅ **Not every subtraction means something.** A cell that searches `india − bengali` returns *hopes, bid, korea, united, ahead*. Word maths finds directions that the training text happened to create, and many of them are noise.
+
+### Cosine similarity, written by hand
+
+```python title="1_word_embeddings.ipynb (solution)"
+def cosine_similarity(a, b):
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+```
+
+```text output
+   king vs queen     -> my answer: 0.784 | gensim: 0.784
+cricket vs football  -> my answer: 0.696 | gensim: 0.696
+   king vs banana    -> my answer: 0.221 | gensim: 0.221
+```
+
+The dot product is large when two lists rise and fall together; dividing by both lengths removes size, so only **direction** is compared. The result runs from −1 to 1. Direction is what matters because a long and a short sentence about the same thing point the same way but have very different lengths. ✅
+
+### Sentence embeddings: the similarity app
+
+Single words are not enough for search, so the next app embeds whole sentences with [`all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2), which turns any sentence into 384 numbers and runs on a laptop CPU.
+
+```python title="2_similarity_search_app.py (solution, the search itself)"
+doc_embeddings = model.encode(docs)                       # one row of 384 numbers per line
+query_embedding = model.encode([query.strip()])[0]
+scores = [(doc, cosine_similarity(query_embedding, emb)) for doc, emb in zip(docs, doc_embeddings)]
+scores.sort(key=lambda pair: pair[1], reverse=True)
+```
+
+The app is a Gradio page, so I called its `retrieve_top_k` function directly with the page's own sample documents instead of clicking:
+
+| Query | Top results (score) |
+| --- | --- |
+| fruit and nutrition (k=3) | Apples and oranges are healthy fruits (0.71) · Bananas are a great source of potassium (0.47) · Virat Kohli scored a century in the final (0.10) |
+| stock market news (k=2) | The stock market crashed today (0.61) · Sensex fell 800 points after the RBI announcement (0.25) |
+| cricket (k=1) | Virat Kohli scored a century in the final (0.40) |
+
+✅ The banana sentence comes second although it shares no word with "fruit and nutrition". Keyword search could not do that. The Sensex sentence shares no word with "stock market news" either and still beats the unrelated sentences. Notice also that k=3 always returns three results, however weak the third is: the cricket sentence at 0.10 is not an answer. A real system needs a score threshold, not just a count.
+
+## Part 2: retrieve fast, then rerank carefully
+
+![Two-stage search on eight sentences for the query 'COVID-19 Symptoms'. Stage one, the bi-encoder, embeds query and sentences separately and ranks by cosine similarity: the short sentence 'COVID-19 has many symptoms.' comes first at 0.92, and the sentence that actually lists symptoms is fourth. Stage two, the cross-encoder, reads each query and sentence pair together: the sentence that lists a high temperature, a cough and a lost sense of smell moves to first at 10.4. But the false sentence 'COVID-19 has the following symptom: memory loss, poor judgment, and confusion' moves up to second at 9.8. A reranker judges relevance, not truth.](/images/ai-llms/agentic-ai/retrieval-for-agents/retrieve-rerank.svg)
+
+The model in Part 1 is a **bi-encoder**: it embeds the question and each document *separately*. That is what makes it fast, because the document vectors can be computed once and stored. It is also its weakness: it never sees the question and the document together.
+
+A **cross-encoder** reads the pair as one input and outputs a relevance score. Every word of the question can be matched against every word of the document, so it is far more accurate, but nothing can be precomputed: one full model run per pair, per question. So it only ever sees the bi-encoder's short list.
+
+<Callout type="analogy" title="Resume filter, then interview">
+
+Step 1 scans 5,000 resumes in seconds and keeps 20. Step 2 is the interview: slow and careful, and only worth doing for those 20.
+
+</Callout>
+
+```python title="3_reranking_app.py (solution)"
+bi_encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L6-v2")   # trained on real web searches
+
+def rerank(query, documents):
+    scores = cross_encoder.predict([(query, doc) for doc in documents])
+    return sorted(zip(documents, scores), key=lambda pair: pair[1], reverse=True)
+```
+
+The app ships with eight sentences built to trip a vector search: several that merely repeat the query words, two real descriptions, one about dementia, and one false claim that COVID-19 causes memory loss. Retrieving all eight and reranking them:
+
+| Sentence | Bi-encoder (cosine) | Cross-encoder |
+| --- | --- | --- |
+| COVID-19 has many symptoms. | **0.92** (1st) | 7.17 (5th) |
+| COVID-19 symptoms are not nice | 0.87 (2nd) | 6.83 (7th) |
+| COVID-19 symptoms are bad. | 0.86 (3rd) | 7.66 (4th) |
+| COVID-19 symptoms can include: a high temperature… a new, continuous cough; a loss or change to your sense of smell… | 0.86 (4th) | **10.42 (1st)** |
+| COVID-19 is a disease caused by a virus. The most common symptoms are fever, chills… | 0.83 (5th) | 9.81 (3rd) |
+| COVID-19 symptoms are really bad. | 0.82 (6th) | 7.08 (6th) |
+| COVID-19 has the following symptom: memory loss, poor judgment, and confusion. | 0.66 (7th) | **9.84 (2nd)** |
+| Dementia has the following symptom: memory loss, poor judgment, and confusion. | 0.28 (8th) | −9.93 (8th) |
+
+✅ Three things in that table:
+
+1. **Repeating the query words is enough to win a vector search.** "COVID-19 has many symptoms." tells you nothing and came first.
+2. **The reranker fixed that.** The sentence that lists symptoms moved from 4th to 1st; the empty ones dropped.
+3. **The reranker promoted a falsehood.** The memory-loss sentence went from 7th to 2nd. It has the right topic and the shape of an answer, and that is exactly what relevance means. The explainer predicted it would "usually not sink to the bottom"; on my run it did worse than not sinking. Checking whether something is *true* needs trusted sources in the knowledge base, not a better ranker.
+
+Cross-encoder scores are not between 0 and 1 and can be negative; only the order matters. And the reranker can only reorder what retrieval gives it: with k=2 here it could never have found the best sentence, which retrieval put 4th. In practice you retrieve 20 to 50 and rerank down to 3 to 5. 📘
+
+## Part 3: cutting documents into chunks
+
+A retrieval system never sends a whole document to the model; it sends the few **chunks** that match. Chunks are the units of knowledge your agent can find, so where you cut decides what can be found.
+
+<Callout type="analogy" title="Notes for an exam">
+
+One sticky note per idea is easy to find. Notes torn mid-sentence are useless. One giant note with the whole chapter is hard to scan. Chunking is deciding how big each note is and where to tear the page.
+
+</Callout>
+
+### Size
+
+![The same short article about the heart, split three ways, and what comes back for the question 'What is the primary function of the heart?'. At 50 characters there are 16 chunks and the top result is a fragment: 'the body and removes metabolic waste. The heart'. At 150 characters there are 6 chunks and the top result is a whole sentence: 'The human heart is a muscular organ that pumps blood through the circulatory system.' At 400 characters there are 2 chunks and the answer is buried in half the article.](/images/ai-llms/agentic-ai/retrieval-for-agents/chunk-sizes.svg)
+
+```python title="chunking_strategies.ipynb (solution, part 2.1)"
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=int(size * 0.1))
+chunks = text_splitter.split_documents(documents)
+db = Chroma.from_documents(chunks, embeddings, collection_name=f"heart_chunks_{size}",
+                           ids=[f"{size}-{i}" for i in range(len(chunks))])
+```
+
+`RecursiveCharacterTextSplitter` tries paragraph breaks first, then line breaks, then spaces, and only cuts inside a word as a last resort. Each size gets its own Chroma collection, and the explicit `ids` mean running the cell twice updates the same chunks instead of storing duplicates. The **10% overlap** repeats the edge text, so a sentence cut at a boundary still appears whole in one chunk. ✅
+
+| Size | Chunks | Top result for "What is the primary function of the heart…?" |
+| --- | --- | --- |
+| 50 | 16 | "the body and removes metabolic waste. The heart" |
+| 150 | 6 | "The human heart is a muscular organ that pumps blood through the circulatory system." |
+| 400 | 2 | four sentences of the article in one block |
+
+✅ Identical on both runs, because nothing in this step calls a chat model. There is no universal best size: the explainer suggests starting around 500 to 1,000 characters with 10 to 20% overlap for real documents, then testing with real questions. 📘
+
+### Headings
+
+![Before and after for headings. Before, a fixed-length splitter that may only cut at line breaks packs lines into 200-character chunks, so chunk 3 ends with the heading '### Unsupervised Learning' while the text under it starts chunk 4. After, a Markdown header splitter makes one chunk per section, and each chunk carries its address as metadata: Header 1 Machine Learning Fundamentals, Header 2 Types of Machine Learning, Header 3 Unsupervised Learning.](/images/ai-llms/agentic-ai/retrieval-for-agents/heading-split.svg)
+
+A pure fixed-length splitter (`separator=""`) cuts every 100 characters, even inside words: ✅ my run printed `…that enable` / `s computers…` and `## Types of M` / `achine Learning`. Allowing cuts only at line breaks fixes the words, not the structure:
+
+```python title="chunking_strategies.ipynb (solution, part 2.2)"
+fixed_length_splitter = CharacterTextSplitter(chunk_size=200, chunk_overlap=20, separator="\n")
+```
+
+✅ Five chunks of 184, 174, 139, 198 and 106 characters, and chunk 3 *ends* with the heading `### Unsupervised Learning` while its text starts chunk 4. A search for "what is clustering?" would find chunk 4 with no heading to say what it is about.
+
+Splitting at the headings themselves gives one chunk per section and keeps its address:
+
+```python title="chunking_strategies.ipynb (solution, part 2.4)"
+markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+md_header_splits = markdown_splitter.split_text(text)
+```
+
+```text output
+Chunk 3:
+Unsupervised learning finds hidden patterns in data without labeled examples: …
+Metadata: {'Header 1': 'Machine Learning Fundamentals', 'Header 2': 'Types of Machine Learning', 'Header 3': 'Unsupervised Learning'}
+```
+
+✅ The metadata can be shown as the answer's source ("Types of Machine Learning → Unsupervised Learning"), used as a filter, or prepended to the chunk before embedding so the vector knows the topic. For a long policy PDF with headings, the explainer's advice is structure first, then a recursive splitter for any section that is still too long. 📘
+
+### Semantic chunking, and a result that differed from the course
+
+Semantic chunking cuts where the *meaning* jumps: embed every sentence, measure the distance between neighbours, and start a new chunk where a gap is unusually large (by default, larger than 95% of all gaps).
+
+```python title="chunking_strategies.ipynb (solution, part 2.3, as ported)"
+semantic_splitter = SemanticChunker(provider.make_embeddings())   # the course used OpenAI text-embedding-3-small
+docs = semantic_splitter.create_documents([text])
+```
+
+✅ With the local `all-MiniLM-L6-v2` model, my run produced **two** chunks: the title and first sentence, then everything else (supervised, unsupervised and reinforcement learning in one block). The explainer, with OpenAI's larger embedding model, describes "chunks of different lengths, each about one topic". 📘 So the cut points are a property of the embedding model, not just the text: a smaller model sees the three learning types as one topic. That is worth knowing before switching embedding models under an existing index.
+
+The notebook also printed a deprecation warning: `langchain-experimental` [is being sunset](https://github.com/langchain-ai/langchain-experimental/issues/87). The method is four steps and easy to write yourself if the package goes away.
+
+## Part 4: HyDE, searching with a made-up answer
+
+![HyDE in two rows. Without it, the shopper's query 'I want running shoes' is searched with BM25 word matching against a product catalogue, and only one product matches, the Adidas Ultraboost, at a score of 1.59, because its title has the word Shoes. With HyDE, a model first writes four made-up product titles, and the query plus those titles is searched. On Groq the top three were all running shoes: Nike Pegasus 8.09, Adidas Ultraboost 6.32, Asics Gel-Kayano 4.45. Two Claude runs wrote different titles: in one, the top score rose to 11.06 but third place was Puma casual footwear, because the made-up titles said 'everyday comfort'; in the other, all three were running shoes.](/images/ai-llms/agentic-ai/retrieval-for-agents/hyde.svg)
+
+Questions and documents are written in different words. A shopper types "I want running shoes"; the catalogue says *trainers*, *Pegasus*, *Ultraboost*. **HyDE** ([Hypothetical Document Embeddings](https://arxiv.org/abs/2212.10496)) asks a model to write a fake answer in the documents' own style, then searches with that. The notebook uses [BM25](https://github.com/dorianbrown/rank_bm25) keyword scoring so the effect is easy to see.
+
+```python title="chunking_strategies.ipynb (solution, part 2.5)"
+hyde_prompt = (
+    "You write product titles for an online shoe store.\n"
+    f"A shopper searched for: '{shopper_query}'.\n"
+    "Write 4 short product titles (brand, model, key feature) that would perfectly match this search. "
+    "One title per line, no numbering."
+)
+hyde_answer = llm.invoke(hyde_prompt).text
+scores_hyde = bm25.get_scores((shopper_query + " " + hyde_answer).lower().split())
+```
+
+Without HyDE, ✅ one product matched: *Adidas Ultraboost sneakers for men, Marathon Shoes* (1.59), and only because its title contains *Shoes*. With HyDE, every run wrote different fake listings and got a different top three. I ran Claude twice (the first run was before an unrelated fix to my adapter, described in [the tools post](/blog/giving-agents-tools#the-same-loop-on-two-providers); it doesn't touch this prompt):
+
+| Run | Made-up titles | Top three (BM25 score) |
+| --- | --- | --- |
+| Groq | Nike Air Zoom Pegasus · Adidas Ultraboost 22 · Brooks Ghost 15 · ASICS Gel-Kayano 30 | Nike Air Zoom Pegasus trainers (8.09) · Adidas Ultraboost (6.32) · Asics Gel-Kayano (4.45) |
+| Claude, run 1 | Nike Pegasus 41 · ASICS Gel-Kayano 31 · Brooks Ghost 16 · Hoka Clifton 9 "…for Everyday Comfort" | Adidas Ultraboost (11.06) · Asics Gel-Kayano (6.67) · **Puma casual footwear for everyday wear (5.49)** |
+| Claude, run 2 | Brooks Ghost 16 · ASICS Gel-Kayano 31 · Nike Pegasus 41 "…for All-Day Comfort" · Hoka Clifton 9 | Asics Gel-Kayano (6.67) · Nike Air Zoom Pegasus (4.04) · Adidas Ultraboost (2.37) |
+
+✅ Every run found real running shoes the plain query missed. But Claude's titles were long and descriptive, and in run 1 the word *everyday* matched a casual Puma shoe into third place; in run 2 the same kind of title said *All-Day*, which matches nothing, and all three were running shoes. The search result depends on which words a model happens to write. The fake answer is never shown to the user, so being wrong is fine; being *wordy* is not, because every word is a search term. The original paper embeds the fake answer and runs a vector search with it; the same code shape works with `db.similarity_search(hyde_answer)`. 📘 HyDE costs one extra model call per question, so it earns its place on short or vaguely worded questions.
+
+## Reproduce this yourself
+
+1. ✅ Create a Python 3.12 virtual environment and install `gensim`, `sentence-transformers`, `scikit-learn`, `gradio`, `langchain`, `langchain-text-splitters`, `langchain-chroma`, `langchain-huggingface`, `langchain-experimental`, `chromadb`, `rank_bm25` and `python-dotenv`. The first run downloads GloVe (66 MB) and the two small models.
+2. ✅ Module 1 needs no API key. Run `1_word_embeddings.ipynb` top to bottom, then `python 2_similarity_search_app.py` and `python 3_reranking_app.py` and open the printed address ([Gradio](https://www.gradio.app/guides/quickstart) defaults to port 7860; pass `server_port=7861` if something already uses it).
+3. ✅ Module 2 needs one chat model for HyDE. With the course code, that is an OpenAI key in `.env`. With my port, put `GROQ_API_KEY` in `.env`, or sign in to Claude Code and set `LLM_PROVIDER=claude`.
+4. ✅ To compare providers, run the notebook twice with `jupyter nbconvert --to notebook --execute` and a different `LLM_PROVIDER` each time; only the HyDE cells change.
+5. 📘 For your own documents, start with [LangChain's text splitters](https://docs.langchain.com/oss/python/integrations/splitters) and test chunk sizes against real questions before tuning anything else.
+
+## Things that can trip you up
+
+- **Top-k always returns k results.** The third "match" for fruit was a cricket sentence at 0.10. Add a minimum score.
+- **Word overlap wins vector searches too.** Sentences that repeat the query words float to the top; a reranker fixes most of that.
+- **Relevance is not truth.** The reranker ranked a false medical claim second. Curate what goes into the knowledge base.
+- **A heading can end up in the wrong chunk** with fixed-length splitting. Split at headings when the document has them.
+- **Changing the embedding model changes your chunks** if you chunk semantically, and invalidates every stored vector either way.
+- **Storing chunks without ids** duplicates them on every re-run, and the same chunk then fills your top three.
+- **HyDE's fake answer is a search query.** Wordy fake answers pull in wrong neighbours; ask for short titles.
+- **On Windows**, Hugging Face prints a warning about symlinks on first download. It is harmless; the cache just uses more disk.
+
+## What I learned
+
+The step before the model is where most answers are won or lost. Three of my results came out differently from the course's descriptions, and each one taught something: the reranker promoted a falsehood rather than merely keeping it, semantic chunking collapsed to two chunks with a smaller embedding model, and HyDE's top three changed from run to run with the words the model happened to choose.
+
+## What I'd do differently
+
+Measure retrieval on its own before wiring in a model: a handful of questions with the chunk each should find, and a count of how often it is in the top three. Every number in this post came from eyeballing one query; the [evaluation post](/blog/agent-evaluation) builds exactly that kind of test as Recall@k.
+
+## Summary
+
+Retrieval turns text into vectors and compares their directions. A fast bi-encoder narrows millions of chunks to a short list and a cross-encoder reorders it, but neither knows what is true. How a document is cut decides what can be found at all: too small splits ideas, too large buries them, and headings make the best cut points. HyDE helps when questions and documents use different words, at the price of one model call and some risk of wrong neighbours.
+
+![A map of the post in four columns. Embeddings: text becomes 384 numbers, cosine compares direction, word maths like king minus man plus woman gives queen. Search: a bi-encoder retrieves fast, a cross-encoder reranks the top K, relevance is not truth. Chunking: size decides what can be found, overlap keeps edge sentences whole, headings make good cut points and metadata. HyDE: a made-up answer is searched instead of the question, one extra model call, and it can pull in wrong neighbours.](/images/ai-llms/agentic-ai/retrieval-for-agents/summary-map.svg)
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Embedding** | A list of numbers for a piece of text, arranged so similar meanings point the same way |
+| **Cosine similarity** | Compares the direction of two vectors; 1 is the same meaning, 0 unrelated |
+| **Bi-encoder** | Embeds query and documents separately; fast, precomputable |
+| **Cross-encoder** | Scores a (query, document) pair together; accurate, slow, used to rerank |
+| **Chunk** | One piece of a document, the unit a retriever returns |
+| **Overlap** | Text repeated at chunk edges so a cut sentence still appears whole |
+| **Semantic chunking** | Cutting where the meaning between neighbouring sentences jumps |
+| **BM25** | Classic keyword scoring, counting rare shared words |
+| **HyDE** | Searching with a model-written fake answer instead of the question |
+
+### Test yourself
+
+<details>
+<summary>Why does searching with the raw vector for king − man + woman return king?</summary>
+
+The arithmetic moves the vector only a little, so it is still nearest to *king*. `most_similar(positive, negative)` removes the input words from its answers; a plain nearest-neighbour search doesn't.
+
+</details>
+
+<details>
+<summary>Why not run the cross-encoder over every document?</summary>
+
+It runs the full model once per (question, document) pair, every time someone asks. A million documents would be a million model runs per question. The bi-encoder's document vectors are computed once and reused.
+
+</details>
+
+<details>
+<summary>The reranker put "COVID-19 causes memory loss" second. What would actually keep it out of answers?</summary>
+
+Not a better ranker: it really is relevant to the query. Keep false or unreviewed text out of the knowledge base, or check claims against trusted sources.
+
+</details>
+
+<details>
+<summary>You have a 300-page HR policy with headings. How would you chunk it?</summary>
+
+Split at the headings first, keeping them as metadata, then split any section that is still too long with a recursive splitter. The headings also make answers easy to cite.
+
+</details>
+
+<details>
+<summary>HyDE's fake answer is often wrong. Why is that acceptable, and what still matters?</summary>
+
+It is never shown to anyone; it only supplies search words. What matters is that its words match the real documents and not their neighbours: short, catalogue-style titles worked better than long descriptive ones.
+
+</details>
+
+## Sources
+
+- Shivank Agarwal, Scaler Academy AI Bootcamp, modules 1 and 2: solution code and explainers (course material).
+- [GloVe: Global Vectors for Word Representation](https://nlp.stanford.edu/projects/glove/), Stanford NLP.
+- [Sentence Transformers documentation](https://sbert.net/), and the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) and [ms-marco-MiniLM-L6-v2](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2) model cards.
+- [LangChain text splitters](https://docs.langchain.com/oss/python/integrations/splitters).
+- Gao et al., [Precise Zero-Shot Dense Retrieval without Relevance Labels](https://arxiv.org/abs/2212.10496) (the HyDE paper).
+- [rank_bm25](https://github.com/dorianbrown/rank_bm25).

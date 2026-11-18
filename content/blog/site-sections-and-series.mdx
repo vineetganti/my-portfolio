@@ -16,7 +16,7 @@ By late October the blog was one list sorted by date: an essay about writing sat
 
 1. [The architecture](/blog/site-architecture): files in, static pages out, and the few parts that run in the browser.
 2. **Sections, series and URLs** (this post): shelves, reading orders, redirects and image folders.
-3. [Listen to this post](/blog/site-audio): a browser voice on every post, and AI podcasts on their own pages.
+3. [Listen to this post](/blog/site-audio): the browser reads every post aloud: chunks, pause, phones and hidden pages.
 4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
@@ -147,7 +147,7 @@ export function getSeriesPosition(post: BlogPost): SeriesPosition | null {
 
 A series is ordered by `seriesOrder`, **not by date**. All nine parts of this series share one date, and a date can change; an explicit order can't be confused by either.
 
-📘 These queries call `getAllPosts()` each time, which reads and parses every file. At 49 posts, during a build that runs once, that is cheaper than the cache it would take to avoid it. It would be the first thing to change if the blog grew into the thousands.
+📘 These queries all call `getAllPosts()`. It used to read and parse every file on every call, on the theory that at about 50 posts a build is cheap enough without a cache. 📜 That theory failed on 2026-11-17: a one-worker Vercel build re-parsed every post a dozen times per list page and timed out after 60 seconds. `getAllPosts()` now keeps its result until a post file changes on disk (it compares each file's modification time and size), and the build of 54 posts runs in about 10 seconds.
 
 ## Two routes, kept apart by depth
 

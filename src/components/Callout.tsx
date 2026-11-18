@@ -1,4 +1,4 @@
-import { Info, Lightbulb, Sparkles, StickyNote, TriangleAlert } from "lucide-react";
+import { Info, Lightbulb, RefreshCw, Sparkles, StickyNote, TriangleAlert } from "lucide-react";
 
 const VARIANTS = {
   note: { icon: StickyNote, label: "Note" },
@@ -6,6 +6,8 @@ const VARIANTS = {
   tip: { icon: Lightbulb, label: "Tip" },
   analogy: { icon: Sparkles, label: "Think of it like this" },
   warn: { icon: TriangleAlert, label: "Watch out" },
+  // Something that changed after the course or the docs it follows were written: a new spec version, a retired model.
+  updated: { icon: RefreshCw, label: "Updated since the course" },
 };
 
 /**

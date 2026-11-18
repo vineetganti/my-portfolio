@@ -4,7 +4,7 @@ description: "A first-timer's guide to multi-agent patterns with Strands and Gro
 date: "2026-10-29"
 section: "ai-llms"
 series: "agentic-ai"
-seriesOrder: 4
+seriesOrder: 6
 tags: ["Agentic AI", "LLMs", "AI Engineering", "Strands"]
 ---
 
@@ -21,14 +21,19 @@ All four examples use a model hosted on Groq and the Strands SDK, as before. Eve
 <Callout type="info" title="This is part of a series">
 
 1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
-2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
-3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
-4. **Agents that work together** (this post): supervisor, agent as tool, graph and swarm.
-5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
-6. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
-7. [Evaluating, observing and governing agents](/blog/agent-evaluation): traces, LLM judges, guardrails and policy.
-8. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
-9. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. [Finding the right text](/blog/retrieval-for-agents): embeddings, similarity search, reranking, chunking and HyDE.
+4. [How AI agents remember](/blog/how-ai-agents-remember): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. **Agents that work together** (this post): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+9. [Seeing inside an agent](/blog/observing-agents): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
 
 </Callout>
 
@@ -142,7 +147,7 @@ async def web_search(query: str, tool_context: ToolContext, time_range: str = "m
     return await tavily_search(query=query, max_results=3, time_range=time_range)
 ```
 
-The limit is also written into the worker's prompt, so the model knows about it before it hits it. The 8,000 is Groq's tokens-per-minute limit; [post 5](/blog/how-agents-talk#groqs-four-free-tier-limits) lists all four limits and reads a daily-limit error line by line.
+The limit is also written into the worker's prompt, so the model knows about it before it hits it. The 8,000 is Groq's tokens-per-minute limit; [the MCP and A2A post](/blog/how-agents-talk#groqs-four-free-tier-limits) lists all four limits and reads a daily-limit error line by line.
 
 </Callout>
 
@@ -466,7 +471,7 @@ A swarm agent sees the most, and its context grows with every turn. That is the 
 - **The orchestrator asks the user instead of working.** Tell it to pick sensible defaults.
 - **Routing on free text.** Make the model end with a fixed `LABEL: VALUE` line, and read the last match only.
 - **Unbounded runs.** Set `max_handoffs`, `max_iterations` and timeouts on a swarm, and a limit on any graph that could loop.
-- **Context size limits.** On Groq's free tier a request over 8,000 tokens fails, and each tool result is sent again with the next request. Cap results. There is a daily token budget too, which [post 5](/blog/how-agents-talk) runs into.
+- **Context size limits.** On Groq's free tier a request over 8,000 tokens fails, and each tool result is sent again with the next request. Cap results. There is a daily token budget too, which [the MCP and A2A post](/blog/how-agents-talk) runs into.
 - **Prompts that overlap.** If two agents both think a job is theirs, they'll both do it. Say what each one must not do.
 - **Not reading failures.** A tool can fail inside a worker while the run carries on, so read the trace.
 

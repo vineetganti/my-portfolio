@@ -4,51 +4,21 @@ import { summaryMap } from "./_shared.mjs";
 const post = {
   slug: "site-audio",
   diagrams: {
-    "which-player": {
-      alt: "Where a post's audio comes from. A recording saved as the post's slug in public/audio is uploaded by upload-audio.mjs to Vercel Blob, and its slug and length are listed in audio.json and audio-durations.json. At build time parsePost sets audioSrc. Every post page shows the browser-voice player; a post with an audioSrc also gets a link to its episode. The /podcasts pages list every episode and hold the one podcast player.",
-      draw(c) {
-        c.size(720, 330).title("Every post has the browser voice; the podcasts have their own pages");
-        const file = c.box(20, 56, 140, 54, "public/audio", { tone: "plain", lines: "git-ignored" });
-        const up = c.box(200, 56, 150, 54, "upload-audio.mjs", { tone: "raised", lines: "files + lengths" });
-        const blob = c.box(390, 56, 140, 54, "Vercel Blob", { tone: "cream", lines: "the files" });
-        const list = c.box(570, 56, 130, 54, "audio.json", { tone: "amber", lines: "+ audio-durations" });
-        const parse = c.box(570, 140, 130, 54, "parsePost", { tone: "raised", lines: "sets audioSrc" });
-        const post = c.box(390, 230, 140, 54, "post page", { tone: "neutral", lines: "AudioPlayer, always" });
-        const pods = c.box(570, 230, 130, 54, "/podcasts", { tone: "green", lines: "list + episodes" });
-        c.arrow(file.right, up.left);
-        c.arrow(up.right, blob.left);
-        c.arrow(blob.right, list.left);
-        c.arrow(list.bottom, parse.top);
-        c.arrow(parse.bottom, pods.top);
-        c.arrow([570, 180], [462, 228]);
-        c.arrow(post.right, pods.left, { label: "link", labelDy: -6 });
-        c.para(20, 140, "Nothing in a post's frontmatter changes. A recording is two commands and a commit of the two lists.", { width: 340 });
-        c.para(20, 230, "A post without a recording shows only the browser voice and no link.", { width: 340 });
-        c.flow("public/audio", "upload-audio.mjs", "", "data");
-        c.flow("upload-audio.mjs", "Vercel Blob", "", "data");
-        c.flow("Vercel Blob", "audio.json", "", "metadata");
-        c.flow("audio.json", "parsePost", "", "metadata");
-        c.flow("parsePost", "/podcasts", "", "uri");
-        c.flow("parsePost", "post page", "", "uri");
-        void post;
-      },
-    },
-
     "hidden-route": {
-      alt: "Before and after for leaving the podcasts pages while an episode plays. Before: you click a link to a post, Next hides the page with display none instead of removing it, and the audio element keeps playing while its player bar is hidden, so there is no way to stop it. After: the same hide runs a layout-effect cleanup that pauses the audio, and coming back shows the episode paused where it was.",
+      alt: "Before and after for leaving a post while it is being read aloud. Before: you click a link, Next hides the page with display none instead of removing it, and the player's cleanup cancels the speech but leaves its own state saying playing, so coming back shows Stop listening and a Pause button while nothing is spoken. After: the same cleanup also resets the player's state, so coming back shows Listen to this post.",
       draw(c) {
-        c.size(720, 300).title("Leaving /podcasts while an episode plays");
+        c.size(720, 300).title("Leaving a post while it is being read");
         c.text(20, 62, "Before", { size: 12.5, weight: 700, fill: RED });
         c.text(380, 62, "After", { size: 12.5, weight: 700, fill: GREEN });
         for (const x of [20, 380]) {
-          c.box(x, 72, 320, 44, "You click a link to a post", { tone: "plain" });
+          c.box(x, 72, 320, 44, "You click a link to another page", { tone: "plain" });
           c.arrow([x + 160, 116], [x + 160, 138]);
-          c.box(x, 138, 320, 48, "Next hides the page", { tone: "amber", lines: "display: none, nothing is unmounted" });
+          c.box(x, 138, 320, 48, "Next hides the post", { tone: "amber", lines: "display: none, nothing is unmounted" });
           c.arrow([x + 160, 186], [x + 160, 208]);
         }
-        c.box(20, 208, 320, 48, "The audio keeps playing", { tone: "red", lines: "its bar is hidden too: no controls" });
-        c.box(380, 208, 320, 48, "A layout-effect cleanup pauses it", { tone: "green", lines: "coming back: paused, position kept" });
-        c.para(20, 280, "Measured on 2026-11-13 before the fix: two seconds after leaving, the position had moved from 5.4 s to 7.4 s.", { width: 680, fill: MUTED });
+        c.box(20, 208, 320, 48, "Speech stops, the state says playing", { tone: "red", lines: "back: Stop listening, but silence" });
+        c.box(380, 208, 320, 48, "The cleanup resets the state too", { tone: "green", lines: "back: Listen to this post" });
+        c.para(20, 280, "Measured on 2026-11-13 with a stubbed speech engine, before and after the fix.", { width: 680, fill: MUTED });
       },
     },
 
@@ -100,18 +70,18 @@ const post = {
     },
 
     "summary-map": {
-      alt: "A map of the audio post. Browser voice: the Web Speech API reads the rendered prose and diagram descriptions and skips code and tables with a note, on every post. Robustness: a generation counter, phone fixes, a watchdog and a reset when the post is hidden. Podcast: NotebookLM recordings, re-encoded to mono 64 kbps and stored in Vercel Blob. Podcasts pages: one provider owns the audio element, so the list and episodes share a player that pauses when the route is hidden.",
+      alt: "A map of the audio post. Browser voice: the Web Speech API reads the rendered prose and diagram descriptions and skips code and tables with a note, on every post. Robustness: a generation counter, four phone fixes, a watchdog and messages instead of silence. Leaving a page: Next hides a page instead of removing it, so the player's cleanup cancels speech and resets its state. History: AI podcast recordings had their own pages from 13 to 18 November 2026 and were then removed, files included.",
       draw(c) {
         summaryMap(
           c,
-          "Two ways to listen, in two places",
+          "One way to listen, on every post",
           [
             { name: "Browser voice", lines: ["Web Speech API", "reads the rendered page", "alt text for diagrams", "skip notes for code"] },
             { name: "Robustness", lines: ["generation counter", "four phone fixes", "a watchdog", "messages, not silence"] },
-            { name: "Podcast", lines: ["NotebookLM overview", "mono AAC, 64 kbps", "Vercel Blob", "preload none"] },
-            { name: "/podcasts", lines: ["list + episode pages", "one provider, one audio", "pause when hidden", "a link from each post"] },
+            { name: "Leaving a page", lines: ["hidden, not removed", "cleanup cancels speech", "and resets the state", "test leaving too"] },
+            { name: "History", lines: ["AI podcasts, 13–18 Nov", "14 recordings", "own pages, one player", "removed, files deleted"] },
           ],
-          "Free speech on every post, and recordings on their own pages where they are worth the storage.",
+          "Free speech on every post, made reliable by testing pauses, phones and leaving.",
         );
       },
     },

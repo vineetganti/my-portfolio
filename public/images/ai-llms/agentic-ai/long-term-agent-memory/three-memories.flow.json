@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {
+      "from": "question",
+      "to": "1. semantic",
+      "type": "request"
+    },
+    {
+      "from": "1. semantic",
+      "to": "2. 'episodic' (the profile)",
+      "type": "data"
+    },
+    {
+      "from": "2. 'episodic' (the profile)",
+      "to": "3. procedural",
+      "type": "data"
+    },
+    {
+      "from": "3. procedural",
+      "to": "4. generate_response",
+      "type": "data"
+    }
+  ]
+}

@@ -38,13 +38,12 @@ docs/
 public/
   images/<section>/<series>/<post-slug>/   diagrams and screenshots, by post
 src/
-  app/             routes: /, /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series], /podcasts, /podcasts/[slug], /projects, /about
-  components/      Header, PostCard, SectionNav, SeriesStrip, SeriesNav, AudioPlayer, PodcastProvider, PodcastRow, Callout, TableOfContents, ...
+  app/             routes: /, /blog, /blog/[slug], /blog/topic/[section], /blog/series/[series], /projects, /about
+  components/      Header, PostCard, SectionNav, SeriesStrip, SeriesNav, AudioPlayer, Callout, TableOfContents, ...
   lib/
     blog.ts        reads posts, builds the table of contents, series and section queries
     sections.ts    the list of sections and series (edit this to add one)
     speech.ts      turns the rendered post into chunks for the audio player
-    podcasts.ts    lists the posts that have a recording, with their lengths, grouped by series
     projects.ts    reads project files
     secondBrain.ts       fetches and verifies the Second brain snapshot (server only)
     secondBrainCore.mjs  signature check and validation, shared by the site, the upload script and the tests
@@ -75,7 +74,7 @@ Three layers, each with one job:
 | Layer | Answers | Set in | Examples |
 | --- | --- | --- | --- |
 | **Section** | Which shelf is this on? | `section:` in frontmatter, defined in `src/lib/sections.ts` | AI & LLMs, Systems & Engineering, Data Engineering, Build Logs, Essays & Ideas |
-| **Series** | What's the reading order? | `series:` and `seriesOrder:` in frontmatter | LLM Architectures (6 posts), Agentic AI (9), MIT Distributed Systems (1 so far) |
+| **Series** | What's the reading order? | `series:` and `seriesOrder:` in frontmatter | LLM Architectures (6 posts), Agentic AI (14), MIT Distributed Systems (1 so far) |
 | **Tag** | What is it about, in detail? | `tags:` in frontmatter | Strands, MCP, Rust |
 
 - `/blog` shows every section, every series and the latest posts. `/blog/topic/<section>` and `/blog/series/<series>` list one section or series.
@@ -116,10 +115,6 @@ Every post has a **Listen to this post** button under its title. It uses the bro
 - Voice quality depends on the browser and device: Edge and Chrome offer "Natural" or "Online" voices that sound far better than the defaults. Browsers without speech support simply don't show the button.
 - A post can't be downloaded as audio with this approach. If that's wanted later, generate an MP3 per post and let the player prefer it when present.
 
-### Recorded audio (podcasts)
-
-Some posts have an AI podcast version (an m4a made with NotebookLM). It does not replace the browser voice: every post keeps **Listen to this post**, and a post with a recording also links to its episode. Episodes are on their own pages, `/podcasts` (the list, grouped by series, linked from a Podcasts chip on `/blog`) and `/podcasts/<slug>`, which share one player (`PodcastProvider`) that pauses when you leave. The files are large, so they are not in git: they live in Vercel Blob, and `content/audio.json` lists which posts have one, with `content/audio-durations.json` holding each length (measured with `ffprobe`). `AUDIO_BASE_URL` (set in Vercel and `.env.local`) is the storage address; without it the site falls back to `public/audio/`. Upload with `node --env-file=.env.local scripts/upload-audio.mjs`, which also refreshes the lengths. See the writing guide for the steps.
-
 ### Data Engineering SQL posts
 
 The six `de-sql-*` posts are generated: their questions, sample data and answers live in `scripts/sql-bank/posts/*.py`, and `python scripts/sql-bank/build.py` (needs `pip install duckdb`) runs every answer on its sample data in DuckDB and writes the MDX plus `content/sql-traces/<slug>.json`, which the `<DataTrace>` step-throughs read. Edit the spec and rebuild rather than editing the generated MDX.
@@ -142,6 +137,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 | Date | What changed |
 | --- | --- |
+| 2026-11-18 | **Agentic AI series replanned, podcasts removed.** The series grew from 9 to 14 posts in four groups, from Shivank Agarwal's (Future with Shivank) bootcamp modules and lecture explainers for Scaler Academy: new posts on retrieval (embeddings, reranking, chunking, HyDE), long-term memory, observability, guardrails and an inventory agent; the memory, MCP, tools and evaluation posts rewritten or extended. Every lab was re-run on Groq and on Claude (through Claude Code on a subscription, `llm.py` in the lab repos), with the differences measured. New `updated` callout for things that changed after a course; `scripts/build-log/agentic-callouts.mjs` writes the series list. The AI podcast pages, player, lists, upload scripts and the 14 recordings in Vercel Blob were removed; every post keeps the browser voice. New project card: Inventory Agent. |
 | 2026-11-17 | **Agentic AI part 9 and titled code blocks.** *A bug-fixing agent*: a LangGraph loop that repairs crashing Python, from Shivank Agarwal's (Future with Shivank) explainer for Scaler Academy, ported to Groq. Its failures were re-run and measured (a stray bracket in about 3 of 10 replies, a retry that resends the same prompt, 5,003 calls without the brake), with nine diagrams and a new project card linking the GitHub repo. Code fences now take `title="…"` and `output` (`src/lib/rehypeCodeMeta.ts`): a file-and-lines title in the bar, and an output panel joined to its command. `scripts/build-log/draw.mjs` also draws diagrams for `scripts/build-log/diagrams/agentic-ai/`. The first post of the series now credits Shivank's AI Bootcamp for the whole series. |
 | 2026-11-13 | **Podcasts on their own pages.** The AI podcasts moved to `/podcasts` and `/podcasts/<slug>` with one shared player, so every post keeps the browser voice (they had replaced it on the 14 posts with a recording) and links to its episode. A new Podcasts chip on `/blog` leads to the list. Episode lengths are measured with `ffprobe` into `content/audio-durations.json`. Testing leaving a page found that Next keeps the old page hidden, so audio kept playing with its controls hidden; the podcast player now pauses when hidden, and the browser voice resets its state. |
 | 2026-11-13 | **Building this site series.** The single build-log post became nine parts, one per feature: architecture, sections and series, audio, nuggets and feeds, diagrams, generated content, live Postgres, the Second brain page, and the Second brain pipeline built with Claude Code. Checks and measurements were re-run for it, which found the PGlite download fix still holding at 5.74 MB, the SQL bank reproducing exactly, and three issues listed under Open items. The project card now links to the series. |
@@ -163,7 +159,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 ### Content today
 
-49 posts: 15 in AI & LLMs (two series), 20 in Data Engineering (two series), 10 in Build Logs (one series), 2 in Systems & Engineering and 2 in Essays & Ideas. 7 project cards.
+54 posts: 20 in AI & LLMs (two series), 20 in Data Engineering (two series), 10 in Build Logs (one series), 2 in Systems & Engineering and 2 in Essays & Ideas. 8 project cards.
 
 ## Open items
 
@@ -175,5 +171,4 @@ Everything done so far, newest first. Dates are from the git history.
 - The header doesn't fit a phone: at 390 px wide it is 483 px, so About and the theme toggle are off-screen and every page scrolls sideways.
 - The browser voice can send a sentence longer than its 180-character target (327 measured), because the limit only applies when joining sentences.
 - Nugget dates have a time but no time zone, so the RSS `pubDate` depends on the build machine's time zone.
-- The podcast recordings use 390.6 MB of Vercel Blob's 1 GB Hobby allowance.
 - The player's phone fixes are untested on a physical device. Try it on a real iPhone and Android phone and report what happens.

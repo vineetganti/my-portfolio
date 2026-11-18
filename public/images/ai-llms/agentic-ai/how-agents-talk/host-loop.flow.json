@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {
+      "from": "host (notebook)",
+      "to": "model",
+      "type": "request"
+    },
+    {
+      "from": "model",
+      "to": "host (notebook)",
+      "type": "metadata"
+    },
+    {
+      "from": "host (notebook)",
+      "to": "FastMCP server",
+      "label": "call_tool via the client",
+      "type": "request"
+    }
+  ]
+}

@@ -26,11 +26,6 @@ export interface BlogPost {
   readingTime: string;
   /** Minutes to listen to the prose read aloud (code, tables and diagrams are skipped). */
   listenMinutes: number;
-  /**
-   * URL of a recorded narration, if the post has one. Listed in `content/audio.json`
-   * (served from `AUDIO_BASE_URL`), or set `audio: <url>` in frontmatter.
-   */
-  audioSrc?: string;
   /** Set `toc: false` in frontmatter to hide the table of contents */
   toc: boolean;
   content: string;
@@ -82,14 +77,6 @@ function estimateListenMinutes(markdown: string): number {
   return Math.max(1, Math.round(words / WORDS_PER_MINUTE));
 }
 
-const AUDIO_MANIFEST = path.join(process.cwd(), "content/audio.json");
-
-/**
- * Where the recordings are served from: object storage in production (set
- * `AUDIO_BASE_URL`), or the local `public/audio/` folder in development.
- */
-const AUDIO_BASE_URL = (process.env.AUDIO_BASE_URL || "/audio").replace(/\/+$/, "");
-
 /** Identifies a file's current contents cheaply: a changed or missing file gives a different value. */
 function fileStamp(file: string): string {
   try {
@@ -98,29 +85,6 @@ function fileStamp(file: string): string {
   } catch {
     return "missing";
   }
-}
-
-let manifestCache: { stamp: string; value: Record<string, string> } | null = null;
-
-/** Slug to file name for every post that has a recording, from `content/audio.json`. Re-read only when the file changes. */
-function readAudioManifest(): Record<string, string> {
-  const stamp = fileStamp(AUDIO_MANIFEST);
-  if (manifestCache?.stamp === stamp) return manifestCache.value;
-  let value: Record<string, string> = {};
-  try {
-    value = JSON.parse(fs.readFileSync(AUDIO_MANIFEST, "utf-8"));
-  } catch {
-    // no manifest, or one that doesn't parse: no recordings
-  }
-  manifestCache = { stamp, value };
-  return value;
-}
-
-/** A recording named in frontmatter (`/path` or `https://` URL), else the one listed for this slug in the manifest. */
-function findAudio(slug: string, declared: unknown): string | undefined {
-  if (typeof declared === "string" && /^(\/|https:\/\/)/.test(declared)) return declared;
-  const file = readAudioManifest()[slug];
-  return file ? `${AUDIO_BASE_URL}/${file}` : undefined;
 }
 
 function parsePost(slug: string, fileContent: string): BlogPost {
@@ -139,7 +103,6 @@ function parsePost(slug: string, fileContent: string): BlogPost {
     seriesOrder: Number.isFinite(order) ? order : undefined,
     readingTime: stats.text,
     listenMinutes: estimateListenMinutes(content),
-    audioSrc: findAudio(slug, data.audio),
     toc: data.toc !== false,
     content,
   };
@@ -149,14 +112,13 @@ let postsCache: { stamp: string; posts: BlogPost[] } | null = null;
 
 /**
  * Every post, newest first. One pass parses all of them (about 0.3 s), and a single page can ask for the list a dozen times
- * (the section nav, the post list, one call per series card), so the result is kept until a post, or the audio manifest,
- * changes on disk. Without this, the blog's list pages took over 60 s each on a one-worker Vercel build and failed it.
+ * (the section nav, the post list, one call per series card), so the result is kept until a post changes on disk. Without this, the blog's list pages took over 60 s each on a one-worker Vercel build and failed it.
  */
 export function getAllPosts(): BlogPost[] {
   if (!fs.existsSync(BLOG_DIR)) return [];
 
   const files = fs.readdirSync(BLOG_DIR).filter((f) => f.endsWith(".mdx")).sort();
-  const stamp = [fileStamp(AUDIO_MANIFEST), ...files.map((f) => `${f}:${fileStamp(path.join(BLOG_DIR, f))}`)].join("|");
+  const stamp = files.map((f) => `${f}:${fileStamp(path.join(BLOG_DIR, f))}`).join("|");
   if (postsCache?.stamp === stamp) return [...postsCache.posts];
 
   const posts = files

@@ -1,6 +1,6 @@
 ---
 title: "Giving an AI agent tools: from a plain function to a multi-tool assistant"
-description: "How a Python function becomes a tool an agent can call, built up with a tip calculator, a three-tool sales assistant and an inventory checker, plus the lessons each one teaches."
+description: "How a Python function becomes a tool an agent can call, built up with a tip calculator, a three-tool sales assistant and an inventory checker, then the same idea with no framework at all: the four messages of a tool call on the wire, LangChain's version, and four tools to choose from, re-run on Groq and on Claude."
 date: "2026-10-26"
 section: "ai-llms"
 series: "agentic-ai"
@@ -17,20 +17,26 @@ We start from an ordinary function the agent can't see, turn it into a tool, and
 | Tip calculator | `calculate_tip` | How the model turns a sentence into arguments |
 | Sales assistant | `get_sales_data`, `analyze_sales`, `send_email` | How the model chains several tools by itself |
 | Inventory checker | `check_inventory` | How the model maps intent to a tool, and why the docstring is a contract |
+| Under the hood | `square_root`, four warehouse tools | What a tool call looks like on the wire, without a framework |
 
-The material follows the course page [Giving agents tools](https://scaler-content.github.io/giving-agents-tools/). It builds on the Groq and Strands setup from the first post, so the setup code comes first.
+The first three follow the course page [Giving agents tools](https://scaler-content.github.io/giving-agents-tools/), on the Groq and Strands setup from the first post, so the setup code comes first. The last part, [Under the hood](#under-the-hood-a-tool-call-without-a-framework), is from module 3 of Shivank Agarwal's AI Bootcamp at Scaler Academy, re-run in November 2026 on Groq and on Claude.
 
 <Callout type="info" title="This is part of a series">
 
 1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
-2. **Giving an AI agent tools** (this post): from a plain function to a multi-tool assistant.
-3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
-4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
-5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
-6. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
-7. [Evaluating, observing and governing agents](/blog/agent-evaluation): traces, LLM judges, guardrails and policy.
-8. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
-9. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+2. **Giving an AI agent tools** (this post): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. [Finding the right text](/blog/retrieval-for-agents): embeddings, similarity search, reranking, chunking and HyDE.
+4. [How AI agents remember](/blog/how-ai-agents-remember): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+9. [Seeing inside an agent](/blog/observing-agents): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
 
 </Callout>
 
@@ -452,9 +458,159 @@ if product_id not in inventory:
 
 </Callout>
 
+## Under the hood: a tool call without a framework
+
+Strands hid the most important part: what actually travels between your code and the model. Module 3 of Shivank Agarwal's AI Bootcamp at Scaler Academy (14 November 2026) builds the same idea three times, from raw API calls up to a four-tool agent, and it is worth seeing once with nothing in between. I re-ran the solution files on 2026-11-18 on two providers; ✅ marks output from those runs and 📘 marks what comes from Shivank's explainer.
+
+### The four steps on the wire
+
+![One question, four steps, one growing list of messages. Step 1: our code sends the user's message and the tool menu, a JSON schema for square_root, to the model. Step 2: the model replies with no text, only a tool call: name square_root, arguments as a JSON string with number 144, and an id. Step 3: our code parses the arguments, runs the real Python function, and appends a message with role tool, the same id and the content 12.0. Step 4: our code sends the whole list again and the model answers in words: the square root of 144 is 12.](/images/ai-llms/agentic-ai/giving-agents-tools/tool-call-wire.svg)
+
+<Callout type="analogy" title="A waiter and a kitchen">
+
+The model is a waiter who cannot cook. It reads the menu (your tool list), writes an order slip with a table number (the tool call id), and when the dish comes back it serves it with a sentence.
+
+</Callout>
+
+The menu is a JSON Schema written by hand. The model never sees the Python, only the name, the description and the parameters:
+
+```python title="1_tool_calling_from_scratch.py (solution)"
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "square_root",
+        "description": "Calculate the square root of a non-negative number.",
+        "parameters": {
+            "type": "object",
+            "properties": {"number": {"type": "number", "description": "The non-negative number to take the square root of."}},
+            "required": ["number"],
+        },
+    },
+}]
+```
+
+Then the loop, in four moves:
+
+```python title="1_tool_calling_from_scratch.py (solution, chat_with_tools)"
+response = client.chat.completions.create(model=MODEL, messages=messages, tools=tools)
+message = response.choices[0].message
+messages.append(message)                          # keep the tool request in the history
+if not message.tool_calls:
+    return message.content                        # no tool needed
+for tool_call in message.tool_calls:
+    fn_args = json.loads(tool_call.function.arguments)    # arguments arrive as a JSON *string*
+    result = tool_map[tool_call.function.name](**fn_args)
+    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
+final_response = client.chat.completions.create(model=MODEL, messages=messages, tools=tools)
+return final_response.choices[0].message.content
+```
+
+```text output
+Q: What is the square root of 144?
+   [tool] square_root({'number': 144}) -> 12.0
+A: The square root of 144 is 12.
+Q: What is the capital of France?
+A: The capital of France is Paris.
+Q: Can you calculate the square root of 2025 for me?
+   [tool] square_root({'number': 2025}) -> 45.0
+A: The square root of 2025 is 45.
+```
+
+✅ Identical tool lines on both providers; Groq wrapped the numbers in bold, Claude didn't. Three details carry the whole mechanism:
+
+- **The arguments are a JSON string**, not a dict, so `json.loads` comes first.
+- **The `tool_call_id` links each result to its request.** The model can ask for several tools at once, and the API rejects a result whose id doesn't match. Forgetting `messages.append(message)` before the results gives the error "must be a response to a preceding message with 'tool_calls'". 📘
+- **There are two model calls.** The first decides; the second words the answer. This file calls tools once and then forces an answer, so a question that needs two tools in a row ("look up SKU-005, then compute its reorder point") never gets its second step. The fix is a loop that keeps going until the model stops asking, which is what Strands runs for you.
+
+### The same thing in LangChain
+
+```python title="2_tool_calling_with_langchain.py (solution)"
+@tool
+def square_root(number: float) -> float:
+    """Calculate the square root of a non-negative number."""
+    if number < 0:
+        raise ValueError("Cannot compute square root of a negative number.")
+    return math.sqrt(number)
+
+llm_with_tools = llm.bind_tools([square_root])
+for tc in response.tool_calls:
+    result = tool_map[tc["name"]].invoke(tc["args"])          # args already parsed into a dict
+    messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+```
+
+| Job | From scratch | LangChain |
+| --- | --- | --- |
+| Describe the tool | JSON by hand | `@tool` + docstring + type hints |
+| Attach tools | `tools=tools` on every call | `llm.bind_tools(tools)` once |
+| Read arguments | `json.loads(tool_call.function.arguments)` | `tc["args"]` |
+| Send the result back | `{"role": "tool", ...}` | `ToolMessage(...)` |
+
+✅ My run printed the menu `@tool` built: `{'number': {'title': 'Number', 'type': 'number'}}`. Then one question the course uses to show the tool at work did something else:
+
+```text output
+Q: Is 15241383937 the square of 123456?
+A: No. 123456² = 15241383936, which is one less than 15241383937. So 15241383937 is not the square of 123456.
+```
+
+✅ Neither provider called `square_root` for it. Both squared 123456 in their heads, and both got it right. The explainer's example run shows the tool being called. 📘 This is [the lesson from the inventory checker](#tool-3-an-inventory-checker) again, from the other side: **offering a tool does not make the model use it**, and here a square root was arguably the wrong tool for a squaring question anyway. If the exact answer matters, either give the model the right tool or say in the system prompt that it must use one.
+
+### Choosing between four tools
+
+The third file gives the model four inventory tools for a small warehouse and asks four questions, each of which matches a different one:
+
+```python title="3_inventory_tools_demo.py (solution, the new tool)"
+@tool
+def list_low_stock_items() -> str:
+    """List all SKUs that are at or below their reorder point and need restocking."""
+```
+
+| Question | Tool chosen (both providers) | Tool result |
+| --- | --- | --- |
+| What is the current stock level for SKU-003? | `get_stock_level(sku="SKU-003")` | stock=5, reorder_point=10, LOW |
+| Which items need to be reordered right now? | `list_low_stock_items()` | SKU-002 and SKU-003 |
+| How many days until SKU-002 runs out of stock? | `days_until_stockout(sku="SKU-002")` | 6.0 days |
+| What quantity of SKU-003 should I order if my supplier takes 10 days to deliver? | `calculate_reorder_quantity(sku="SKU-003", lead_time_days=10)` | 35 units, Rs 612,500 |
+
+✅ Four of four on both providers, including turning "my supplier takes 10 days" into `lead_time_days=10`: the parameter name and its description did that matching. The 35 is a rule of thumb, 2 belts a day × 10 days = 20, plus a 20-unit buffer, minus the 5 in stock. Both answers explained the 35 correctly from the tool's own breakdown; when a model adds figures of its own around a tool result, those come from the model, not the tool, so the warning from [the sales assistant](#tool-2-a-multi-tool-sales-assistant) still applies.
+
+### The same loop on two providers
+
+![The same lab code on two providers through one file, llm.py. With LLM_PROVIDER set to groq, make_llm and make_client return OpenAI-compatible objects pointed at Groq's API and openai/gpt-oss-120b, and tool calls are native: the API returns tool_calls. With LLM_PROVIDER set to claude, they return a stand-in that runs Claude Haiku 5.5 through Claude Code in headless mode on a Claude subscription. Claude Code gives no raw tool-calling API, so the stand-in lists the functions in the system prompt and asks for one JSON object, either tool_calls or an answer, then turns that into the same tool_calls shape. Both use the local all-MiniLM-L6-v2 for embeddings.](/images/ai-llms/agentic-ai/giving-agents-tools/two-providers.svg)
+
+The course code calls OpenAI's `gpt-6-luna`. I have no OpenAI credits, so for the posts from here on every lab goes through one file, `llm.py`, with a switch. Only the lines that create a model or a client change:
+
+```python title="1_tool_calling_from_scratch.py (the whole port)"
+import llm as provider              # Groq or Claude, chosen by LLM_PROVIDER (see llm.py)
+client = provider.make_client()     # was: OpenAI()
+MODEL = provider.MODEL              # was: "gpt-6-luna"
+```
+
+- **`LLM_PROVIDER=groq`** returns a real `openai.OpenAI` client pointed at Groq's OpenAI-compatible API, with `openai/gpt-oss-120b`. Tool calls, JSON mode and structured output are native. The course passes `reasoning_effort="none"`; gpt-oss's lowest setting is `"low"`, so the port passes that.
+- **`LLM_PROVIDER=claude`** uses my Claude subscription. A subscription has no API key: the only programmatic way in is Claude Code's headless mode, `claude -p`, which takes one prompt and returns one answer. So `llm.py` has a small LangChain chat model that turns the conversation into one prompt and calls the CLI with no tools, no MCP servers and none of my settings, and a stand-in for `client.chat.completions` built on it.
+
+That stand-in has to fake tool calling. It lists the functions in the system prompt and asks for one JSON object back: either `tool_calls` (names and arguments) or an `answer`. It parses that into the same shape the OpenAI API returns, so the lab's loop doesn't know the difference.
+
+<Callout type="warn" title="The first version of the fake failed in an instructive way">
+
+✅ My first attempt used the CLI's `--json-schema` option to force valid JSON. In a spot check of six questions it returned tool calls for only **2 of the 5** square-root questions, even after two automatic retries, and answers like "The square_root tool isn't available in this session, so its call failed". The CLI implements `--json-schema` with a tool of its own, and with a tool in play the model tried to call `square_root` *directly*, as if it were a real tool, got "No such tool available", and answered from memory. Dropping `--json-schema` and asking for plain JSON in the prompt took the same six questions to **6 of 6** correct, each in one turn. The lesson generalises: a model that has been trained to call tools will try to call anything that looks like one.
+
+</Callout>
+
+The emulation is good enough to run every lab in this series, but it is not the real thing, and the posts say so where it matters: the token counts on the Claude path include about 1,000 tokens of Claude Code's own wrapper per call, and a call takes several seconds (the three tool-calling files took 17 to 44 s on Claude against 7 to 8 s on Groq, start-up included).
+
+<Callout type="warn" title="The Claude path knows things the lab never told it">
+
+✅ Two memory demos gave it away. One reply opened with "I see you're working in the `…\lecture_snippets` project"; another, asked for a name it had never been given, offered one taken from my account email. Asked to list its context, the model reported my account email, the working folder (which contains my Windows user name), the OS version and today's date. Claude Code adds all of that to every prompt, even with a custom system prompt; the flag that moves it, `--exclude-dynamic-system-prompt-sections`, is ignored then, and the minimal `--bare` mode only works with an API key, not a subscription login.
+
+So the adapter now runs the CLI from an empty folder and starts every system prompt with a note: context about an account, a computer or the date comes from the hosting tool, never use or mention it. The Claude results quoted in this series come from runs made after that change (where a post mentions an earlier run, it says so), and every quoted Claude output was checked for my name, email and user name. One difference can't be removed: Claude knows today's date, Groq's model doesn't.
+
+</Callout>
+
+Neither provider has an embeddings endpoint, so both use the local `all-MiniLM-L6-v2` model. ✅
+
 ## Summary
 
-A tool is a plain function plus a name, type hints and a docstring, and the model reads those but never the body. The tip calculator showed the model turning a sentence into arguments, the sales assistant showed it choosing the order of several small tools and chaining their results, and the inventory checker showed intent mapping to a tool without keyword matching. The model decides whether a tool is used, a tool that acts in the world deserves the most care, and the agent is only as accurate as its tools.
+A tool is a plain function plus a name, type hints and a docstring, and the model reads those but never the body. The tip calculator showed the model turning a sentence into arguments, the sales assistant showed it choosing the order of several small tools and chaining their results, and the inventory checker showed intent mapping to a tool without keyword matching. Underneath, a tool call is four messages and two model calls: the model asks with a name, JSON arguments and an id, your code runs the function and replies with the same id, and the model words the answer. The model decides whether a tool is used, a tool that acts in the world deserves the most care, and the agent is only as accurate as its tools.
 
 ![A map of post 2 in four columns. Tool anatomy: decorator, type hints as the schema, docstring as the menu. Tip calculator: a sentence becomes arguments. Sales assistant: the model chains several tools. Inventory checker: intent maps to a tool, a typo is not out of stock, and use is not guaranteed](/images/ai-llms/agentic-ai/giving-agents-tools/summary-map.svg)
 
@@ -468,6 +624,9 @@ A tool is a plain function plus a name, type hints and a docstring, and the mode
 | **Intent to tool** | A clear description replaces keyword matching | Different phrasings, same tool |
 | **Tool use is not guaranteed** | The model decides if and how to call a tool | Say so in the system prompt if it must |
 | **Side effects** | Tools such as sending email act in the world | Check what the model adds around them |
+| **`tool_call_id`** | Links each tool result to the request it answers | Results without a matching id are rejected |
+| **Arguments as a JSON string** | The raw API sends arguments as text | `json.loads` before calling the function |
+| **Emulated tool calls** | Tools described in the prompt, the reply parsed as JSON | How a provider without a tool API can still drive the loop |
 
 ### Test yourself
 
@@ -500,6 +659,20 @@ A product ID that isn't found can be reported as if it were out of stock, so che
 </details>
 
 <details>
+<summary>In the raw API, why does the tool result carry a tool_call_id?</summary>
+
+The model can ask for several tools at once. The id ties each result to the request it answers, and the API rejects a result without a matching id.
+
+</details>
+
+<details>
+<summary>Both providers answered "Is 15241383937 the square of 123456?" without calling square_root. Was that a bug?</summary>
+
+No: offering a tool doesn't oblige the model to use it, and a square root was arguably the wrong tool for a squaring question. Both answers happened to be right. If exactness matters, provide the right tool and require it.
+
+</details>
+
+<details>
 <summary>Must the model use a tool you provide?</summary>
 
 No. If a tool is required, say so in the system prompt.
@@ -510,7 +683,8 @@ No. If a tool is required, say so in the system prompt.
 
 Tools let an agent act. The next steps:
 
+- [Finding the right text](/blog/retrieval-for-agents): embeddings, reranking, chunking and HyDE, the search step behind every agent that answers from documents.
 - [How AI agents remember](/blog/how-ai-agents-remember): long-term memory with Mem0, and short-term memory with LangGraph and AgentCore Memory.
 - [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
 - [How agents talk](/blog/how-agents-talk): MCP for tools and data, A2A for other agents.
-- Still to come from the course: [Shipping Agents to Production](https://scaler-content.github.io/shipping-agents-to-production/).
+- [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.

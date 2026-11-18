@@ -1,0 +1,550 @@
+---
+title: "Seeing inside an agent: monitoring, MELT and traces"
+description: "Why an agent that never crashes can still be wrong, and how to see what it actually did: monitoring versus observability, the four kinds of record called MELT, a booking agent that may confirm a failed booking, a cached chatbot traced in LangSmith, and then the same ideas on AWS with OpenTelemetry spans read in the console, Jaeger, Langfuse, LangSmith and CloudWatch. Re-run on Groq and on Claude."
+date: "2026-11-18"
+section: "ai-llms"
+series: "agentic-ai"
+seriesOrder: 9
+tags: ["Agentic AI", "Observability", "OpenTelemetry", "LangSmith", "AgentCore"]
+---
+
+[The last post](/blog/agents-to-production) put agents on AWS. Running isn't the same as working, though. Once an agent is live, three questions come up: **what is it doing, is it doing it well, and is it allowed to?** This post is about the first. [Evaluation](/blog/agent-evaluation) and [guardrails](/blog/agent-guardrails) take the other two.
+
+<Callout type="info" title="This is part of a series">
+
+1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. [Finding the right text](/blog/retrieval-for-agents): embeddings, similarity search, reranking, chunking and HyDE.
+4. [How AI agents remember](/blog/how-ai-agents-remember): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+9. **Seeing inside an agent** (this post): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+
+</Callout>
+
+<Callout type="note" title="Credit">
+
+The first half follows **Shivank Agarwal's** Observability lecture and its `obs_demo_langsmith.py` for the AI Bootcamp at **Scaler Academy** ([Future with Shivank](https://www.linkedin.com/in/shivankagrawal/)); I re-ran the code on 2026-11-18 on Groq and on Claude ([how](/blog/giving-agents-tools#the-same-loop-on-two-providers)). Groq's daily token allowance on `gpt-oss-120b` ran out halfway through the day, so the Groq results in this post come from its smaller sibling, `openai/gpt-oss-20b`. The second half, from Part 2 on, follows the earlier course section on AgentCore, run in October on AWS. ✅ marks output from my runs, 📘 the explainer or the docs.
+
+</Callout>
+
+## TL;DR
+
+- **Agents fail without crashing.** The same question can get different answers, one request runs many hidden steps, and a tool can change under you. "The server is up" says nothing about whether the answer was right.
+- **Monitoring asks fixed questions; observability lets you ask new ones** of the same records. Keep four kinds: **metrics, events, logs and traces** (MELT), tied together by one trace id.
+- **Debugging is a loop:** metrics show something is off, traces find the bad cases, logs show the exact prompt, the fix goes into code, metrics confirm it. The lecture's example is a booking agent that tells customers they're booked when the airline said no. ✅ On my runs the buggy version told the truth in 10 of 10 runs, 5 on each provider; the fix removes the model from the failure path anyway.
+- **A cached chatbot, traced:** exact and semantic caches answered 4 of 7 questions for free on both providers, and one LangSmith trace showed that 3.31 of 3.34 seconds and every token sat in one span. ✅
+- **On AWS** the same idea is OpenTelemetry spans from a Strands agent, read in five places: the console, Jaeger, Langfuse, LangSmith and CloudWatch.
+
+## Why observability
+
+### Monitoring versus observability
+
+📘 **Monitoring** checks questions you wrote down in advance: is the error rate under 1%, is p95 latency under 2 seconds? **Observability** records enough of what happened to answer questions nobody thought of: *which conversations last Tuesday mentioned refunds and ended without a refund?* For a normal web service monitoring catches most failures, because failures crash or time out. Agents fail differently:
+
+| Challenge | What it looks like |
+| --- | --- |
+| **Non-determinism** | The same prompt gives different answers; a bug shows up one run in ten |
+| **Multi-step workflows** | One request = plan, search, tool, another model call; the failure is three steps before the symptom |
+| **External dependencies** | A tool's API changed format and the model quietly makes do |
+| **Quality is not a status code** | A fluent, wrong answer returns HTTP 200 |
+
+<Callout type="analogy" title="Smoke detector and CCTV">
+
+A smoke detector (monitoring) shouts about one thing it was built to detect. CCTV (observability) records everything, so after something odd happens you can go back and see what it was.
+
+</Callout>
+
+### MELT: four kinds of record
+
+![MELT for one request, 'Where is my order #1234?', with one trace id tying the four records together. Metrics are numbers over time, such as latency, tokens, cost and success rate. Events are named moments that matter to the business, such as cache_hit or booking_failed. Logs are the exact words in and out of every model call. Traces are the step-by-step story of the request, a tree of spans: the agent, the model call, the tool call. Monitoring checks fixed questions on the metrics; observability lets you ask new questions of all four.](/images/ai-llms/agentic-ai/observing-agents/melt.svg)
+
+| Pillar | In plain words | For an agent |
+| --- | --- | --- |
+| **Metrics** | Numbers over time | Latency, tokens, cost per request, success rate, tool error rate |
+| **Events** | Named moments that matter | `cache_hit_semantic`, `booking_failed`, `escalated_to_human` |
+| **Logs** | The exact record | The full prompt and completion of every model call |
+| **Traces** | The story of one request | A tree of **spans**: agent → model call → tool call → model call |
+
+The lecture's verdict: traces matter most for agents, because they connect the other three to one request. What to capture in each span: inputs and outputs, the steps, the **context** (which user, which session) and **metadata** (model, prompt version), so you can filter later. 📘
+
+## Part 1: two agents, traced
+
+### A booking agent that may lie
+
+📘 The lecture's debugging story: users report that a travel agent sometimes says it booked a flight when it didn't. Every dashboard is green: the model API is up, no errors in the logs. Its MELT walk-through goes metrics (booking success rate drops while `book_flight` errors rise) → traces (filter for "tool failed **and** the reply says success") → one trace (`book_flight` returned "Seat not available", then the model said "I've successfully booked your flight") → the log of that last model call, which explains why:
+
+```python title="booking_agent.py (the lecture's buggy version, ported)"
+@traceable(name="booking_agent")
+def booking_agent(user_query: str) -> str:
+    plan = ask_llm(f"List the steps to handle: {user_query}")
+    flights = search_flights("Paris")
+    choice = ask_llm(f"Pick the cheapest flight id from {flights}. Reply with the id only.")
+    result = book_flight(choice.strip())                     # {"status": "failed", "error": "Seat not available"}
+    return ask_llm(f"The user wants to book a flight. The booking API returned "
+                   f"'{result}'. Itinerary request: {user_query}. What should I say?")
+```
+
+The model gets a raw error dictionary inside a conversation that is all about booking, and an open "What should I say?". The root cause is the code, not the model: a failure is handed over and the model is trusted to be honest about it.
+
+![The lecture's booking agent that lies, before and after the fix. Before: the book_flight tool returns status failed, seat not available, and the agent hands that raw result to the model with the open question 'What should I say?'. A helpful model may answer 'I've booked your flight', and nothing crashes, so monitoring stays green. After: the code checks the tool's status first, and on failure returns a fixed, honest message without the model. In my runs of the buggy version, both providers told the truth in 5 of 5 runs each; the bug did not reproduce, but the fix removes the model from the failure path either way.](/images/ai-llms/agentic-ai/observing-agents/lying-agent.svg)
+
+The lecture shows the lie as example output. I ran the buggy agent five times on each provider, traced in LangSmith, and counted final messages that claim a booking:
+
+| Provider | Runs | Final message claimed a booking | Read as honest |
+| --- | --- | --- | --- |
+| ✅ Groq gpt-oss-20b | 5 | 0 | 5 ("the booking attempt… couldn’t go through", alternatives offered) |
+| ✅ Claude Haiku 5.5 | 5 | 0 | 5 |
+
+The lie didn't reproduce: 0 of 10. My script first flagged three Groq replies as "unclear", because its keyword check looked for `couldn't` with a straight apostrophe and the model wrote `couldn’t`; reading them, all three said the seat was unavailable. (A measurement can be wrong in the same quiet way the agent can, which is a good reason to read samples, not just counts.) A failure the model happens to explain honestly today is still a failure left to the model, so the fix stands.
+
+```python title="booking_agent.py (the lecture's fix)"
+def respond_to_booking(result: dict, flight_id: str) -> str:
+    if result["status"] == "failed":            # decided in code: no model on the failure path
+        return (f"Sorry, I couldn't book {flight_id}: {result['error'].lower()}. "
+                "Would you like me to try another flight?")
+    return f"Your flight {flight_id} is booked. Confirmation: {result['confirmation']}."
+```
+
+Two more things from the lecture's fix are worth keeping: make the tool **report** failure properly (raise, or mark the span failed) so `book_flight` turns red in the trace and counts in the error rate; and when you do want friendlier wording, give the model a specific instruction ("tell the user the booking failed because the seat was unavailable"), never an open question. 📘 The lecture cites a real case of an agent misreporting what it had done: in July 2025, SaaStr's founder reported that Replit's coding agent ran destructive commands against a production database during a code freeze and at first said a rollback was impossible ([Tom's Hardware](https://tomshardware.com/tech-industry/artificial-intelligence/ai-coding-platform-goes-rogue-during-code-freeze-and-deletes-entire-company-database-replit-ceo-apologizes-after-ai-engine-says-it-made-a-catastrophic-error-in-judgment-and-destroyed-all-production-data)).
+
+### A cached chatbot, traced in LangSmith
+
+`obs_demo_langsmith.py` is a "personality bot": type a famous person's name, get two lines about them. It puts two caches in front of the model and records every step:
+
+![The observability demo as a LangGraph graph with three nodes and two routers. A question first goes to check_exact_cache, which cleans the text and looks it up; on a hit the answer is returned for free. Otherwise check_semantic_cache embeds the question locally and compares it with saved questions; a similarity of 0.70 or more reuses the saved answer. Otherwise call_llm asks the model and saves the answer and its embedding. Seven questions gave two exact hits, two semantic hits and three model calls: a 57 percent hit rate on both providers. The similarities were 0.91 for 'Who is Elon Musk?' against 'elon musk', 0.89 for 'Tell me about Marie Curie', 0.16 for Marie Curie against Elon Musk and 0.40 for Albert Einstein against Marie Curie.](/images/ai-llms/agentic-ai/observing-agents/personality-graph.svg)
+
+```python title="obs_demo_langsmith.py (the MELT parts, shortened)"
+client = wrap_openai(provider.make_client())          # LOGS: every prompt and answer stored in the trace
+
+@traceable(name="get_embedding", run_type="embedding")  # TRACES: each decorated function becomes a span
+def get_embedding(self, text): ...
+
+@traceable(name="record_event", run_type="tool")        # EVENTS: named moments you can count later
+def record_event(self, event_name, details): ...
+
+print(f"   [metric] {cache_hit_type.upper()} | {seconds:.2f}s | {tokens} tokens | ${cost:.6f}")   # METRICS
+```
+
+The seven questions, on both providers:
+
+| # | Question | Result | Similarity to the closest saved question |
+| --- | --- | --- | --- |
+| 1 | Elon Musk | model call | – |
+| 2 | Elon Musk | exact hit | – |
+| 3 | Who is Elon Musk? | semantic hit | 0.91 |
+| 4 | Marie Curie | model call | 0.16 (to Elon Musk) |
+| 5 | `  marie curie ` | exact hit (after cleaning) | – |
+| 6 | Tell me about Marie Curie | semantic hit | 0.89 |
+| 7 | Albert Einstein | model call | 0.40 (to Marie Curie) |
+
+✅ 57% of questions never reached the model, on both providers, because the caches don't involve the model at all. The similarities are higher than the course's (📘 0.84 and 0.78 for the two hits with OpenAI's embeddings), since my port embeds with the local `all-MiniLM-L6-v2`; the 0.70 threshold happened to work for both. The metrics lines differ by provider:
+
+| | Groq gpt-oss-20b | Claude Haiku 5.5 |
+| --- | --- | --- |
+| First model call | 10.0 s, 146 tokens, $0.000023 | 13.95 s, 1,171 tokens, $0.000176 (API-equivalent) |
+| Later model calls | 0.5–0.7 s, about 160 tokens | 3.3–3.5 s, about 1,130–1,270 tokens |
+
+About 1,000 of every Claude call's tokens are Claude Code's own wrapper ([why](/blog/giving-agents-tools#the-same-loop-on-two-providers)), which is exactly the kind of thing a token metric is there to catch.
+
+### Reading one trace
+
+Every question becomes one trace in LangSmith. I read question 4's back through the LangSmith API and drew it:
+
+![A real trace from LangSmith, drawn as a tree: question 4, Marie Curie, on Claude Haiku 5.5. The root run personality_query took 3.34 seconds and 1,130 tokens. Inside it, the LangGraph run holds three node runs. check_exact_cache with its router after_exact took no measurable time. check_semantic_cache took 0.01 seconds and contains find_semantic_match, which contains get_embedding, and the router after_semantic. call_llm took 3.33 seconds and contains record_event, call_openai_model, which contains the model run of 3.31 seconds carrying all 1,130 tokens, then get_embedding and a second record_event. Nearly all the time and every token sit in one span.](/images/ai-llms/agentic-ai/observing-agents/trace-tree.svg)
+
+✅ Three things a trace shows that no log line would: the path the request took (exact miss → semantic miss → model), the routers' decisions as their own spans, and where the time went: 3.31 of the 3.34 seconds in one span. On the Claude path that span is my LangChain adapter (`ChatClaudeCode`) rather than a wrapped OpenAI call, because the subscription isn't an OpenAI-compatible client; LangSmith traces LangChain models on its own, so the tree has the same shape.
+
+### Choosing tools
+
+📘 The lecture's comparison: **LangSmith** is the natural fit for LangChain and LangGraph (one decorator or environment variable, plus datasets, evaluation and user feedback attached to traces), **Langfuse** is open source and self-hostable, cloud dashboards cover infrastructure, and **OpenTelemetry** is the open standard underneath most of them, so instrumenting once with it keeps your options open. The AWS half of this post uses exactly that: OpenTelemetry spans from a Strands agent, read in five places.
+
+## Part 2: Traces on AWS, the raw material
+
+OpenTelemetry (OTel) is the open standard most of these tools speak. Its two core ideas, in its own words: "**Traces** give us the big picture of what happens when a request is made to an application", and "a **span** represents a unit of work or operation. Spans are the building blocks of Traces" ([OpenTelemetry: traces](https://opentelemetry.io/docs/concepts/signals/traces/)). Spans nest: each one can name a parent, and the span with no parent is the root.
+
+Strands creates spans for every agent run, reasoning loop, model call and tool call. The simplest place to send them is the console:
+
+```python
+from strands import Agent
+from strands.models.bedrock import BedrockModel
+from strands.telemetry import StrandsTelemetry
+from strands_tools import calculator
+
+strands_telemetry = StrandsTelemetry()
+strands_telemetry.setup_console_exporter()        # print every span to stdout
+
+agent = Agent(model=BedrockModel(model_id=MODEL_ID, region_name=REGION),
+              system_prompt="You are a helpful assistant.", tools=[calculator], callback_handler=None)
+agent("What is 15% of 2,847? Then explain in two sentences why tracing matters for AI agents.")
+```
+
+Each span prints as JSON. Here is the first model call, trimmed:
+
+```json
+{
+    "name": "chat",
+    "context": { "trace_id": "0x77030dffca9ff5d74c71df65f7857708", "span_id": "0xccfec1da2f6d92d9" },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "0xa46ab9256a5a7b76",
+    "start_time": "2026-10-31T08:06:26.582266Z",
+    "end_time": "2026-10-31T08:06:29.507941Z",
+    "attributes": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "global.anthropic.claude-sonnet-4-6",
+        "gen_ai.usage.prompt_tokens": 1916,
+        "gen_ai.usage.input_tokens": 1916,
+        "gen_ai.usage.completion_tokens": 102,
+        "gen_ai.usage.output_tokens": 102,
+        …
+    }
+}
+```
+
+Every span carries the same `trace_id`, so a viewer can stitch them together, and a `parent_id`, so it can nest them. Put the six spans from this run on a timeline and the agent's behaviour becomes visible:
+
+![A waterfall from the console-tracing run, 5.8 seconds in total. The root span invoke_agent has 3,952 input and 255 output tokens. Cycle 1 holds a chat span of 2.9 seconds with 1,916 input and 102 output tokens, then execute_tool calculator of 16 milliseconds. Cycle 2 holds a second chat span of 2.9 seconds with 2,036 input and 153 output tokens, which writes the final answer](/images/ai-llms/agentic-ai/agent-evaluation/span-tree.svg)
+
+| Span | What it is | What to look for |
+| --- | --- | --- |
+| `invoke_agent` | The whole question, start to finish (the root) | Total time and total tokens |
+| `execute_event_loop_cycle` | One reasoning loop: think, maybe call tools | How many loops a question took |
+| `chat` | One model call | Latency and tokens per call |
+| `execute_tool calculator` | One tool call, with its input and output | Wrong arguments, slow or failing tools |
+
+Two details are worth noticing. Both model calls took about 2.9 seconds while the tool took 16 milliseconds: **the model is almost all of an agent's latency**. And the second call read 2,036 tokens, not 1,916, because each call resends the conversation so far, tool result included. The token pairs (`prompt_tokens` and `input_tokens`) are the old and new names for the same number. The newer GenAI conventions use `input_tokens` and `output_tokens`, and LangSmith's docs mark the old pair as deprecated ([LangSmith: OpenTelemetry](https://docs.langchain.com/langsmith/trace-with-opentelemetry)).
+
+<Callout type="warn" title="One tracer provider per process">
+
+OpenTelemetry allows only one global tracer provider in a Python process, which is why every tracing notebook says to start a **fresh kernel**. Run the Jaeger notebook after the console one in the same kernel and the spans keep going to the console. The same rule comes back later with Langfuse and ADOT.
+
+</Callout>
+
+## Part 3: Five places to read the spans
+
+The agent code stays the same. Only the exporter changes.
+
+![A Strands agent creates spans through OpenTelemetry, and one tracer provider per process decides where they go: the console exporter prints them; OTLP sends them to Jaeger on localhost 4318 or to LangSmith with an API key header; the Langfuse SDK registers itself as the provider; and ADOT or AgentCore Runtime sends them to CloudWatch. Langfuse and ADOT both want to be the provider, so the Langfuse version of the agent is a separate script](/images/ai-llms/agentic-ai/agent-evaluation/exporters.svg)
+
+### Jaeger: a trace viewer on your own machine
+
+Jaeger is an open-source trace viewer. Its all-in-one image keeps traces in memory and serves a UI on port 16686, and it accepts OTLP on 4317 (gRPC) and 4318 (HTTP) ([Jaeger APIs](https://www.jaegertracing.io/docs/latest/architecture/apis/)).
+
+```bash
+docker run -d --name jaeger -e COLLECTOR_OTLP_ENABLED=true \
+  -p 16686:16686 -p 4317:4317 -p 4318:4318 jaegertracing/all-in-one:latest
+```
+
+```python
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:4318"
+os.environ["OTEL_SERVICE_NAME"] = "strands-agents-demo"
+
+strands_telemetry = StrandsTelemetry()
+strands_telemetry.setup_otlp_exporter()
+agent = Agent(model=model, system_prompt="You are a helpful assistant.", tools=[calculator])
+agent("Explain the difference between traces, spans, and metrics in OpenTelemetry. Then compute 12% of 9,450.")
+strands_telemetry.tracer_provider.force_flush()   # spans go in batches; send them before you look
+```
+
+In the UI at `http://localhost:16686`, choose the **strands-agents-demo** service and **Find Traces**. The waterfall has the same shape as the diagram above. The agent answered `12% of 9,450 = 1,134`, and the run printed a warning worth reading:
+
+```text
+DEPRECATION WARNING: calculator is deprecated. … use the shell tool vended by strands-agents
+(from strands.vended_tools import shell). This does change the security boundary: calculator only
+ever evaluated an expression checked against an AST allowlist, while shell executes arbitrary commands …
+```
+
+The suggested replacement is far more powerful than the tool it replaces. A calculator that can only evaluate arithmetic is safe to hand to a model; a shell is not. That's a governance decision hiding inside a deprecation notice. Jaeger's current docs use a v2 image (`cr.jaegertracing.io/jaegertracing/jaeger`) rather than the lab's `all-in-one:latest` ([getting started](https://www.jaegertracing.io/docs/latest/getting-started/)). Stop it with `docker rm -f jaeger`, and the traces go with it.
+
+### Langfuse: an LLM-aware trace store
+
+[Langfuse](https://langfuse.com) is an open-source platform built for LLM apps: it understands model calls, prices them, and groups traces by user and session. Its SDK registers itself as the OpenTelemetry tracer provider, so once the client exists, Strands' spans flow to it with no exporter code.
+
+The first run failed:
+
+```text
+UnauthorizedError: … 'content-length': '83' …
+```
+
+The keys were fine. The notebook only did `os.environ.setdefault("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")` with placeholder keys and never read my `.env`, which held real keys for a project in the **US** region. Langfuse's regions are completely separate: "Since all data and accounts are fully separated between regions, switching regions requires creating a new account" ([data regions](https://langfuse.com/security/data-regions)). US keys sent to the EU host can't work.
+
+```python
+from dotenv import load_dotenv
+load_dotenv(override=True)                      # read LANGFUSE_* from .env before the client exists
+print(os.environ["LANGFUSE_BASE_URL"])          # https://us.cloud.langfuse.com
+
+from langfuse import get_client
+langfuse = get_client()
+langfuse.auth_check()                           # True
+```
+
+Claude Code then installed Langfuse's agent skill ([langfuse/skills](https://github.com/langfuse/skills)), after reading what it contained, and used it to instrument the customer-account agent. The skill's first rule was to read Langfuse's own guide, [What does a good trace look like?](https://langfuse.com/docs/observability/best-practices), whose advice includes "A trace represents one self-contained unit of work" and "Name observations after the action they perform, verb first". The result wraps each question in one named root observation:
+
+```python
+agent = Agent(name="account-assistant",          # otherwise the span is just "Strands Agents"
+              model=model, system_prompt=SYSTEM_PROMPT, tools=[lookup_account, calculate_discount])
+
+def handle_account_inquiry(question: str, user_id: str, session_id: str) -> str:
+    with langfuse.start_as_current_observation(as_type="agent", name="handle-account-inquiry",
+                                               input=question) as root:
+        with propagate_attributes(user_id=user_id, session_id=session_id, trace_name="account-inquiry",
+                                  tags=["account-assistant", "strands"], version="1.0.0",
+                                  metadata={"model_id": MODEL_ID}):
+            answer = str(agent(question))
+        root.update(output=answer)
+    return answer
+
+try:
+    handle_account_inquiry("Look up account ACC-001 and calculate what discount they would get on a $50,000 purchase.",
+                           user_id="demo-user", session_id="account-demo-session")
+finally:
+    langfuse.flush()                              # a short script must send buffered spans before it exits
+```
+
+Reading the trace back through Langfuse's API gave this tree:
+
+```text
+[AGENT]       handle-account-inquiry                 user demo-user · session account-demo-session · env development
+  [SPAN]      invoke_agent account-assistant
+    [SPAN]    execute_event_loop_cycle
+      [GENERATION] chat     claude-sonnet-4-6   695 in / 101 out   $0.0036
+      [TOOL]  lookup_account
+    [SPAN]    execute_event_loop_cycle
+      [GENERATION] chat     claude-sonnet-4-6   831 in / 102 out   $0.0040
+      [TOOL]  calculate_discount
+    [SPAN]    execute_event_loop_cycle
+      [GENERATION] chat     claude-sonnet-4-6   969 in / 133 out   $0.0049
+```
+
+Langfuse turned the same spans into something richer: model calls became **generations with a price** (about 1.3 cents for the question), tools became typed **tool** observations, and the user, session and tags make the trace filterable. The session page showed both runs of the script together: 2 traces, $0.025, 6k tokens. The first audit found one gap, a root span named only `invoke_agent Strands Agents`, which naming the agent fixed. Two limits remained: Strands writes message content as stringified Bedrock blocks, so tool calls appear as text rather than cards, and the SDK stores the project's public key in each observation's metadata by default.
+
+<Callout type="tip" title="One collector, many backends">
+
+The course also includes an OpenTelemetry Collector setup: the agent sends to one endpoint on `localhost:4318`, and the collector's config decides where the spans go, for example Datadog for alerting and Langfuse for LLM analysis. I didn't run it, but it's the answer to "we use two tools" without changing agent code.
+
+</Callout>
+
+## Part 4: Finding your traces in CloudWatch
+
+This is the part I got stuck on. The fifth notebook traces the customer-account agent from my laptop into CloudWatch with the **AWS Distro for OpenTelemetry (ADOT)**. Agents on AgentCore Runtime get this automatically; agents running anywhere else need ADOT and a few settings ([AgentCore observability: configure](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html)):
+
+```bash
+OTEL_PYTHON_DISTRO=aws_distro
+OTEL_PYTHON_CONFIGURATOR=aws_configurator
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_LOGS_HEADERS=x-aws-log-group=agents/observability-demo,x-aws-log-stream=default,x-aws-metric-namespace=bedrock-agentcore
+OTEL_RESOURCE_ATTRIBUTES=service.name=s07-account-agent,aws.log.group.names=agents/observability-demo
+AGENT_OBSERVABILITY_ENABLED=true
+```
+
+```python
+# ADOT instruments a whole process, so the agent runs as a script under its launcher
+subprocess.run([launcher, sys.executable, "agentcore_agent.py"], env=env)   # launcher = opentelemetry-instrument
+```
+
+The agent answered (Acme Corp, Enterprise tier, 15% off $50,000 = $7,500 savings), but the dashboard showed nothing I recognised. While writing this post I queried the account directly, and **the traces had arrived**:
+
+| Service (as CloudWatch labels it) | Where | Spans | When (UTC / IST) |
+| --- | --- | --- | --- |
+| `s07-account-agent` (the ADOT notebook) | `aws/spans` | 12 | 10:31 / 16:01 |
+| `s07_travel_agent.DEFAULT` (the evaluation lab) | its runtime log group's `spans` stream (and 4 more in `aws/spans`) | 32 | 07:48 / 13:18 |
+
+So the problem was finding them, not sending them. First, where they land:
+
+![Top left: an agent on AgentCore Runtime writes to its own log group under /aws/bedrock-agentcore/runtimes, with streams for stdout, OpenTelemetry logs and spans. Top right: an agent run elsewhere with ADOT sends spans to the shared aws/spans log group and its logs to a log group you create, labelled by service.name. Middle: Transaction Search must be enabled once per account and Region. Bottom: four places to read them in US East: the AgentCore console's Observability page, CloudWatch GenAI Observability, Application Signals Transaction search, and Logs Insights. Spans can take about 10 minutes to appear the first time](/images/ai-llms/agentic-ai/agent-evaluation/cloudwatch-where.svg)
+
+And here is the account agent's trace, drawn from the 12 spans the query returned:
+
+![A drawing of one trace as CloudWatch stores it, built from 12 spans in aws/spans, not a screenshot. Service s07-account-agent, 6.3 seconds, 2,511 input and 403 output tokens. Cycle 1: a chat span wrapping a Bedrock client call of 2.6 seconds with 695 input and 104 output tokens, then lookup_account in 0.4 milliseconds. Cycle 2: chat, 1.6 seconds, 834 in and 112 out, then calculate_discount in 2.2 milliseconds. Cycle 3: chat, 2.1 seconds, 982 in and 187 out](/images/ai-llms/agentic-ai/agent-evaluation/cloudwatch-trace.svg)
+
+ADOT added something the console exporter didn't: under each Strands `chat` span there is a `CLIENT` span for the actual HTTP call to Bedrock, because ADOT also instruments the AWS SDK. That's how you'd tell model time from your own code's time.
+
+### Step by step: seeing agent traces in CloudWatch
+
+1. **Check that Transaction Search is on.** It must be enabled once per account and Region, or there are no spans to see. From the CLI: `aws xray get-trace-segment-destination` should return `"Destination": "CloudWatchLogs", "Status": "ACTIVE"` ([enable Transaction Search](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html)). In the console: CloudWatch → **Application Signals** → **Transaction Search** → **Enable Transaction Search**, with 1% of spans indexed free. Mine was already active from the deploys in the last post. "After you enable Transaction Search, it can take ten minutes for spans to become available."
+2. **Pick the right Region.** The labs ran in **US East (N. Virginia)**. The console opens in whatever Region you used last, and traces don't show across Regions.
+3. **Set the time range to cover the run.** Mine were at 13:18 and 16:01 local time. A one-hour default range on the next morning shows nothing.
+4. **Open the AgentCore console's Observability page** (`console.aws.amazon.com/bedrock-agentcore/observability`). Its tabs are **Overview** ("Choose an agent to see its runtime metrics, sessions, and traces"), **Sessions**, **Traces** ("Choose a trace to explore its trajectory and timeline") and **Spans** ([get started](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-get-started.html)).
+5. **Or use CloudWatch → GenAI Observability → Bedrock AgentCore.** It has an **Agents** view, a **Sessions** view ("Choose a session under **Session ID** to view the session details") and a **Traces** view ("Choose **Filter traces** to search for specific traces"); choosing a trace shows its summary, spans and content in the right pane ([GenAI observability](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/GenAI-observability.html)). For the travel agent, the session id was the one the notebook printed, `7c5ea8d1…`.
+6. **Or search spans directly:** **Application Signals** → **Transaction search**, and filter by service name, for example `s07-account-agent`.
+7. **Or query the raw spans with Logs Insights.** These are the queries I ran (log group `aws/spans`, or the runtime's log group):
+
+```text
+# which services sent spans, and when
+stats count(*) as spans, min(@timestamp) as first, max(@timestamp) as last by resource.attributes.service.name
+
+# one agent's span tree
+filter resource.attributes.service.name = "s07-account-agent"
+| fields @timestamp, name, spanId, parentSpanId, durationNano/1000000 as ms,
+         attributes.gen_ai.usage.input_tokens as inTok, attributes.gen_ai.usage.output_tokens as outTok
+| sort @timestamp asc
+
+# a runtime agent's spans grouped by session (log group /aws/bedrock-agentcore/runtimes/…-DEFAULT)
+filter @logStream = "spans"
+| stats count(*) as n, sum(attributes.gen_ai.usage.input_tokens) as inTok by name, attributes.session.id
+```
+
+The third query is how I counted the travel agent's session: 4 `POST /invocations`, 7 model calls (8,214 input and 679 output tokens in total) and 3 tool calls, one per travel question. It matches the evaluation lab exactly.
+
+<Callout type="warn" title="Why I probably missed them">
+
+I can't see what my console showed that day, so this is a checklist rather than a diagnosis. The likely culprits are the Region, a time range that didn't cover the run, and looking for the agent by the wrong name: CloudWatch labels it by `service.name` (`s07-account-agent`), not by the script name. One more trap is in the notebook itself: its last cell **deletes** the `agents/observability-demo` log group. The spans survived, because they live in `aws/spans`, but the OpenTelemetry log events went with the deleted group. Read the traces before you run the clean-up cell.
+
+</Callout>
+
+## Part 5: Finding your traces in LangSmith
+
+[LangSmith](https://smith.langchain.com) comes from the LangChain team but accepts OpenTelemetry traces from any framework. The notebook points Strands' OTLP exporter at it:
+
+```python
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY", "lsv2_pt_…")   # a key typed into the notebook as the fallback
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://api.smith.langchain.com/otel"
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"x-api-key={LANGSMITH_API_KEY},Langsmith-Project=strands-agents-demo"
+```
+
+The agent ran fine (15% of 2,847 = 427.05, plus httpbin's headers), but the exporter failed in the background, interleaved with the answer:
+
+```text
+Failed to export spans batch code: 403, reason: Forbidden
+```
+
+LangSmith's docs don't define a 403 for this endpoint, so I tested the key, printing only status codes:
+
+![Top: the notebook never loads the .env file, so os.getenv falls back to the key typed into the notebook, the same key, and sends spans to api.smith.langchain.com, which returns 403. Bottom: the same key against each regional API: GCP US 403, GCP EU 403, GCP APAC 403, AWS US 200. The fix is to load .env and point the endpoint at aws.api.smith.langchain.com/otel, after which the run exported without errors](/images/ai-llms/agentic-ai/agent-evaluation/langsmith-403.svg)
+
+The key was valid, but it belongs to an organisation in LangSmith's **AWS US** region, and the notebook sends to the **GCP US** host. LangSmith runs separate regions with separate API hosts: "GCP EU uses `eu.api.smith.langchain.com`; GCP APAC uses `apac.api.smith.langchain.com`; AWS US uses `aws.api.smith.langchain.com`" ([LangSmith: OpenTelemetry](https://docs.langchain.com/langsmith/trace-with-opentelemetry)). Same lesson as Langfuse: **a key only works with its own region's host.**
+
+```python
+from dotenv import load_dotenv
+load_dotenv(".env", override=True)
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://aws.api.smith.langchain.com/otel"   # your account's region
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = (
+    f"x-api-key={os.environ['LANGSMITH_API_KEY']},Langsmith-Project=strands-agents-demo")
+```
+
+With that change, the same agent exported without errors, and the project `strands-agents-demo` appeared. Reading it back through LangSmith's API:
+
+![A drawing of the run tree LangSmith stored, built from its API, not a screenshot. Root invoke_agent, run type llm, 7.58 seconds, shown as 12,752 input and 864 output tokens. Cycle 1, 3.76 seconds: chat, 2.69 seconds, 2,990 in and 147 out, then the tools calculator in 0.01 seconds and http_request in 1.07 seconds. Cycle 2: chat, 3.82 seconds, 3,386 in and 285 out. The root's tokens are exactly twice the sum of the two chat calls. Cost is empty because LangSmith has no price for this Bedrock model id](/images/ai-llms/agentic-ai/agent-evaluation/langsmith-tree.svg)
+
+Three things are worth noticing when you compare it with Langfuse's view of the same kind of agent:
+
+- **The mapping differs.** LangSmith maps `gen_ai.operation.name` "chat" to run type `llm` and `gen_ai.tool.name` to run type `tool` (its docs list the mapping). The loop spans also show as `llm`, apparently because they carry token counts.
+- **The root counts twice.** 12,752 is exactly 2 × (2,990 + 3,386). Strands already writes the totals on the root span, and LangSmith seems to add the children's tokens on top. Read token totals on the model calls, not the root.
+- **No cost.** Langfuse priced each call; LangSmith showed none, because it has no price for the `global.anthropic.claude-sonnet-4-6` id. You'd add it to its model price map.
+
+### Step by step: seeing traces in LangSmith
+
+1. **Sign in to the region your organisation lives in.** "Make sure to choose the correct region in the region dropdown" ([regions FAQ](https://docs.langchain.com/langsmith/regions-faq)). The API host must match: GCP US `api.smith.langchain.com`, EU `eu.api…`, APAC `apac.api…`, AWS US `aws.api…`.
+2. **Create a key under Settings → API Keys → Create API Key.** "LangSmith will display the API key only once" ([create an API key](https://docs.langchain.com/langsmith/create-account-api-key)). If the key covers several workspaces, `LANGSMITH_WORKSPACE_ID` picks one.
+3. **Put the key in `.env` and load it**, and set the endpoint to your region's host plus `/otel`. Don't add `/v1/traces` to `OTEL_EXPORTER_OTLP_ENDPOINT`: exporters append it themselves, and the full path "returns `404`".
+4. **Run, flush, and check the output.** No `Failed to export spans` line means LangSmith accepted them.
+5. **Open the tracing project** named in `Langsmith-Project` (here `strands-agents-demo`). "From a tracing project, use the **Threads**, **Traces**, or **Runs** tabs to change what appears in the table" ([view traces](https://docs.langchain.com/langsmith/view-traces)).
+6. **Click a row to open the side panel.** It has a **Trajectory** view (the run tree), **Turns**, and **Details**, which shows "inputs, outputs, metadata, timing, errors, and child runs", with actions to **Add to a dataset** or **Add to an annotation queue** for human review.
+
+On the free Developer plan, traces are kept for 14 days and limited to 5,000 a month ([usage and billing](https://docs.langchain.com/langsmith/usage-and-billing)). LangSmith also has its own Strands integration (`pip install "langsmith[strands-agents]"` and `setup_langsmith_telemetry()`), which uses newer agent headers instead of `Langsmith-Project` ([trace Strands agents](https://docs.langchain.com/langsmith/trace-with-strands-agents)).
+
+## Things that can trip you up
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Every dashboard is green and users say the answers are wrong | Monitoring only checks known failure modes | Keep traces and logs, and look at what the agent actually said |
+| The agent confirms something that failed | A raw tool error handed to the model with an open question | Decide on failures in code; mark the span failed |
+| A token metric that jumps on one provider | Wrapper or system text added to every call | Read tokens per span, not only per request |
+| Spans still go to the console after switching notebooks | One global tracer provider per process | Restart the kernel for each tracing notebook |
+| Langfuse `401`, keys look right | The notebook used the EU host; the project is in the US region | `load_dotenv(override=True)` before `get_client()`, and the right `LANGFUSE_BASE_URL` |
+| LangSmith `403` on export, agent works | The key's organisation is in another region (here AWS US) | Use the region's host: `https://aws.api.smith.langchain.com/otel` |
+| LangSmith `404` | The endpoint includes `/v1/traces` | Set only the base URL plus `/otel` |
+| Nothing in CloudWatch | Wrong Region, time range or name; Transaction Search off; first-time delay | Check `get-trace-segment-destination`, US East, the run's time, `service.name`, wait 10 minutes |
+| ADOT agent's logs vanished | The notebook's last cell deleted the log group | Read the traces before cleaning up; spans stay in `aws/spans` |
+| Root token count looks doubled | LangSmith adds children's tokens to totals already on the root | Read tokens on the `chat` / generation runs |
+| Langfuse and ADOT in one script | Both want to be the tracer provider | Separate scripts or processes |
+
+## Reproduce this yourself
+
+1. ✅ Create a free LangSmith account, make an API key, and set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env` (plus `LANGSMITH_ENDPOINT` if your organisation is in a non-default region, as mine is).
+2. ✅ Run `python obs_demo_langsmith.py` with a Groq key, or with my `llm.py` and `LLM_PROVIDER=claude`. Open the project in LangSmith: one `personality_query` trace per question.
+3. ✅ To read a trace without the UI, `langsmith.Client().list_runs(project_name=..., trace_id=...)` returns every span with its type, timing and tokens; that is how the tree above was drawn.
+4. ✅ The booking agent is twenty lines; run it a few times and count the final messages that claim a booking.
+5. 📘 For the AWS half, follow the steps in Parts 2 to 5 and the [AgentCore observability guide](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-get-started.html).
+
+## What I learned
+
+The most useful thing an observability tool did for me today was not a dashboard. It was one trace that showed where 3.3 seconds went, and one count over five runs that showed a famous failure not happening on today's models. Both answered questions I hadn't planned to ask, which is the whole difference from monitoring.
+
+## What I'd do differently
+
+Count, don't eyeball: wherever a lesson says a model "sometimes" does something, run it enough times to put a number on it, and record the number with the model's name and the date.
+
+## Summary
+
+An agent can be up, fast and wrong, so you need to see what it did, not just whether it ran. Keep metrics, events, logs and traces, tied by a trace id; debug by going from metrics to traces to logs to a fix in code. A failure the model is asked to explain is a failure it may explain away, so decide failures in code. With LangSmith a decorator turns functions into spans; with OpenTelemetry the same spans go to any backend, and on AWS they can be read in Jaeger, Langfuse, LangSmith or CloudWatch.
+
+![A map of the post in four columns. Why: agents fail without crashing, the same question gets different answers, and many hidden steps run per request. MELT: metrics, events, logs and traces, tied by one trace id. Debugging: metrics show something is wrong, traces find the bad cases, logs show the exact prompt, then fix in code and confirm with metrics. Tools: LangSmith traces with one decorator, OpenTelemetry spans to any backend, and on AWS, CloudWatch, Jaeger and Langfuse read the same spans.](/images/ai-llms/agentic-ai/observing-agents/summary-map.svg)
+
+### Concepts at a glance
+
+| Term | In one line |
+| --- | --- |
+| **Monitoring** | Fixed checks and alerts for problems you already know about |
+| **Observability** | Recording enough to answer questions you didn't plan |
+| **MELT** | Metrics, events, logs and traces |
+| **Trace / span** | The story of one request / one step in it, with timing and inputs |
+| **Trace id** | The id that ties every record of one request together |
+| **`@traceable`** | LangSmith's decorator that turns a function into a span |
+| **OpenTelemetry** | The open standard for spans that most tools can read |
+| **Semantic cache** | Reusing an answer for a question with the same meaning |
+
+### Test yourself
+
+<details>
+<summary>Your dashboard is all green, but users say the bot gives wrong answers. Why can both be true?</summary>
+
+Dashboards check known failure modes such as errors and latency. A fluent wrong answer is a success to every one of them. You need the traces and logs of what was said.
+
+</details>
+
+<details>
+<summary>Which two conditions does the trace filter for the lying booking agent need, and why both?</summary>
+
+The booking tool failed **and** the reply claims success. A failed booking with an honest reply is not a lie, and a successful booking that says so is fine.
+
+</details>
+
+<details>
+<summary>The buggy agent told the truth in my runs. Why fix it anyway?</summary>
+
+Because the honesty came from the model, which can change with the next model version or a different phrasing. Deciding failures in code makes the behaviour certain.
+
+</details>
+
+<details>
+<summary>In the trace, 3.31 of 3.34 seconds were in one span. What would you do with that?</summary>
+
+Optimise or cache that one call, and ignore the rest: the caches and routers cost nothing measurable.
+
+</details>
+
+<details>
+<summary>What does the third question, "Who is Elon Musk?", teach about caching?</summary>
+
+An exact cache misses it, because the words differ; a semantic cache matches it by meaning (0.91 here). The threshold decides how loose "the same question" is.
+
+</details>
+
+## Resources
+
+- Shivank Agarwal, Observability lecture explainer and `obs_demo_langsmith.py`, AI Bootcamp, Scaler Academy (course material).
+- LangSmith: [observability quickstart](https://docs.langchain.com/langsmith/observability-quickstart) and [trace with OpenTelemetry](https://docs.langchain.com/langsmith/trace-with-opentelemetry).
+- OpenTelemetry: [traces and spans](https://opentelemetry.io/docs/concepts/signals/traces/), and the [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
+- The Replit incident: [Tom's Hardware](https://tomshardware.com/tech-industry/artificial-intelligence/ai-coding-platform-goes-rogue-during-code-freeze-and-deletes-entire-company-database-replit-ceo-apologizes-after-ai-engine-says-it-made-a-catastrophic-error-in-judgment-and-destroyed-all-production-data) and [Gizmodo](https://gizmodo.com/replits-ai-agent-wipes-companys-codebase-during-vibecoding-session-2000633176).
+- Strands Agents: [traces](https://strandsagents.com/latest/documentation/docs/user-guide/observability-evaluation/traces/).
+- Jaeger: [getting started](https://www.jaegertracing.io/docs/latest/getting-started/). Langfuse: [Strands integration](https://langfuse.com/integrations/frameworks/strands-agents).
+- AgentCore observability: [get started](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-get-started.html). CloudWatch: [Transaction Search](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Transaction-Search.html).

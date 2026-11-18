@@ -1,0 +1,15 @@
+{
+  "steps": [
+    {
+      "from": "8 sentences",
+      "to": "1. bi-encoder",
+      "type": "data"
+    },
+    {
+      "from": "1. bi-encoder",
+      "to": "2. cross-encoder",
+      "label": "top K",
+      "type": "data"
+    }
+  ]
+}

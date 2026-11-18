@@ -1,10 +1,10 @@
 ---
-title: "How AI agents remember: Mem0, LangGraph and AgentCore Memory"
-description: "A first-timer's guide to agent memory: long-term facts with Mem0 and FAISS, short-term conversation state with LangGraph checkpointing, and every block of code explained."
+title: "How AI agents remember: one conversation, kept under control"
+description: "Why a stateless model needs memory at all, the five questions to answer before adding it, writing memory in the hot path or in the background, and the four ways to keep one conversation from outgrowing the context window: buffer, trim, delete and summarise. Then the conversation is saved with LangGraph checkpoints and AgentCore Memory. Re-run on Groq and on Claude, including a claim in the course notebook that its own test never checked."
 date: "2026-10-27"
 section: "ai-llms"
 series: "agentic-ai"
-seriesOrder: 3
+seriesOrder: 4
 tags: ["Agentic AI", "LLMs", "AI Engineering", "LangGraph"]
 ---
 
@@ -19,635 +19,209 @@ Without memory, every interaction feels transactional. With memory, an agent can
 | **Efficiency** | User must repeat information | Agent remembers and builds on past information |
 | **User experience** | Feels like talking to a stranger every time | Feels like a continuous relationship with an assistant |
 
-This builds on [my first agent](/blog/hello-agent) and on [giving an agent tools](/blog/giving-agents-tools), where a model, a few tools and a loop were enough to make something that acts. Here we give agents memory in two different ways, and then combine them:
-
-1. **Part 1:** long-term memory with Mem0, on a Strands agent.
-2. **Part 2:** short-term memory by saving a LangGraph agent's state into Amazon Bedrock AgentCore Memory.
-3. **Part 3:** how the two fit together.
-
-Both parts use a model hosted on Groq. Any idea that is likely to be new is explained in plain language before the code that uses it, and every code block has comments.
+Memory is two posts in this series. This one is about **short-term memory**: one conversation, kept small enough to resend, and saved so it can continue later. [The next post](/blog/long-term-agent-memory) is about **long-term memory**: facts, experiences and procedures that outlive a conversation.
 
 <Callout type="info" title="This is part of a series">
 
 1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
-2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
-3. **How AI agents remember** (this post): long-term and short-term memory.
-4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
-5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
-6. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
-7. [Evaluating, observing and governing agents](/blog/agent-evaluation): traces, LLM judges, guardrails and policy.
-8. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
-9. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. [Finding the right text](/blog/retrieval-for-agents): embeddings, similarity search, reranking, chunking and HyDE.
+4. **How AI agents remember** (this post): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. [Shipping agents to production](/blog/agents-to-production): Lambda, ECS Fargate and AgentCore.
+9. [Seeing inside an agent](/blog/observing-agents): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
 
 </Callout>
 
-## Two kinds of memory
+<Callout type="note" title="Credit">
 
-Agents solve the "stateless" problem in two different ways, and it helps to keep them apart from the start.
+The "why memory" section and Part 1 follow **Shivank Agarwal's** Memory lecture and code for the AI Bootcamp at **Scaler Academy** ([Future with Shivank](https://www.linkedin.com/in/shivankagrawal/)); I re-ran the code on 2026-11-18 on Groq and on Claude (see [the tools post](/blog/giving-agents-tools#the-same-loop-on-two-providers) for how). Part 2 follows an earlier course notebook, run in October. ✅ marks output from my runs, 📘 marks what comes from the explainer or the docs.
 
-![Two chat sessions that each hold a transcript, which is short-term memory, with a long-term store below that keeps facts from session 1 and recalls them in session 2](/images/ai-llms/agentic-ai/how-ai-agents-remember/memory-kinds.svg)
+</Callout>
 
-| | Short-term memory | Long-term memory |
+## TL;DR
+
+- **A model call keeps nothing.** Memory is the app resending what matters. Asked for a dinner place with no history, both models had to ask where I was; with one earlier message resent, both suggested vegetarian places in Pune. ✅
+- **Decide what, when, where, how and how much** before adding memory. "When" has two answers: write memory in the **hot path** (before replying, always fresh, slower) or **in the background** (later, in one batch). On Claude, the same three-message chat took 37.8 s one way and 18.7 s the other. ✅
+- **Four ways to keep one conversation small:** a plain buffer, **trimming** to a token budget, **deleting** chosen messages, and **summarising** old ones. ✅
+- **Test what you claim.** The course notebook says trimming loses the user's name but never asks for it. In its own conversation the name survives the trim; and with a slightly different conversation, its 300-token budget plus "start on a user message" kept zero messages on Groq. ✅
+- **Saving the conversation** is a checkpointer's job: LangGraph saves a snapshot after every step, keyed by `thread_id`, and AgentCore Memory keeps those snapshots in AWS.
+
+## Why a stateless model needs memory
+
+### A model call keeps nothing
+
+Each call to a model is a fresh start: it gets the text you send, writes a reply, and keeps nothing. If a chatbot seems to remember, the app is sending the earlier messages along again. The lecture shows it in a few lines:
+
+```python title="m04_stateless.py (from the Memory lecture, ported)"
+print("A:", ask([{"role": "user", "content": "Hi, I'm Priya. I'm vegetarian and I live in Pune."}]))
+print("A:", ask([{"role": "user", "content": "Suggest a dinner place for me tonight."}]))   # a separate call
+
+history = [{"role": "user", "content": "Hi, I'm Priya. I'm vegetarian and I live in Pune."}]
+history.append({"role": "assistant", "content": ask(history)})
+history.append({"role": "user", "content": "Suggest a dinner place for me tonight."})
+print("A:", ask(history))                                                                   # history resent
+```
+
+✅ Asked separately, Groq replied with a list of questions ("Cuisine preference… Location… Budget…") and Claude said it didn't know where I was or what I liked. With the first message resent, both suggested vegetarian places in Pune; Claude named three and added that it couldn't check opening hours. Same model, same question: the only difference is the text that was sent along.
+
+### Five questions before adding memory
+
+| Question | What it asks | A food-delivery support bot (📘 the lecture's example) |
 | --- | --- | --- |
-| **What is stored** | The full message history of one conversation | Facts and preferences pulled out of conversations |
-| **Lifetime** | One session or thread | Across sessions, days, weeks |
-| **Question it answers** | "What did I just ask you?" | "What do you know about me?" |
-| **Built in this post with** | LangGraph checkpointing and AgentCore Memory (Part 2) | Mem0 with a local FAISS index (Part 1) |
+| **What** | Facts, summaries of past events, or rules and style? | Refund rules, the user's preferences, last order arrived cold, apologise first |
+| **When / who** | When are memories formed, and by whom? | The agent saves preferences during the chat; a nightly job summarises tickets |
+| **Where** | In the prompt, a database, a vector store? | Rules in the system prompt, preferences keyed by user ID, old tickets in a vector store |
+| **How** | How are they found again? | Preferences by user ID, similar tickets by meaning, only the last 90 days |
+| **How much** | Size limits and pruning | At most 50 facts per user; tickets older than a year summarised, then deleted |
+
+<Callout type="analogy" title="Organising a kitchen">
+
+What to stock, when to restock, shelf or fridge, labels so you can find it, and throwing out what has expired.
+
+</Callout>
+
+### Writing memory: hot path or in the background
+
+![Writing memory in the hot path versus in the background, measured on Claude Haiku 5.5 for a three-message chat. Hot path: before every reply, one extra model call extracts facts and saves them, so memory is fresh at once; the three replies took 37.8 seconds in all. Background: replies only, and one batch call extracts the facts afterwards; 18.7 seconds in all. Both saved the same two facts: a trip to Rishikesh with parents, and the mother cannot climb stairs.](/images/ai-llms/agentic-ai/how-ai-agents-remember/hot-vs-background.svg)
+
+Memory can be written **in the hot path**, inside every turn before the reply, so it is fresh at once but every reply waits for an extra model call; or **in the background**, after the conversation or on a schedule, so replies are fast but new facts only reach future conversations later. The lecture's demo does the same three-message chat both ways:
+
+```python title="m06_hot_vs_background.py (from the Memory lecture, ported)"
+for msg in chat:                                   # hot path
+    facts = json.loads(extractor.invoke(EXTRACT.format(messages=msg)).text)["facts"]   # extra call BEFORE replying
+    memory += facts
+    reply = llm.invoke(f"Known about the user: {memory}\nUser: {msg}").text
+
+for msg in chat:                                   # background
+    reply = llm.invoke(f"User: {msg}").text
+facts = json.loads(extractor.invoke(EXTRACT.format(messages="\n".join(chat))).text)["facts"]   # later, once
+```
+
+| | Hot path | Background | Facts saved |
+| --- | --- | --- | --- |
+| ✅ Claude Haiku 5.5 | 37.8 s | 18.7 s | trip to Rishikesh with parents; mother can't climb stairs (both ways) |
+| ✅ Groq gpt-oss-120b | 38.4 s | 34.4 s | the same two, plus, in the hot path only, "the user is looking for recommendations on which area to stay in" |
+
+On Claude the trade-off showed up as the lecture describes: the hot path roughly doubled the total time. On Groq both totals were inflated, because my other Groq runs were competing for the same free-tier rate limit at the time, so its timings say little. Its facts say something, though: extracting from one message at a time, the hot path saved a *question* as if it were a lasting fact, which the batch extraction, seeing the whole chat, did not. Claude also dated the trip "around December 2026": it knows today's date, Groq's model doesn't ([why](/blog/giving-agents-tools#the-same-loop-on-two-providers)).
+
+### Four kinds of memory
+
+![The four kinds of agent memory as a tree. Memory splits into short-term and long-term. Short-term is the current conversation, one thread, answering 'what did we just say?'. Long-term splits into three: semantic memory holds facts and answers 'what is true?', episodic memory holds experiences and answers 'what happened last time?', and procedural memory holds skills and workflows and answers 'how do I do this?'. This post covers short-term memory; the next post covers the three long-term kinds.](/images/ai-llms/agentic-ai/how-ai-agents-remember/memory-types.svg)
+
+| Type | Remembers | Agent example (📘 lecture) |
+| --- | --- | --- |
+| **Short-term** | The current conversation | The last 20 messages of this chat |
+| **Semantic** | Facts: what is true | "Refunds are allowed within 30 days"; "this user is vegetarian" |
+| **Episodic** | Experiences: what happened | "Last time, the shipping API rejected this order ID" |
+| **Procedural** | Skills: how to act | "To track an order: validate the ID, then query the order database" |
 
 <Callout type="analogy" title="Save points in a video game">
 
-Short-term memory is the **save file** of a game in progress. Every step you take is saved, so you can quit, come back on another machine and continue exactly where you stopped. Long-term memory is the **profile** that follows you across every game: your name, your settings, your favourite character.
+Short-term memory is the **save file** of a game in progress: quit, come back on another machine, continue where you stopped. Long-term memory is the **profile** that follows you across every game.
 
 </Callout>
 
-## Part 1: Long-term memory with Mem0
+## Part 1: keeping one conversation under control
 
-In this exercise we build personal assistant agents that remember each user's preferences across conversations. Mem0 is the long-term memory, and a web search tool supplies fresh information.
+The model only sees what fits in its **context window**, and every message is paid for again on every turn. A long chat has to be cut down somehow. The course notebook `short_term_memory.ipynb` builds one five-turn conversation and then shrinks it four ways.
 
-### What is Mem0?
+![Three ways to keep one conversation small, on the same ten-message chat. Trim keeps the most recent messages that fit a token budget, about 300 tokens here, and drops the rest: 2 of 10 messages kept on Groq, whose answers were longer, and 4 of 10 on Claude. Delete removes chosen messages, here the four long explanations in the middle: 6 of 10 kept, including the first message where the user gave her name. Summarise replaces the six oldest messages with one summary written by the model and keeps the last four: 5 messages, and the summary still names the user.](/images/ai-llms/agentic-ai/how-ai-agents-remember/short-term-strategies.svg)
 
-**Mem0** (pronounced "mem-zero") is an open-source memory layer. It gives an otherwise stateless model a persistent store of facts about a user, so the agent can recall them in later sessions.
+### The buffer: keep everything
 
-It works in four moves:
+```python title="short_term_memory.ipynb (the buffer)"
+message_buffer = []
 
-1. **Add:** you pass in a conversation. Mem0 uses an LLM to extract the facts worth keeping, such as dietary preferences or working location, instead of storing the raw transcript.
-2. **Store:** the facts go into a vector store, so they can be searched by meaning. Mem0 can optionally add a graph store to capture relationships between things.
-3. **Update:** when a new fact contradicts an old one, Mem0 can update or delete the old memory instead of piling up duplicates.
-4. **Search:** before each model call, search with the user's message, take the top few matching memories and put them in the prompt.
-
-![Storing a memory: you say something, an LLM extracts facts, fastembed embeds them, FAISS stores them. Recalling: you ask, the model calls the memory tool, the query is embedded with the same model, FAISS returns the nearest facts](/images/ai-llms/agentic-ai/how-ai-agents-remember/mem0-pipeline.svg)
-
-### Embeddings, FAISS and fastembed
-
-The word "searched by meaning" hides three ideas that are worth understanding before the code.
-
-**Embeddings.** An embedding is a list of numbers that captures the meaning of a piece of text. Texts with similar meaning get lists that are close together, and texts with different meaning end up far apart. This is how "Suggest a restaurant" can land near "I'm vegetarian", even though they share no words.
-
-![A simplified two-dimensional map where food-related memories cluster together, the query Suggest a restaurant lands among them, and work-related text sits far away](/images/ai-llms/agentic-ai/how-ai-agents-remember/embeddings-map.svg)
-
-**FAISS.** FAISS (Facebook AI Similarity Search) is an open-source library from Meta for fast similarity search over vectors. It is the "vector store" Mem0 uses here. A FAISS *index* is the data structure that holds all the vectors and answers the question "which stored vectors are nearest to this one?" quickly.
-
-**fastembed.** Something has to turn text into those numbers. If you were on Amazon Bedrock, the course notebook would use Titan embeddings. Groq has no embeddings API, so here the embeddings run **on your own machine** with fastembed, a lightweight library from Qdrant. It runs small pretrained models through ONNX Runtime on the CPU, so it needs no GPU and no PyTorch.
-
-Put together, when a user says "I'm vegetarian":
-
-1. The Groq LLM extracts the fact.
-2. fastembed converts that sentence into a vector with 1024 numbers.
-3. The vector is stored in the FAISS index.
-4. Later, a query like "Suggest a restaurant" is embedded by fastembed too, and FAISS finds the nearest stored vector.
-
-<Callout type="tip" title="Store and search with the same model">
-
-The same embedding model has to be used for storing and for searching. Vectors from different models aren't comparable. The vector size also has to match what the index expects. This notebook's memory tool expects **1024-dimensional** vectors (Titan's size), so we pick a 1024-dimension model.
-
-</Callout>
-
-### Set up the environment
-
-Install the dependencies first. `%pip` is a notebook command that installs into the notebook's own Python, `-q` keeps the output quiet and `-r` reads the package list from a file.
-
-```python
-%pip install -q -r requirements-groq.txt
+def chat(user_input):
+    message_buffer.append(HumanMessage(content=user_input))
+    response = llm.invoke(message_buffer)          # the whole history, every time
+    message_buffer.append(response)
+    return response.content
 ```
 
-Then the setup cell. Four of its imports are part of Python's standard library, and only `dotenv` has to be installed.
+The conversation: "Hi! My name is Alice and I'm learning about AI", three questions about machine learning, and finally "Thanks! Can you remind me what my name is?". ✅ Both models answered "Alice" from the buffer. Ten messages; the long answers about supervised learning make up most of the tokens.
 
-| Import | Package | What it does here |
-| --- | --- | --- |
-| `os` | standard library | Reads and sets environment variables, and works with paths |
-| `re` | standard library | Regular expressions, used later to clean up user IDs |
-| `shutil` | standard library | File operations; `shutil.rmtree` deletes a whole folder |
-| `warnings` | standard library | Hides noisy library warnings so the output stays clean |
-| `dotenv` | `python-dotenv` | Loads `KEY=value` lines from a `.env` file into the environment |
+### Trimming: keep the newest that fit
 
-```python
-import os
-import re
-import shutil
-import warnings
-
-warnings.filterwarnings("ignore")  # hide noisy library warnings
-
-# Loads variables from a .env file into the environment.
-from dotenv import load_dotenv
-
-load_dotenv()  # reads GROQ_API_KEY from a .env file, if present
-
-# Which Groq model to use. Falls back to gpt-oss-120b if GROQ_MODEL_ID isn't set.
-MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
-
-# Mem0 uses two models: a small LLM that extracts facts from what the user says
-# (on Groq), and an embedding model that indexes memories (local; see
-# "A local embedder for Mem0" below).
-os.environ.setdefault("MEM0_LLM_PROVIDER", "groq")
-os.environ.setdefault("MEM0_LLM_MODEL", "openai/gpt-oss-20b")
-
-# Skip the interactive "are you sure?" prompt when the agent stores memories
-os.environ["BYPASS_TOOL_CONSENT"] = "true"
-
-# Turn off Mem0's anonymous usage telemetry
-os.environ["MEM0_TELEMETRY"] = "False"
-
-# Keep Mem0's history database inside this course folder
-os.environ["MEM0_DIR"] = os.path.abspath(".mem0_course")
-
-# Start from a clean slate: the memory tool's local FAISS index and this course's Mem0 data
-shutil.rmtree("/tmp/mem0_384_faiss", ignore_errors=True)
-shutil.rmtree(os.environ["MEM0_DIR"], ignore_errors=True)
-# Recreate the folder right away. Mem0 only creates it when it is first imported,
-# so without this line, re-running this cell in the same kernel would leave Mem0
-# with nowhere to put history.db ("unable to open database file").
-os.makedirs(os.environ["MEM0_DIR"], exist_ok=True)
-print("Ready")
-```
-
-`load_dotenv()` is the key line for secrets. It reads the `.env` file and puts each line into `os.environ`, so `os.getenv("GROQ_API_KEY")` works as if you had set the variable in your shell. If there is no `.env` file, it quietly does nothing. Add `.env` to `.gitignore` so your key never reaches git.
-
-Two kinds of assignment appear in this cell:
-
-- `os.environ.setdefault(...)` sets a value only if it isn't already set, so you can override it from outside.
-- `os.environ[...] = ...` always overwrites.
-
-What the cleanup lines do:
-
-- `/tmp/mem0_384_faiss` is where the Strands Mem0 tool keeps its FAISS index. Don't read the `384` in that folder name as the vector size: this notebook's embeddings have 1024 dimensions.
-- Deleting it means the agent starts with no memories, so earlier runs can't leak into your demo.
-- The next line deletes `MEM0_DIR`, which holds Mem0's own data, including its history database. Clearing both keeps the vectors and the history in sync, and clearing only one would leave memories without their history, or the reverse.
-
-<Callout type="tip" title="Colab and Linux paths">
-
-These notebooks are written for Colab or Linux, where `/tmp` exists. On Windows, that path may not be where the tool keeps its index, so check where your index actually lives before relying on that line.
-
-</Callout>
-
-### Imports and the Groq model
-
-```python
-# DDGS = DuckDuckGo Search client (the `ddgs` package). Free web search with no API key.
-# This is what gives the agent its "websearch" ability.
-from ddgs import DDGS
-
-# Agent: the class that runs the agent loop (model -> tool call -> result -> model).
-# tool:  decorator that turns a plain Python function into a tool the agent can call.
-from strands import Agent, tool
-
-# Adapter that talks to any OpenAI-compatible API. Groq speaks that protocol,
-# so this one class works for Groq by changing only base_url and api_key.
-from strands.models.openai import OpenAIModel
-
-# Controls how the agent runs tool calls when the model asks for several at once.
-# "Sequential" means one after another, not in parallel. That is safer here because
-# memory reads and writes share one local file, and it is gentler on Groq's rate limits.
-from strands.tools.executors import SequentialToolExecutor
-
-# Wraps a Python function plus a tool spec (name, description, input schema) into a tool
-# object. Used when you want to build a tool by hand instead of with @tool.
-from strands.tools.tools import PythonAgentTool
-
-# The ready-made description of the Mem0 memory tool (what it is called, what actions it
-# offers, what arguments it takes). Renamed on import so it reads clearly in your code.
-from strands_tools.mem0_memory import TOOL_SPEC as MEM0_TOOL_SPEC
-
-# Mem0MemoryTool:    the function that runs when the agent uses memory, i.e. store,
-#                    retrieve or list memories.
-# Mem0ServiceClient: the client class that connects to Mem0. It is imported here, but
-#                    the code in this post never calls it directly.
-from strands_tools.mem0_memory import Mem0MemoryTool, Mem0ServiceClient
-
-# The LLM the agent will use, reached through Groq's OpenAI-compatible endpoint
-model = OpenAIModel(
-    client_args={
-        "api_key": os.environ["GROQ_API_KEY"],
-        "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),  # or a local OpenAI-compatible server
-        "max_retries": 5,  # retry dropped connections (the client default is 2)
-    },
-    model_id=MODEL_ID,
-    # Groq reasoning models stream their thinking by default; hide it so only the answer prints.
-    params={"extra_body": {"include_reasoning": False}},
+```python title="short_term_memory.ipynb (trimming)"
+trimmed_messages = trim_messages(
+    message_buffer,
+    max_tokens=300,
+    strategy="last",                          # keep the LAST messages, drop the oldest
+    token_counter=count_tokens_approximately, # about 4 characters per token
+    start_on="human",                         # the kept history must start with a user message
+    allow_partial=False,                      # never cut a message in half
 )
 ```
 
-Which pip package each import comes from:
+The budget is in (approximate) tokens, which is how models count, and `start_on="human"` matters because chat models expect a conversation to open with a user turn. 📘 Shivank's version replaced the original's home-made character counter with this. ✅ Groq's answers were long, so only the last exchange fitted: 2 of 10 messages. Claude's were shorter: 4 of 10.
 
-| Import | Package to install | Role |
-| --- | --- | --- |
-| `ddgs` | `ddgs` | Web search |
-| `strands` | `strands-agents` | Core agent framework |
-| `strands_tools` | `strands-agents-tools` | Prebuilt tools, including Mem0 memory |
+The notebook then says, in a markdown cell: *"Trimming removes old messages entirely. Early context (like the user's name) is LOST."* It never asks for the name after trimming. So I did.
 
-Setting `os.environ["GROQ_API_KEY"]` with square brackets raises an error straight away if the key is missing. That is a clear early failure, unlike `os.getenv`, which would quietly return `None`.
+![Testing the notebook's claim that trimming loses the user's name. The notebook says so but never asks for the name after trimming. Test A, the notebook's own five-turn chat: the trim keeps the last two messages, and the last answer already says 'Your name is Alice', yet asked again, Claude said it didn't know the name and that its earlier answer had been wrong. Test B, the first four turns only: on Claude the trim kept two messages, neither mentioning Alice, and the model said it didn't know; on Groq a long answer alone was over the 300-token budget and the trim kept no messages at all.](/images/ai-llms/agentic-ai/how-ai-agents-remember/trim-test.svg)
 
-### A local embedder for Mem0
-
-Mem0 accepts any LangChain `Embeddings` object, so a few lines wrap fastembed in that interface. We pick `mixedbread-ai/mxbai-embed-large-v1`, a larger and more accurate English embedding model with 1024 dimensions, to match what the memory tool's index expects. The resulting `MEM0_CONFIG` is passed to every Mem0 client in the notebook.
-
-`langchain_core` is the small base package of LangChain. It supplies the `Embeddings` interface here, and Part 2 explains the wider LangChain family.
-
-```python
-# TextEmbedding: FastEmbed's class that turns text into vectors. It runs the model
-# locally on the CPU through ONNX Runtime, with no GPU or PyTorch needed.
-from fastembed import TextEmbedding
-
-# Embeddings: LangChain's abstract base class (the "interface") for any embedder.
-# It only says "you must provide embed_documents and embed_query". Mem0 accepts
-# embedders that follow this interface, so we make ours match it.
-from langchain_core.embeddings import Embeddings
-
-
-# A small adapter. FastEmbed does the real work, but Mem0 expects a LangChain-style
-# object, so this class translates between the two.
-class LocalEmbeddings(Embeddings):
-    """fastembed (ONNX on the CPU) behind the LangChain Embeddings interface that Mem0 accepts."""
-
-    def __init__(self, model_name: str):
-        # Load the embedding model by name. The first run downloads the weights,
-        # and later runs reuse the cached copy.
-        self.model = TextEmbedding(model_name)
-
-    # Used when storing: embed a batch of texts (the memories) at once.
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        # model.embed() yields one NumPy array per text. LangChain expects plain
-        # Python lists of floats, so .tolist() converts each array.
-        return [vector.tolist() for vector in self.model.embed(texts)]
-
-    # Used when searching: embed a single question or query.
-    def embed_query(self, text: str) -> list[float]:
-        # Reuse the batch method with a one-item list, then take the only result.
-        # The same model for both methods keeps stored and searched vectors comparable.
-        return self.embed_documents([text])[0]
-
-
-# Create the embedder. That 1024-number size must match the dimension the FAISS
-# index was created with, or searches will fail.
-embedder = LocalEmbeddings("mixedbread-ai/mxbai-embed-large-v1")  # 1024 dims, matching the FAISS index
-
-# Sanity check: embed one word and print the vector length. It should print 1024.
-print("Embedding dimensions:", len(embedder.embed_query("hello")))
-
-# Config dict handed to Mem0. "provider": "langchain" tells Mem0 to use an embedder
-# object we built ourselves, instead of one of its built-in providers like OpenAI.
-# "model": embedder is that object.
-MEM0_CONFIG = {"embedder": {"provider": "langchain", "config": {"model": embedder}}}
+```python title="trim_check.py (my test, same conversation and settings)"
+for label, n in [("A: all 5 turns (as in the notebook)", 5), ("B: first 4 turns only", 4)]:
+    kept = trim(build(n))
+    answer = llm.invoke(kept + [HumanMessage(content="What's my name again?")]).text
 ```
 
-LangChain splits embedding into `embed_documents` and `embed_query` because some models treat a query differently from a stored document, for example by adding a prefix. Here both do the same thing, which keeps the adapter simple.
-
-### The system prompt
-
-The system prompt sets the agent's role, its limits and how it should use memory. It is guidance only: the hard boundary between users is enforced by the tool binding in `create_agent` below, not by these words.
-
-```python
-SYSTEM_PROMPT = """You are a personal assistant for {user_name}.
-You must not access or reveal any other person's information.
-If you are asked a question about another person, politely refuse to answer.
-Create helpful responses based on what you remember about {user_name}.
-When {user_name} tells you about their preferences, store them in memory.
-When {user_name} asks for something, first retrieve relevant memories, then use web search to find the most relevant answer."""
+```text output
+A: all 5 turns (as in the notebook): kept 2 messages, 1 of them mention Alice
+   answer: I don't know your name. I can't see anywhere in our conversation where you told me, so my earlier answer was wrong. I shouldn't have said "Alice." …
+B: first 4 turns only: kept 2 messages, 0 of them mention Alice
+   answer: I don't know your name. You haven't mentioned it in our conversation, and I don't have a way to look it up. …
 ```
 
-The `{user_name}` placeholders are filled in later with `.format(...)`, so one template serves every user.
+✅ That's Claude. On Groq (`gpt-oss-20b`, after the daily quota on the larger model ran out) test A answered simply "You're Alice.", and test B kept **0** messages: an empty history. Three things came out of it:
 
-### One agent per user
+1. **In the notebook's own conversation the name survives the trim**, because the last turn asked for the name and the answer, "Your name is Alice", is the newest message. The claim is untested, and for this conversation the name is not lost from the text.
+2. **Claude still refused it; Groq didn't.** With only "remind me what my name is?" and "Your name is Alice" left, Claude decided its own earlier answer had no support and took it back. Trimming loses *provenance* as well as facts: a claim with no visible source is a claim the model may distrust.
+3. **The budget can leave nothing.** In Groq's test B, the newest answer was over 300 tokens on its own, so no run of messages starting with a user turn fitted and `start_on="human"` left an **empty** history; the model was sent the question alone. A fixed token budget must be bigger than the longest message you expect, or trimming silently sends the model nothing.
 
-`Mem0MemoryTool(user_id=...)` binds the memory to one user. `PythonAgentTool` then wraps that bound function with Mem0's tool description, so the agent sees an ordinary `mem0_memory` tool, but it can only ever reach that one user's memories.
+If a lesson says a technique loses information, ask the question and check.
 
-![Mona's agent holds a memory tool fixed to the user_id mona_mona, so it can read and write Mona's memories in the shared FAISS index but cannot reach another user's](/images/ai-llms/agentic-ai/how-ai-agents-remember/per-user-memory.svg)
+### Deleting: remove chosen messages
 
-`SequentialToolExecutor` makes the agent run tool calls one at a time. A model often saves several facts in one turn, and by default Strands runs those calls in parallel. Every call loads the same local FAISS file, adds a vector and writes the file back, so run in parallel they overwrite each other and memories are silently lost. Any tool that writes to a shared local file needs this.
-
-```python
-# @tool turns this function into a tool the agent can call. Strands builds the
-# description the model sees from the function name, the type hints and the docstring.
-@tool
-def websearch(keywords: str, region: str = "in-en", max_results: int = 5) -> str:
-    # The docstring is the model's only guide to this tool, so it states what the tool
-    # does and what each argument means. The examples (in-en, us-en) show the format.
-    """Search the web for up-to-date information.
-
-    Args:
-        keywords: The search query keywords.
-        region: The search region, for example in-en, us-en, uk-en, wt-wt.
-        max_results: The maximum number of results to return.
-    """
-    try:
-        # Run a DuckDuckGo text search. It returns a list of dicts, each holding a
-        # title, link and snippet. No API key is needed.
-        results = DDGS().text(keywords, region=region, max_results=max_results)
-        # Tools must return text for the model to read, so convert the list to a string.
-        # An empty result gets a clear message instead of an empty string.
-        return str(results) if results else "No results found."
-    except Exception as e:
-        # Return the error as text instead of raising. The agent sees what went wrong
-        # (rate limit, network) and can retry or answer without search, not crash.
-        return f"Exception: {e}"
-
-
-# A plain helper, not a tool: the model never sees it. It turns a display name into an
-# ID that Mem0 will accept.
-def to_user_id(user_name: str) -> str:
-    """Mem0 user IDs allow letters, digits, _ - . only."""
-    # strip() removes surrounding spaces and lower() makes it lowercase, so "Mona " and
-    # "mona" map to the same memory. re.sub then replaces every character outside
-    # letters, digits, "_", "-" and "." with an underscore, e.g. "Bunny Kaushik" ->
-    # "bunny_kaushik".
-    return re.sub(r"[^A-Za-z0-9_\-.]", "_", user_name.strip().lower())
-
-
-# Builds one agent per user, each with its own memory.
-def create_agent(user_name: str) -> Agent:
-    # The memory tool is bound to ONE user here, in code, not by the model.
-    # Mem0MemoryTool is created with a fixed user_id plus our MEM0_CONFIG (the local
-    # embedder). The model can't choose or change whose memories it reads, so one user
-    # can't see another's.
-    memory = Mem0MemoryTool(user_id=to_user_id(user_name), config=MEM0_CONFIG)
-    # Wrap the memory function as a Strands tool: (tool name, MEM0_TOOL_SPEC with the
-    # description and input schema the model sees, the function that runs when called).
-    memory_tool = PythonAgentTool("mem0_memory", MEM0_TOOL_SPEC, memory.mem0_memory)
-    return Agent(
-        model=model,  # the Groq model object built earlier
-        # SYSTEM_PROMPT is the template from the previous step; format() fills in the
-        # user's name so the agent knows who it is talking to.
-        system_prompt=SYSTEM_PROMPT.format(user_name=user_name),
-        # The tools the agent can use: memory (hand-wrapped) and web search (via @tool).
-        tools=[memory_tool, websearch],
-        tool_executor=SequentialToolExecutor(),  # memory writes share one local file: one at a time
-    )
+```python title="short_term_memory.ipynb (deletion)"
+deleted_buffer = message_buffer[:4] + message_buffer[8:]     # drop messages 4-7, the long explanations
 ```
 
-### Teach the agent a user's preferences
+✅ Six of ten kept, including the first message with the name, so both models answered "Alice". Deletion keeps what you choose, but these indices only fit this exact conversation; a real agent needs a rule ("drop tool results older than N turns"). Inside a LangGraph agent you delete from the state with `RemoveMessage` and the `add_messages` reducer, which the notebook shows on the same buffer: ✅ "Before: 10 messages / After removing the earliest two: 8 messages".
 
-Meet Mona Mona. Her agent gets four sentences about her preferences in a single message:
+### Summarising: compress the old part
 
-```python
-# Meet Mona Mona
-agent1 = create_agent("Mona Mona")
-user1_comments = [
-    "I am a veggie lover.",
-    "I want you to know that I have a medical condition which requires low-sodium food and decaffeinated drinks only.",
-    "I prefer full-service restaurants.",
-    "I visited an Indian restaurant to have chai and I loved it.",
-]
-
-agent1("\n".join(user1_comments))
+```python title="short_term_memory.ipynb (summarising)"
+summary = summarize_messages(message_buffer[:6], llm)        # one model call
+summarized_buffer = [SystemMessage(content=f"Previous conversation summary: {summary}")] + message_buffer[6:]
 ```
 
-The memory tool prints what it stored:
+✅ Both summaries began with Alice ("Alice, who is learning about AI…", "Alice introduced herself as a learner of AI…"), so the five-message buffer still answered the name question. Summarising costs a model call and keeps only what the summary chose to keep. The explainer's known limit: summarise a second time and the old summary must be folded into the new one, or earlier facts are lost. 📘
 
-![Terminal output of the memory tool showing five ADD operations: User is a veggie lover, Requires low-sodium food, Decaffeinated drinks only, Prefers full-service restaurants, Liked Indian restaurant chai](/images/ai-llms/agentic-ai/how-ai-agents-remember/hello_agent_memory_list.png)
+| Strategy | Cost | Keeps the start? | Risk |
+| --- | --- | --- | --- |
+| Buffer | Grows every turn | Yes | Overflows the context window |
+| Trim | Free | No | Loses the start; a small budget can keep nothing |
+| Delete | Free | If you choose | Needs a rule for what to delete |
+| Summarise | One model call | As a summary | Details the summary dropped are gone |
 
-And the agent replies:
+## Part 2: Saving the conversation with LangGraph and AgentCore Memory
 
-```text
-Got it! I've noted that you:
-
-- Love vegetarian meals
-- Need low-sodium dishes
-- Only drink decaffeinated beverages
-- Prefer full-service restaurants
-- Enjoy Indian chai (you loved it at the Indian place you visited)
-
-Whenever you'd like a restaurant recommendation, a menu suggestion, or anything else
-that fits these preferences, just let me know and I'll pull together the best options for you.
-```
-
-Notice that the agent made **one** store call, but Mem0 saved **five** separate memories. That is the "extract facts" step working: Mem0's LLM split one sentence into small, searchable facts.
-
-#### Reading the result object
-
-The call also returns an `AgentResult` with the details of the run. Here it is in full, for the curious:
-
-<details>
-<summary>The full AgentResult</summary>
-
-```text
-AgentResult(
-    stop_reason='end_turn',
-    message={
-        'role': 'assistant',
-        'content': [
-            {
-                'text': 'Got it! I’ve noted that you:\n\n- Love vegetarian meals  \n- Need low‑sodium dishes  \n- Only drink decaffeinated beverages  \n- Prefer full‑service restaurants  \n- Enjoy Indian chai (you loved it at the Indian place you visited)\n\nWhenever you’d like a restaurant recommendation, a menu suggestion, or anything else that fits these preferences, just let me know and I’ll pull together the best options for you. 🍃🥗☕️'
-            }
-        ],
-        'metadata': {
-            'usage': {
-                'inputTokens': 881,
-                'outputTokens': 131,
-                'totalTokens': 1012
-            },
-            'metrics': {
-                'latencyMs': 0,
-                'timeToFirstByteMs': 1056
-            }
-        },
-        'tracking_id': '934c53b7-ad06-401b-967f-a33290722a82'
-    },
-    metrics=EventLoopMetrics(
-        cycle_count=2,
-        tool_metrics={
-            'mem0_memory': ToolMetrics(
-                tool={
-                    'toolUseId': 'fc_bbaf6aba-ec54-4ca3-87d9-cb11f1b598c5',
-                    'name': 'mem0_memory',
-                    'input': {
-                        'action': 'store',
-                        'content': 'User is a veggie lover, requires low-sodium food, decaffeinated drinks only, prefers full-service restaurants, liked Indian restaurant chai.',
-                        'metadata': {}
-                    }
-                },
-                call_count=1,
-                success_count=1,
-                error_count=0,
-                total_time=6.409196499967948
-            )
-        },
-        cycle_durations=[7.845792531967163, 1.2326867580413818],
-        agent_invocations=[
-            AgentInvocation(
-                cycles=[
-                    EventLoopCycleMetric(
-                        event_loop_cycle_id='8a25945d-00f9-4e26-87bd-45dc49110a42',
-                        usage={'inputTokens': 566, 'outputTokens': 120, 'totalTokens': 686}
-                    ),
-                    EventLoopCycleMetric(
-                        event_loop_cycle_id='7259d6ed-c5d2-4208-93af-1e3abe04c53b',
-                        usage={'inputTokens': 881, 'outputTokens': 131, 'totalTokens': 1012}
-                    )
-                ],
-                usage={'inputTokens': 1447, 'outputTokens': 251, 'totalTokens': 1698}
-            )
-        ],
-        traces=[
-            <strands.telemetry.metrics.Trace object at 0x000001DDB28EBB60>,
-            <strands.telemetry.metrics.Trace object at 0x000001DDFE4F5A70>
-        ],
-        accumulated_usage={'inputTokens': 1447, 'outputTokens': 251, 'totalTokens': 1698},
-        accumulated_metrics={'latencyMs': 0}
-    ),
-    state={},
-    interrupts=None,
-    structured_output=None,
-    checkpoint=None
-)
-```
-
-</details>
-
-The fields that matter:
-
-| Field | Value | Meaning |
-| --- | --- | --- |
-| `stop_reason` | `end_turn` | The model finished its answer normally. It wasn't cut off by a token limit. |
-| `cycle_count` | `2` | The agent loop ran twice. |
-| `tool_metrics` | `mem0_memory`, 1 call, 1 success, 0 errors | One tool was used, and it worked. |
-| `total_time` (the tool's) | 6.4 s | Time spent inside the memory tool. |
-| `cycle_durations` | 7.85 s, 1.23 s | Cycle 1 was slow and cycle 2 was fast. |
-| `accumulated_usage` | 1447 in / 251 out / 1698 total | Tokens for the whole request. |
-
-The two cycles are the agent loop from the first post: decide, call a tool, read the result, answer.
-
-![A sequence diagram: you send your preferences, the model calls the memory tool with a store action, the tool works for 6.4 seconds and returns, then the model writes its reply. Cycle 1 took 7.85 seconds and cycle 2 took 1.23 seconds](/images/ai-llms/agentic-ai/how-ai-agents-remember/agent-loop-store.svg)
-
-- **Cycle 1** (566 tokens in, 120 out): the model read the message and decided to call `mem0_memory` with `action: store`. Then the tool ran.
-- **Cycle 2** (881 in, 131 out): the tool result went back to the model, which wrote the friendly confirmation.
-
-**Why cycle 1 took 7.85 s:** about 6.4 s of that was the tool. Storing a memory is expensive, because Mem0 calls the Groq LLM to extract facts, then embeds them with fastembed and writes to FAISS. Cycle 2 only had to write one reply, so it took 1.2 s. The output doesn't break the time down, so that split is inferred from the timings.
-
-**Why input tokens went from 566 to 881:** cycle 2 resends the whole conversation plus the model's own tool call and the tool's result. That is why agents get more expensive as the loop goes on.
-
-Other things worth noticing:
-
-- **The model wrote the memory text, not the user.** The stored `content` is the model's paraphrase of the message ("User is a veggie lover…"). What gets remembered depends on how the model summarises.
-- **The model only knows the store succeeded.** It said "I've noted that you…" but it can't see what was saved. Retrieval in a later session is what proves it worked.
-- **`latencyMs: 0`** probably means this model adapter doesn't fill that field. The real timings are `timeToFirstByteMs` (1,056 ms here) and `cycle_durations`.
-- **Empty fields:** `state={}`, `interrupts=None`, `structured_output=None` and `checkpoint=None` are features this run doesn't use.
-- **`tracking_id` and `toolUseId`** are random IDs for tracing.
-
-### Check what is in memory
-
-```python
-agent1("Show what you remember about me")
-```
-
-```text
-Tool #2: mem0_memory
-```
-
-![Terminal output of the memory tool titled Memories List, a table with an ID, the memory text, a creation time, the user ID mona_mona and metadata for each of the five stored memories](/images/ai-llms/agentic-ai/how-ai-agents-remember/hello_agent_memory_list_2.png)
-
-The agent then summarises it in its own words:
-
-| Preference / Detail | Summary |
-| --- | --- |
-| **Diet** | Vegetarian (veggie lover) |
-| **Health needs** | Low-sodium meals |
-| **Beverage preference** | Decaffeinated drinks only |
-| **Restaurant style** | Prefers full-service restaurants |
-| **Past experience** | Loved the chai at an Indian restaurant you visited |
-
-Three different things appear in this output:
-
-1. **`Tool #2: mem0_memory`** is a log line Strands prints each time the agent calls a tool. It is a running count: the earlier `store` call was the first, so this is the agent's second tool call. `mem0_memory` is the tool's name, the one registered with `PythonAgentTool("mem0_memory", ...)`.
-2. **The boxed table** is printed by the memory tool itself. The model doesn't write it. It is a display for you.
-3. **The summary table** is the model's own answer. It read the tool result and rewrote it in its own words.
-
-A few details in the screenshot are worth reading too. The user ID `mona_mona` is what `to_user_id("Mona Mona")` produced. All five rows belong to that one user. The `…` in the ID and date columns is the terminal truncating text to fit its width, and `Metadata: None` is there because the model passed an empty `{}` when storing.
-
-### Memory plus live web search
-
-Now the payoff: ask for something that needs both what the agent remembers and fresh information from the web.
-
-```python
-from IPython.display import Markdown, display
-
-display(Markdown(str(agent1("Find good restaurant options for me in Bangalore"))))
-```
-
-The agent first logs five tool calls, all web searches:
-
-```text
-Tool #3: websearch
-
-Tool #4: websearch
-
-Tool #5: websearch
-
-Tool #6: websearch
-
-Tool #7: websearch
-```
-
-Then it writes the answer, a table of four full-service vegetarian restaurants with tips on keeping the meal low-sodium and the drinks decaf:
-
-<details>
-<summary>The agent's full answer</summary>
-
-Here are **four full‑service restaurants in Bangalore** that line up with everything you told me (vegetarian + low‑sodium + decaffeinated drinks + full‑service vibe). I’ve added a quick note on why each one fits and how you can make the most of your health needs.
-
-| # | Restaurant | Neighborhood / Address | Why it matches you | How to keep it low‑sodium & decaf | Quick contact |
-|---|------------|------------------------|--------------------|-----------------------------------|---------------|
-| **1** | **Phurr** – “Vegetarian fine‑dining” | Jayanagar (3rd Block) & Indiranagar – (https://www.phurr.co.in/) | 100 % vegetarian, upscale full‑service setting, creative menu (North‑Indian, Continental, Asian) 【1†source】 | Ask the floor‑manager for “low‑sodium” preparation (e.g., ask sauces on the side, less salt) and request **decaf tea/coffee** or the mocktail bar’s **decaf chai‑based mocktails**. The staff are used to customising dishes for health‑conscious diners. | Phone: +91 80 4157 5500 |
-| **2** | **Neemsi Restaurant** – Pure‑veg fine dining | JP Nagar (and Basavanagudi) – (https://neemsirestaurant.com/) | Pure‑veg, large menu with many Jain‑friendly (naturally low‑salt) options, full‑service ambience 【4†source】 | Their menu shows “low‑sodium” markers on several dishes (e.g., steamed veggies, dal without added salt). Mention your low‑sodium requirement; the kitchen can adjust. They also serve **decaf masala chai** and a range of herbal mocktails. | Phone: +91 80 2662 2000 |
-| **3** | **Carrots – India’s First Vegan Restaurant** | Koramangala & Whitefield – (https://carrots-india.com/) | Vegan/vegetarian, health‑focused, full‑service café‑style, plenty of fresh salads and grilled veggies that are naturally low in sodium. | Choose “no‑salt” or “light‑salt” preparation; the chef will gladly omit added salt. They serve **decaf filter coffee, herbal teas, and a decaf chai latte** made with plant‑milk. | Phone: +91 80 4155 2000 |
-| **4** | **1947 Restaurant** – Fine Indian vegetarian cuisine | Multiple locations (e.g., Koramangala, Indiranagar) – (https://1947restaurants.in/) | Upscale vegetarian restaurant with a reputation for “clean” cooking; full‑service table service. | When ordering, ask for “low‑sodium” (most dishes can be prepared with reduced salt) and request **decaf chai** or **decaf filter coffee**—they keep a decaf coffee bean stock for health‑conscious guests. | Phone: +91 80 4155 7777 |
-
-**How to make the most of each place**
-
-1. **Call ahead** (or mention when you’re seated) and say: “I need a low‑sodium vegetarian meal and only decaffeinated drinks. Could the chef prepare my dish with no added salt and recommend a decaf beverage?”
-2. **Ask for sauces on the side** – that gives you total control over sodium.
-3. **Look for “Jain/veg‑friendly”** labels on the menu; those dishes are often prepared without extra salt or oil.
-4. **Decaf chai tip:** many places will brew chai with **decaf tea leaves** and can swap regular milk for almond/soy if you’d like a lighter version.
-
-**A quick “next‑step” plan**
-
-- **Pick one** that sounds most appealing (e.g., Phurr for a chic dinner, Neemsi for a relaxed lunch).
-- **Reserve a table** (most of these spots take online bookings via their websites or phone).
-- When you arrive, **remind the host** of your low‑sodium and decaf needs – they’ll note it for the kitchen.
-
-Enjoy your next Bangalore dining adventure! If you’d like more details (e.g., specific low‑sodium dishes on the current menu, directions, or a reservation link), just let me know. 🌿🍽️☕️
-
-</details>
-
-#### Why five searches?
-
-Five separate web searches for one request is the agent loop at work. The log shows only the tool name, not the queries or the model's reasoning, so the explanation below is inference.
-
-- **Where it fits:** `#2` was the memory lookup from before, and `#3` to `#7` come straight after it. So the agent read Mona's preferences first, then turned them into searches. "Restaurants in Bangalore" alone wouldn't satisfy "vegetarian, low-sodium, decaf, full-service".
-- **You never asked for five.** The model chose that itself. Likely reasons, roughly in order of plausibility:
-  1. **One search per constraint or angle,** such as vegetarian fine dining in Bangalore, then low-sodium options, then decaf availability.
-  2. **One search per candidate.** After finding restaurant names, it looked up details for each one. The answer has four restaurants, which could fit this.
-  3. **Retries after weak or failed results.** `websearch` catches errors and returns `"Exception: …"` as text, so the model can see a failure and try again. Free web search is often rate-limited, so some of the five may have been retries.
-- **Why they appear one by one:** `SequentialToolExecutor()` runs tool calls one after another and never in parallel. The model may have requested them all at once or one per loop cycle, and the log doesn't distinguish those.
-- **The cost:** each search result goes back into the model's context, so the final call carried a lot of input. That matters on Groq's free tier.
-
-To find out exactly what happened, check the result object after the run:
-
-```python
-# response is whatever agent1(...) returned; assign it when you run the query
-response = agent1("Find good restaurant options for me in Bangalore")
-
-print("Loop cycles:", response.metrics.cycle_count)
-m = response.metrics.tool_metrics["websearch"]
-print("Calls:", m.call_count, "ok:", m.success_count, "errors:", m.error_count)
-```
-
-`call_count` should be 5, and `cycle_count` tells you whether the calls came in one batch or across several cycles. These are counts only. To see the query text itself you would need to print the tool inputs as they are made.
-
-<Callout type="warn" title="An agent with search can still make things up">
-
-Check the details in that answer before trusting any of it. The phone numbers look patterned (`+91 80 4155 2000`, `+91 80 4155 7777`), and claims like "they keep a decaf coffee bean stock" or "the menu shows low-sodium markers" aren't tied to a citation. Only two of the four restaurants have a source marker, and the `【1†source】` markers are leftover citation formatting from the model, not links. Models do invent plausible-looking contact details. Search gives the model fresh material, but it doesn't guarantee the final answer sticks to it.
-
-</Callout>
-
-## Part 2: Short-term memory with LangGraph and AgentCore Memory
-
-Mem0 remembers *facts about a user*. It doesn't, by itself, keep the *ongoing conversation*. For that we need short-term memory, the thing that lets an agent answer "what did I just ask you?" in the middle of a session.
+Part 1 decided *what* to keep of one conversation. This part makes the conversation itself survive: the thing that lets an agent answer "what did I just ask you?" after the program has stopped, or from another machine.
 
 This part comes from a second course notebook. A math agent does a multi-step calculation, answers a follow-up question about it, and then shows that a brand-new session starts with a blank slate. Only the agent's model runs on Groq. The memory runs on AWS, so you need AWS credentials but no Bedrock *model* access.
 
 ### LangChain, LangGraph and state
 
-Part 1 used Strands. This part uses **LangChain** and **LangGraph**, so a quick orientation first.
+The earlier posts used Strands. This part uses **LangChain** and **LangGraph**, so a quick orientation first.
 
 LangChain is an open-source framework for building applications on top of LLMs. It gives you ready-made building blocks, so you don't write the plumbing for each model provider and each tool yourself. It provides:
 
@@ -964,106 +538,95 @@ print("Deleted memory", memory_id)
 
 This deletes the whole resource, including all saved sessions. Next time you run the notebook, `create_or_get_memory` will create a fresh one.
 
-## Part 3: Putting the two together
-
-Here is how the two setups compare:
-
-| | Strands + Mem0 | LangGraph + AgentCore Memory |
-| --- | --- | --- |
-| **Kind of memory** | Long-term facts | Short-term conversation state |
-| **What gets stored** | Facts the model extracted ("decaf only") | Every message and tool result |
-| **Scoped by** | `user_id` | `thread_id` and `actor_id` |
-| **Who decides what to save** | The model, by calling the memory tool | The checkpointer, automatically at every step |
-| **Where it lives** | A local FAISS index | AWS |
-
-The key difference is that the agent never *chooses* to save a checkpoint. It happens automatically at every step, while Mem0 only stores what the model decides to send it.
-
-The two aren't alternatives. A real assistant normally wants both: checkpoints so a conversation can continue, and long-term memory so it knows the user next week.
-
-![Recent messages from the checkpointer and relevant facts from Mem0 both go into the prompt. After the model answers, the new state is saved to the checkpointer and any new facts are stored in Mem0](/images/ai-llms/agentic-ai/how-ai-agents-remember/memory-together.svg)
-
-This diagram is the general pattern, not something either notebook builds on its own: they use different frameworks, so combining them would take extra wiring.
-
 ## Things that can trip you up
 
-- **Mismatched vector sizes.** The embedding model and the FAISS index must agree on the number of dimensions. Here that is 1024.
-- **Different embedding models for storing and searching.** Vectors from different models aren't comparable.
-- **Parallel writes to a local index.** Without `SequentialToolExecutor`, memories can be silently lost.
-- **Unchecked search results.** An agent can sound confident about details the search never returned.
+- **Believing a claim the notebook never tests.** "Trimming loses the name" wasn't checked; in that conversation it doesn't.
+- **A token budget smaller than one message.** `trim_messages` with `start_on="human"` can return an empty history. Size the budget for your longest answers.
+- **Hard-coded deletion indices.** `[:4] + [8:]` fits one conversation. Use a rule.
+- **Summaries that pile up.** Fold the previous summary into the next one.
+- **Hot-path extraction saving non-facts.** Extracting from one message at a time saved a question as a fact; batch extraction saw the whole chat and didn't.
 - **AWS credentials or permissions missing.** The failure shows up at `create_or_get_memory`. Check your credentials and the IAM permissions listed above.
-- **Region mismatch.** The memory resource lives in one Region. Use the same `REGION` for the client and the checkpointer, as the notebook does.
+- **Region mismatch.** The memory resource lives in one Region. Use the same `REGION` for the client and the checkpointer.
 - **Forgetting `thread_id` or `actor_id`.** Both are required by the AgentCore checkpointer.
-- **Groq rate limits.** On a free tier, expect an occasional HTTP 429. `max_retries=5` helps with some of it.
+- **Groq rate limits.** On a free tier, expect HTTP 429s, per minute and per day. `max_retries` helps with the first kind only.
 - **Leaving the AWS resource behind.** If the notebook stops before the last cell, delete the memory resource yourself.
+
+## Reproduce this yourself
+
+1. ✅ Part 1: install `langchain`, `langchain-openai` and `langgraph`, put `GROQ_API_KEY` in `.env` (or set `LLM_PROVIDER=claude` with a Claude Code login, using my `llm.py`; the course version needs an OpenAI key), and run `short_term_memory.ipynb` top to bottom.
+2. ✅ To test the trimming claim, add one cell after the trim: `llm.invoke(trimmed_messages + [HumanMessage("What's my name again?")])`. Then rebuild the buffer with the first four turns only and trim again.
+3. ✅ The two lecture demos are a dozen lines each; the hot-path one prints how long each reply waited.
+4. 📘 Part 2 needs an AWS account with Bedrock AgentCore access; the steps and IAM permissions are above, and the [LangGraph persistence docs](https://docs.langchain.com/oss/python/langgraph/persistence) explain checkpointers in general.
+
+## What I learned
+
+Short-term memory is not a feature you switch on; it is the transcript you decide to resend. Every strategy is a trade between cost, what survives, and how much work it takes to choose. And the tests in a lesson are worth re-running with one more question: the notebook's own conversation contradicted its own note.
+
+## What I'd do differently
+
+Write the recall question into every memory experiment: after any trim, delete or summary, ask for the one fact that matters and print the answer. That single line would have caught the untested claim and the empty-history case at once.
 
 ## Summary
 
-An LLM is stateless, so an agent's memory is whatever text is put back into its prompt. Short-term memory is the transcript of one conversation, kept by checkpointing the agent's state per thread (LangGraph with AgentCore Memory). Long-term memory is facts pulled out of conversations, stored as embeddings and searched by meaning (Mem0 with a local FAISS index), one store per user. Real assistants want both.
+A model call keeps nothing, so memory is the app resending the right text. Decide what to keep, when to write it, where to store it, how to find it and how much to keep; writing in the hot path is fresh but slow, in the background fast but late. One conversation can be kept small by trimming, deleting or summarising, each losing something different, and the claims about what is lost are worth testing. A checkpointer then saves the conversation after every step so it survives the process, keyed by thread; AgentCore Memory keeps those snapshots in AWS.
 
-![A map of post 3 in four columns. Two kinds: short-term transcript and long-term facts, with memory refilling the prompt. Mem0: an LLM extracts facts, they are embedded and stored in FAISS, then searched. LangGraph: state, a checkpoint at each step and a thread id per chat. AgentCore: a managed memory store with actor and session ids, which needs AWS access and cleanup](/images/ai-llms/agentic-ai/how-ai-agents-remember/summary-map.svg)
+![A map of the post in four columns. Why: a model is stateless, memory means resending, five questions of what, when, where, how and how much. Writing: hot path is fresh but slower, background is fast but later, measured 37.8 against 18.7 seconds. One conversation: trim, delete, summarise, and test what you claim. Saving it: LangGraph checkpoints by thread_id, AgentCore Memory with session_id and actor_id.](/images/ai-llms/agentic-ai/how-ai-agents-remember/summary-map.svg)
 
 ### Concepts at a glance
 
-| Concept | In one line | Why it matters |
-| --- | --- | --- |
-| **Stateless model** | Forgets everything between sessions | Memory means putting text back into the prompt |
-| **Short-term memory** | The messages of one conversation | Continue a chat from a saved checkpoint |
-| **Long-term memory** | Facts and preferences across sessions | Knows the user next week |
-| **Embedding and FAISS** | Text as vectors, searched by meaning | Finds related memories without exact words |
-| **Mem0** | Extracts, stores, updates and searches facts | One agent per user keeps memories apart |
-| **Checkpointer** | Saves the graph state after each step | Resume by `thread_id` |
-| **AgentCore Memory** | A managed store with `actor_id` and `session_id` | No database to run yourself |
+| Term | In one line |
+| --- | --- |
+| **Stateless** | A model call keeps nothing between requests |
+| **Context window** | The most text a model can read in one call |
+| **Hot path / background** | Write memory before replying, or later in a batch |
+| **Buffer** | The whole message history, resent every turn |
+| **Trimming** | Keep only the newest messages that fit a token budget |
+| **Deleting** | Remove chosen messages; `RemoveMessage` inside LangGraph |
+| **Summarising** | Replace old messages with a model-written summary |
+| **Checkpoint / checkpointer** | A snapshot of the state after a step / what saves and loads them |
+| **`thread_id`** | Which conversation a checkpoint belongs to |
 
 ### Test yourself
 
 <details>
-<summary>Why does an agent need memory at all?</summary>
+<summary>If the model is stateless, how does a chatbot "remember" what you said earlier?</summary>
 
-The model is stateless: it only knows what is in the current prompt. Memory puts the right information back in.
-
-</details>
-
-<details>
-<summary>What is the difference between short-term and long-term memory?</summary>
-
-Short-term is the transcript of one conversation. Long-term is facts kept across conversations.
+The app resends the earlier messages with every request. Memory is what the app chooses to put back into the prompt.
 
 </details>
 
 <details>
-<summary>Why must storing and searching use the same embedding model?</summary>
+<summary>When would you write memory in the background instead of the hot path?</summary>
 
-Vectors from different models aren't comparable.
+When reply speed matters more than having a new fact available instantly in other conversations. The current conversation still has the fact in its own history either way.
+
+</details>
+
+<details>
+<summary>The notebook trims to 300 tokens with start_on="human". How can that send the model an empty history?</summary>
+
+If the newest message alone is longer than 300 tokens, no run of messages that starts with a user message fits, so nothing is kept.
+
+</details>
+
+<details>
+<summary>After trimming, the history still said "Your name is Alice", but the model said it didn't know. Why?</summary>
+
+Only the model's own earlier answer remained; nothing the user said supported it, so the model treated it as unsupported. Trimming loses where a fact came from, not only the fact.
 
 </details>
 
 <details>
 <summary>What identifies a conversation to the checkpointer?</summary>
 
-The `thread_id`, and the `actor_id` for AgentCore.
+The `thread_id` in the config. With AgentCore Memory, `actor_id` is required too.
 
 </details>
-
-<details>
-<summary>Why use `SequentialToolExecutor` with a local FAISS index?</summary>
-
-Parallel writes can silently lose memories.
-
-</details>
-
-<details>
-<summary>What do you do if the notebook stops before the cleanup cell?</summary>
-
-Delete the AWS memory resource yourself.
-
-</details>
-
-Next: [Agents that work together](/blog/agents-working-together).
 
 ## Resources
 
-- [Agents that remember](https://scaler-content.github.io/Agents-that-remember/), the course material behind Part 1
-- The course notebook behind Part 2: `math_agent_with_checkpointing_groq`
-- [Building my first AI agent with Strands and Groq](/blog/hello-agent)
-- [Giving an AI agent tools](/blog/giving-agents-tools)
-- [Agents that work together](/blog/agents-working-together)
+- Shivank Agarwal, Memory lecture explainer and `short_term_memory.ipynb`, AI Bootcamp, Scaler Academy (course material).
+- LangChain: [trim_messages and message management](https://docs.langchain.com/oss/python/langchain/short-term-memory) and [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence).
+- The course notebook behind Part 2: `math_agent_with_checkpointing_groq`.
+- [Amazon Bedrock AgentCore Memory](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html).
+- [Building my first AI agent with Strands and Groq](/blog/hello-agent) and [Memory that lasts](/blog/long-term-agent-memory), the next post.

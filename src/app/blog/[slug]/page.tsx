@@ -7,8 +7,7 @@ import AudioPlayer from "@/components/AudioPlayer";
 import MdxContent from "@/components/MdxContent";
 import SeriesNav from "@/components/SeriesNav";
 import TableOfContents from "@/components/TableOfContents";
-import { formatLength, getPodcast } from "@/lib/podcasts";
-import { ArrowLeft, Podcast } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 export function generateStaticParams() {
   return getAllPosts().map((post) => ({ slug: post.slug }));
@@ -41,7 +40,6 @@ export default async function BlogPostPage({
   const hasToc = headings.length > 1;
   const section = getSection(post.section);
   const position = getSeriesPosition(post);
-  const podcast = post.audioSrc ? getPodcast(post.slug) : undefined;
 
   return (
     <div
@@ -108,19 +106,6 @@ export default async function BlogPostPage({
             </div>
           )}
           <AudioPlayer minutes={post.listenMinutes} />
-          {podcast && (
-            <p className="mt-3 text-sm text-ink-muted">
-              Prefer two voices?{" "}
-              <Link
-                href={`/podcasts/${post.slug}`}
-                className="inline-flex items-center gap-1.5 font-semibold text-ink-2 underline underline-offset-4 transition-colors hover:text-accent"
-              >
-                <Podcast size={14} aria-hidden="true" />
-                Listen to the AI podcast
-                {formatLength(podcast.seconds) && ` · ${formatLength(podcast.seconds)}`}
-              </Link>
-            </p>
-          )}
         </header>
 
         <div id="post-content">

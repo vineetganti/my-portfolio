@@ -1962,6 +1962,14 @@ body {
 .callout.warn .callout-ico {
   background: var(--risk);
 }
+/* "Updated since the course": a plain card with a dashed edge, so it reads as a correction pinned to the text */
+.callout.updated {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.callout.updated .callout-ico {
+  background: var(--accent);
+}
 
 /* ---------- Recall questions (details/summary in post summaries) ---------- */
 .prose details {

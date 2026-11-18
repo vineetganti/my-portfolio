@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "lab code",
+      "to": "llm.py",
+      "type": "request"
+    },
+    {
+      "from": "llm.py",
+      "to": "groq",
+      "type": "request"
+    },
+    {
+      "from": "llm.py",
+      "to": "claude",
+      "type": "request"
+    }
+  ]
+}

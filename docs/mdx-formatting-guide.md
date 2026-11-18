@@ -277,6 +277,7 @@ The one custom component. Use it to pull a point out of the flow.
 | `tip`     | Tip                     | green tint               | practical advice, shortcuts    |
 | `analogy` | Think of it like this   | amber tint, sparkle icon | mental models, comparisons     |
 | `warn`    | Watch out               | red tint, warning icon   | pitfalls, costs, breaking changes |
+| `updated` | Updated since the course | plain card, dashed accent edge, refresh icon | something that changed after the course or its docs were written (a new spec version, a retired model). Say what the course said, what is true now, and link the source |
 
 - `title` is optional and replaces the default label.
 - An unknown `type` falls back to `note` styling and icon.
@@ -296,6 +297,8 @@ The one custom component. Use it to pull a point out of the flow.
   ````
 
 - Use them sparingly, at most one every few screens, or they stop standing out.
+- **Analogies as short asides.** When a source explainer offers an everyday analogy, keep it to two or three
+  sentences in an `analogy` callout, placed right after the idea it explains, never instead of it.
 
 ---
 
@@ -475,16 +478,6 @@ node scripts/db-lab/series-callouts.mjs                    # refresh the series 
 - `scripts/copy-pglite.mjs` runs before `dev` and `build` and copies PGlite into `public/pglite/` (git-ignored). The browser loads it from there when a reader presses Run, about 6 MB once per visit. It also gzips `pglite.data`, because hosts compress `.wasm` but not `.data`: without that the download is nearly 10 MB.
 
 ---
-
-### Recorded audio (m4a)
-
-Recordings are kept out of git and served from Vercel Blob. To attach one to a post:
-
-1. Save the file as `<post-slug>.m4a` in `public/audio/` (git-ignored), for example `public/audio/hello-agent.m4a`. Shrink it first: mono AAC at 64 kbps with fast-start is plenty for speech (`ffmpeg -i in.m4a -ac 1 -c:a aac -b:a 64k -movflags +faststart out.m4a`).
-2. Run `node --env-file=.env.local scripts/upload-audio.mjs`. It uploads the files, adds the slug to `content/audio.json`, and measures each recording's length into `content/audio-durations.json` (needs `ffprobe`, which comes with FFmpeg). It needs `BLOB_READ_WRITE_TOKEN` in `.env.local`. To refresh only the lengths, run `node scripts/audio-durations.mjs`.
-3. Make sure `AUDIO_BASE_URL` is set in Vercel (the script prints the value). Then commit `content/audio.json` and `content/audio-durations.json` and push.
-
-A post listed in `content/audio.json` keeps its **Listen to this post** (browser voice) button and also gets a line under it, "Prefer two voices? Listen to the AI podcast", linking to its episode at `/podcasts/<slug>`. The recordings are listed at `/podcasts`, grouped by series, and linked from a **Podcasts** chip next to the section chips on `/blog`. The two players are on different pages on purpose: they draw the same bar at the bottom of the screen. To point one post at a different file, set `audio: https://...` (or a `/path`) in its frontmatter. With `AUDIO_BASE_URL` unset, files are read from `public/audio/`, which is how local development works.
 
 ## 9. Blockquotes
 

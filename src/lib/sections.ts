@@ -65,7 +65,7 @@ export const SERIES: Series[] = [
     slug: "agentic-ai",
     title: "Agentic AI",
     description:
-      "Building agents with Strands, LangChain and LangGraph: tools, memory, multi-agent patterns, the protocols agents talk through, production and evaluation, and an agent that fixes code.",
+      "Building agents with Strands, LangChain and LangGraph: tools, retrieval, memory, multi-agent patterns, MCP and A2A, production, observability, evaluation and guardrails, and three projects: a trip planner, an inventory assistant and an agent that fixes code.",
   },
   {
     slug: "database-engineering",

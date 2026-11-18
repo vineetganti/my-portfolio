@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "from": "memory",
+      "to": "short-term",
+      "type": "data"
+    },
+    {
+      "from": "memory",
+      "to": "long-term",
+      "type": "data"
+    }
+  ]
+}

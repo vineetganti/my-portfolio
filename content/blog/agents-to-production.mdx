@@ -4,7 +4,7 @@ description: "Moving the agents from this series off my laptop and onto AWS in f
 date: "2026-10-31"
 section: "ai-llms"
 series: "agentic-ai"
-seriesOrder: 6
+seriesOrder: 8
 tags: ["Agentic AI", "AWS", "Amazon Bedrock", "AgentCore", "Strands", "Deployment"]
 ---
 
@@ -27,14 +27,19 @@ The recipe (the agent's code) barely changes. The kitchen changes completely: ma
 <Callout type="info" title="This is part of a series">
 
 1. [Building my first AI agent](/blog/hello-agent): what an agent is, and a first working agent.
-2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant.
-3. [How AI agents remember](/blog/how-ai-agents-remember): long-term and short-term memory.
-4. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
-5. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
-6. **Shipping agents to production** (this post): Lambda, ECS Fargate and AgentCore.
-7. [Evaluating, observing and governing agents](/blog/agent-evaluation): traces, LLM judges, guardrails and policy.
-8. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
-9. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
+2. [Giving an AI agent tools](/blog/giving-agents-tools): from a plain function to a multi-tool assistant, and what a tool call looks like on the wire.
+3. [Finding the right text](/blog/retrieval-for-agents): embeddings, similarity search, reranking, chunking and HyDE.
+4. [How AI agents remember](/blog/how-ai-agents-remember): why a stateless model needs memory, and keeping one conversation under control.
+5. [Memory that lasts](/blog/long-term-agent-memory): semantic, episodic and procedural memory, and memory that updates itself.
+6. [Agents that work together](/blog/agents-working-together): supervisor, agent as tool, graph and swarm.
+7. [How agents talk](/blog/how-agents-talk): MCP for tools, A2A for other agents.
+8. **Shipping agents to production** (this post): Lambda, ECS Fargate and AgentCore.
+9. [Seeing inside an agent](/blog/observing-agents): monitoring vs observability, MELT, traces, and a booking agent that might lie.
+10. [Evaluating an agent](/blog/agent-evaluation): component evals, error analysis, LLM judges and Cohen's kappa.
+11. [Guardrails and policy](/blog/agent-guardrails): prompt attacks, rail layers, NeMo Guardrails, Bedrock Guardrails and Cedar.
+12. [Trip Buddy: one agent, built up in 15 lessons](/blog/trip-buddy-agent): RAG, tools, MCP, memory and A2A in one app.
+13. [The inventory agent](/blog/inventory-agent): from one prompt to a guarded, cached, traced assistant in eight versions.
+14. [A bug-fixing agent](/blog/agentic-bug-fixing): a LangGraph loop that repairs crashing Python, and the stray bracket that beat it.
 
 </Callout>
 
@@ -105,7 +110,7 @@ Amazon Bedrock AgentCore is a set of services aimed at exactly those needs. They
 | **Runtime** | Hosts an agent, MCP server or A2A agent, one microVM per session | Parts 1 and 6 |
 | **Gateway** | Turns APIs and Lambda functions into MCP tools | Part 4 |
 | **Identity** | Checks who is calling; stores the keys the agent uses | Parts 5 and 6 |
-| **Memory** | Short- and long-term memory as a service | Covered in [post 3](/blog/how-ai-agents-remember) |
+| **Memory** | Short- and long-term memory as a service | Covered in [the memory posts](/blog/how-ai-agents-remember) |
 | **Browser, Code Interpreter** | A sandboxed browser and code runner as tools | Not used |
 | **Observability, Policy, Evaluations** | Traces, rules on tool calls, quality checks | The next course section |
 
@@ -769,7 +774,7 @@ if __name__ == "__main__":
     mcp.run(transport="streamable-http")      # port 8000, path /mcp
 ```
 
-`stateless_http=True` matters because the server can't count on a long-lived MCP session: every HTTP request has to make sense on its own. That's also why its log shows several `POST /mcp` lines per question. The handshake, the tool list and the tool call from [post 5's lifecycle](/blog/how-agents-talk) each arrive as a separate request.
+`stateless_http=True` matters because the server can't count on a long-lived MCP session: every HTTP request has to make sense on its own. That's also why its log shows several `POST /mcp` lines per question. The handshake, the tool list and the tool call from [the MCP post's lifecycle](/blog/how-agents-talk) each arrive as a separate request.
 
 The stock agent is a Strands agent with the MCP tools plus `http_request`, wrapped in an `A2AServer`:
 
@@ -795,7 +800,7 @@ app.mount("/", a2a_server.to_fastapi_app())
 
 Each piece of configuration has a reason. The port follows Runtime's contracts: HTTP agents on 8080, MCP servers on 8000 at `/mcp`, and A2A servers on 9000 at `/` ([MCP](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp-protocol-contract.html) and [A2A](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-a2a-protocol-contract.html) contracts). `http_url` is the address the agent card advertises, and A2A clients send their messages to the URL in the card. The bearer token is how the stock agent gets through the MCP server's door.
 
-The orchestrator wraps the remote agent as a tool, the "agent as tool" pattern from [post 4](/blog/agents-working-together), but across the network:
+The orchestrator wraps the remote agent as a tool, the "agent as tool" pattern from [the multi-agent post](/blog/agents-working-together), but across the network:
 
 ```python
 def remote_stock_agent() -> A2AAgent:
@@ -1132,7 +1137,7 @@ On Windows, `%pip` runs through `cmd.exe`, which doesn't treat single quotes as 
 
 </details>
 
-Next: [Evaluating, observing and governing agents](/blog/agent-evaluation), which covers what this post kept pointing at: tracing, evaluating agents in production, and policies on tool calls.
+Next, three posts on what this post kept pointing at: [seeing inside an agent](/blog/observing-agents) with traces, [evaluating it](/blog/agent-evaluation), and [guardrails and policies on tool calls](/blog/agent-guardrails).
 
 ## Resources
 

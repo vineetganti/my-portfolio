@@ -16,7 +16,7 @@ This site started as a portfolio with a blog in October 2026. Since then it has 
 
 1. **The architecture** (this post): files in, static pages out, and the few parts that run in the browser.
 2. [Sections, series and URLs](/blog/site-sections-and-series): shelves, reading orders, redirects and image folders.
-3. [Listen to this post](/blog/site-audio): a browser voice on every post, and AI podcasts on their own pages.
+3. [Listen to this post](/blog/site-audio): the browser reads every post aloud: chunks, pause, phones and hidden pages.
 4. [Nuggets and feeds](/blog/site-notes-and-feeds): short notes, one list for three pages, and RSS.
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
@@ -53,7 +53,7 @@ The features were built in working sessions with Claude Code, an AI coding assis
 | Content | MDX and Markdown files, read with `gray-matter`, rendered by `next-mdx-remote` | `content/`, `src/lib/blog.ts` |
 | Markdown plugins | `remark-gfm` for tables, `rehype-slug` for heading ids, `rehype-highlight` for code | `src/components/MdxContent.tsx` |
 | Fonts | Bricolage Grotesque for headings, Atkinson Hyperlegible Next and Mono for text and code | `src/app/layout.tsx` |
-| Storage outside git | Vercel Blob for podcast audio and the Second brain files | `scripts/upload-*.mjs` |
+| Storage outside git | Vercel Blob for the Second brain files | `scripts/upload-second-brain.mjs` |
 | Hosting and CI | Vercel, and GitHub Actions | `.github/workflows/ci.yml` |
 
 <Callout type="info" title="Not the Next.js of older tutorials">
@@ -72,27 +72,22 @@ There are two paths, and the first one carries almost all the traffic.
 
 **Request time.** The [Second brain page](/blog/site-second-brain-page) shows a feed the owner publishes from a separate pipeline, so its data changes without a push. Its data function is marked `'use cache'` with a 15-minute revalidation ([cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife)), so the page fetches and verifies the files at most four times an hour and serves the cached result in between.
 
-✅ The production build on 2026-11-13 generated 90 pages. Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
+✅ The production build on 2026-11-18 generated 80 pages (fewer than the 90 of 2026-11-13, because the podcast pages were removed). Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
 
 ```text title="Output: next build, route table (trimmed)"
-Route (app)                              Revalidate  Expire
-┌ ○ /                                           15m      1y
-├ ○ /blog                                       15m      1y
-├   /blog/[slug]                                15m      1y
-│ ├ ○ /blog/second-brain-pipeline               15m      1y
-│ ├ ○ /blog/site-architecture                   15m      1y
-│ └ ◐ [+46 more paths]
-├   /blog/series/[series]                       15m      1y
-│ ├ ○ /blog/series/building-this-site           15m      1y
+Route (app)                            Revalidate  Expire
+┌ ○ /                                         15m      1y
+├ ○ /blog                                     15m      1y
+├   /blog/[slug]                              15m      1y
+│ ├ ○ /blog/agent-guardrails                  15m      1y
+│ ├ ○ /blog/inventory-agent                   15m      1y
+│ └ ◐ [+52 more paths]
+├   /blog/series/[series]                     15m      1y
+│ ├ ○ /blog/series/agentic-ai                 15m      1y
+│ ├ ○ /blog/series/building-this-site         15m      1y
 │ └ ◐ [+4 more paths]
 ├ ○ /notes/feed.xml
-├ ○ /podcasts                                   15m      1y
-├   /podcasts/[slug]                            15m      1y
-│ ├ ◐ /podcasts/[slug]                          15m      1y
-│ ├ ○ /podcasts/trip-buddy-agent                15m      1y
-│ ├ ○ /podcasts/agent-evaluation                15m      1y
-│ └ ◐ [+12 more paths]
-├ ○ /second-brain                               15m      1d
+├ ○ /second-brain                             15m      1d
 └ ƒ /second-brain/feed.xml
 
 ○  (Static)             prerendered as static content
@@ -124,8 +119,6 @@ content/
   flashcards/      one .json file per home page deck
   sql-traces/      generated step-throughs for the SQL posts
   db-lab/          recorded database runs for the Database Engineering posts
-  audio.json       which posts have a podcast recording
-  audio-durations.json  the length of each recording, measured with ffprobe
   reads.json       hand-picked reads shown on the Second brain page
 public/images/     diagrams and screenshots, by section / series / post
 scripts/           generators, recorders, upload scripts, checks and tests
@@ -136,7 +129,7 @@ src/
   lib/             readers and parsers: blog, notes, sections, speech, dbLab, flashcards, secondBrain
 ```
 
-Two rules keep this manageable. **Generated content is never edited by hand**: the SQL posts come from `scripts/sql-bank/`, and the database recordings from `scripts/db-lab/` ([part 6](/blog/site-generated-content)). **Big binary files stay out of git**: podcast audio and the Second brain files live in Vercel Blob, and git holds only a list and a base URL ([part 3](/blog/site-audio)).
+Two rules keep this manageable. **Generated content is never edited by hand**: the SQL posts come from `scripts/sql-bank/`, and the database recordings from `scripts/db-lab/` ([part 6](/blog/site-generated-content)). **Files that change outside a deploy stay out of git**: the Second brain files live in Vercel Blob, and the site holds only their address and the public key that verifies them ([part 8](/blog/site-second-brain-page)).
 
 ## From a file to a page
 
@@ -346,6 +339,15 @@ Every change to the site is logged here under the day it was made, oldest first.
 | --- | --- |
 | **Content** | **[A bug-fixing agent](/blog/agentic-bug-fixing)**, part 9 of Agentic AI, with a project card linking its GitHub repo |
 | **Feature** | **Titled code blocks and output panels.** A fence can name its file and lines with `title="…"`, and `output` marks printed output and joins it to the command above. The titles already written in this series' posts now show |
+
+### 2026-11-18
+
+| Type | Change |
+| --- | --- |
+| **Content** | **Agentic AI replanned: 9 posts to 14.** New posts on [retrieval](/blog/retrieval-for-agents), [long-term memory](/blog/long-term-agent-memory), [observability](/blog/observing-agents), [guardrails](/blog/agent-guardrails) and [an inventory agent](/blog/inventory-agent); every lab re-run on Groq and on Claude |
+| **Feature** | **An `updated` callout** for something that changed after the course a post follows, and a script that writes the Agentic AI series list from `seriesOrder` |
+| **Removal** | **AI podcasts removed.** The `/podcasts` pages, the shared player, the episode link on each post, `content/audio.json`, the upload scripts and the 14 recordings in Vercel Blob are gone; [part 3](/blog/site-audio) keeps a short history. Every post keeps the browser voice |
+| **Content** | **[Inventory Agent](/projects) project card**, linking its GitHub repo |
 
 ## What's next
 

@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {
+      "from": "question",
+      "to": "guardrail (v3)",
+      "type": "request"
+    },
+    {
+      "from": "guardrail (v3)",
+      "to": "cache (v4)",
+      "label": "safe",
+      "type": "request"
+    },
+    {
+      "from": "cache (v4)",
+      "to": "agent (v2)",
+      "label": "miss",
+      "type": "request"
+    }
+  ]
+}

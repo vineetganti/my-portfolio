@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "from": "shopper's query",
+      "to": "BM25 word match",
+      "type": "request"
+    },
+    {
+      "from": "shopper's query",
+      "to": "model writes 4 titles",
+      "type": "request"
+    },
+    {
+      "from": "model writes 4 titles",
+      "to": "BM25 again",
+      "type": "data"
+    }
+  ]
+}
