@@ -14,7 +14,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: "Blog", href: "/blog" },
-  { label: "Nuggets", href: "/notes" },
+  // Nuggets has no header link: it lives in a widget on the home page, which links to /notes.
   { label: "Projects", href: "/projects" },
   { label: "About", href: "/about" },
 ];
@@ -28,15 +28,15 @@ export default function Header({ secondBrain = true }: { secondBrain?: boolean }
 
   return (
     <header className="sticky top-0 z-50 h-header bg-cream/85 backdrop-blur-md border-b border-border">
-      <div className="h-full max-w-wide mx-auto px-4 sm:px-6 lg:px-10 flex items-center justify-between gap-4">
+      <div className="h-full max-w-wide mx-auto px-4 sm:px-6 lg:px-10 flex items-center justify-between gap-2 sm:gap-4">
         <Link
           href="/"
-          className="font-heading font-extrabold text-lg sm:text-xl tracking-tight whitespace-nowrap text-ink hover:text-accent transition-colors"
+          className="font-heading font-extrabold text-base sm:text-xl tracking-tight whitespace-nowrap text-ink hover:text-accent transition-colors"
         >
           Vineet Ganti
         </Link>
 
-        <div className="flex items-center gap-2 sm:gap-4">
+        <div className="flex items-center gap-1 sm:gap-4">
           <nav className="flex items-center gap-1">
             {items.map((item) => {
               const isActive =
@@ -45,7 +45,7 @@ export default function Header({ secondBrain = true }: { secondBrain?: boolean }
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`px-2 sm:px-3 py-1.5 rounded-lg text-sm sm:text-[0.95rem] font-semibold transition-colors ${
+                  className={`px-1.5 sm:px-3 py-1.5 rounded-lg text-sm sm:text-[0.95rem] font-semibold transition-colors ${
                     isActive
                       ? "bg-accent-tint text-ink-strong"
                       : "text-ink-2 hover:bg-card-2 hover:text-ink"

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getAllPosts } from "@/lib/blog";
 import { getAllProjects } from "@/lib/projects";
 import { getAllNotes } from "@/lib/notes";
-import NoteList from "@/components/NoteList";
+import NuggetsWidget from "@/components/home/NuggetsWidget";
 import PostCard from "@/components/PostCard";
 import ProjectCard from "@/components/ProjectCard";
 import Flashcards from "@/components/home/Flashcards";
@@ -18,7 +18,8 @@ export default function HomePage() {
     <div>
       {/* Hero */}
       <section className="pt-8 pb-14 sm:pt-14 lg:grid lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-12 lg:items-start">
-        <div>
+        {/* Stretches to the right column's height on desktop, so the Nuggets card can fill the space under the intro. */}
+        <div className="lg:flex lg:flex-col lg:self-stretch">
           <p className="font-bold text-ink-muted mb-5">Hello, I&apos;m</p>
           <h1 className="font-heading font-extrabold text-5xl sm:text-7xl lg:text-[5.5rem] tracking-[-0.035em] leading-[0.98] text-ink">
             Vineet Ganti
@@ -41,6 +42,7 @@ export default function HomePage() {
               About me
             </Link>
           </div>
+          {notes.length > 0 && <NuggetsWidget notes={notes} />}
         </div>
 
         {/* Right column on desktop; stacks under the intro on smaller screens. */}
@@ -49,31 +51,6 @@ export default function HomePage() {
           <HeroChart />
         </div>
       </section>
-
-      {/* Nuggets: an isolated, scrollable, text-only feed */}
-      {notes.length > 0 && (
-        <section className="py-14 border-t border-border">
-          <div className="flex items-baseline justify-between gap-4 mb-8">
-            <h2 className="font-heading font-extrabold text-3xl sm:text-4xl tracking-tight text-ink">
-              Nuggets
-            </h2>
-            <Link
-              href="/notes"
-              className="text-sm font-semibold text-ink-muted hover:text-accent transition-colors"
-            >
-              All nuggets &rarr;
-            </Link>
-          </div>
-          <div
-            tabIndex={0}
-            role="region"
-            aria-label="Nuggets feed, scrollable"
-            className="max-h-[26rem] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-card p-5 sm:p-6"
-          >
-            <NoteList notes={notes} />
-          </div>
-        </section>
-      )}
 
       {/* Featured Projects */}
       {featuredProjects.length > 0 && (

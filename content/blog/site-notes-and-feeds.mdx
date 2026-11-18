@@ -76,7 +76,7 @@ Two choices in there:
 - **A bad nugget is dropped, not fatal.** An empty file or an unreadable date is filtered out. That is the opposite of the flash cards, which fail the build on a bad card; a missing nugget harms nobody, a wrong answer key would.
 - **The file name is the id.** It becomes the anchor, so `/notes#2026-10-30-apple-vs-google-maps` links to one nugget. A dated file name also keeps the folder in order.
 
-`NoteList` renders the list once, and both `/notes` and the home page use it, so the two views can't drift apart. On the home page it sits inside a box about 26 rem tall that scrolls on its own: `overscroll-contain` stops the page from scrolling when the box reaches its end, and the box is focusable (`tabIndex={0}`, `role="region"` with a label), so it scrolls with the keyboard too.
+`NoteList` renders the list once, and both `/notes` and the home page use it, so the two views can't drift apart. On the home page it sits in a card under the intro (`NuggetsWidget`), and since 2026-11-18 that card is the only way in from the navigation: the header has no Nuggets link, and the card's "All nuggets" link opens `/notes`. On a wide screen the card is exactly as tall as the space left beside the flash cards and the chart: its outer box takes the free height, and the card is positioned absolutely inside it, so a long list scrolls instead of making the hero taller. On a phone it is an ordinary card capped at 22 rem. Either way it scrolls on its own: `overscroll-contain` stops the page from scrolling when the box reaches its end, and the box is focusable (`tabIndex={0}`, `role="region"` with a label), so it scrolls with the keyboard too.
 
 ## The RSS feed
 
