@@ -57,11 +57,11 @@ def _tags(i: DigestItem) -> list[str]:
 
 def _json_feed(rows: list[DigestItem], site: str, title: str, anchor: str, feed_file: str, now: datetime | None = None) -> dict:
     return {
-        "version": "https://jsonfeed.org/version/1.1", "title": title, "home_page_url": f"{site}/second-brain{anchor}",
+        "version": "https://jsonfeed.org/version/1.1", "title": title, "home_page_url": f"{site}/memex{anchor}",
         "feed_url": f"{site}/second-brain/{feed_file}", "description": DESCRIPTION, "language": "en",
         "_schema": SCHEMA_VERSION, "_generated_at": (now or datetime.now(timezone.utc)).isoformat(), "_count": len(rows),
         "items": [{
-            "id": i.doc_id, "url": f"{site}/second-brain#{i.doc_id}", "external_url": i.url, "title": i.title,
+            "id": i.doc_id, "url": f"{site}/memex#{i.doc_id}", "external_url": i.url, "title": i.title,
             "content_text": i.summary,
             "date_published": (i.published or datetime.now(timezone.utc)).isoformat(),
             "tags": _tags(i), "authors": [{"name": i.source_name}],
@@ -88,7 +88,7 @@ def _rss(public: list[DigestItem], site: str, title: str) -> str:
                     + "".join(f"      <category>{escape(t)}</category>\n" for t in _tags(i))
                     + f"      <description>{escape(desc)}</description>\n    </item>")
     return ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\">\n  <channel>\n"
-            f"    <title>{escape(title)}</title>\n    <link>{site}/second-brain</link>\n    <description>{escape(DESCRIPTION)}</description>\n"
+            f"    <title>{escape(title)}</title>\n    <link>{site}/memex</link>\n    <description>{escape(DESCRIPTION)}</description>\n"
             + "\n".join(rows) + "\n  </channel>\n</rss>\n")
 
 

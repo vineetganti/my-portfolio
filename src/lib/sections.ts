@@ -83,7 +83,7 @@ export const SERIES: Series[] = [
     slug: "building-this-site",
     title: "Building this site",
     description:
-      "How this site is built, one part per feature: the architecture, sections and series, audio, nuggets and feeds, moving diagrams, generated content, live Postgres, and the Second brain.",
+      "How this site is built, one part per feature: the architecture, sections and series, audio, nuggets and feeds, moving diagrams, generated content, live Postgres, and the Memex.",
   },
   {
     slug: "mit-distributed-systems",

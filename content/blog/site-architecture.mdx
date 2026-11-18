@@ -21,8 +21,8 @@ This site started as a portfolio with a blog in October 2026. Since then it has 
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
 7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
-8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
-9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+8. [The Memex page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Memex pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
 
 Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
 
@@ -39,7 +39,7 @@ The features were built in working sessions with Claude Code, an AI coding assis
 ## TL;DR
 
 - **The repository is the CMS.** Posts, notes, project cards, audio lists, flash cards and recorded database runs are all files in git. There is no database and no admin page.
-- **Almost every page is built before anyone visits.** `next build` reads the files and prerenders the pages to static HTML. One page, the Second brain, keeps refreshing after the build: it fetches and verifies signed data at most every 15 minutes.
+- **Almost every page is built before anyone visits.** `next build` reads the files and prerenders the pages to static HTML. One page, the Memex, keeps refreshing after the build: it fetches and verifies signed data at most every 15 minutes.
 - **Most code never reaches the browser.** Pages are React Server Components that send HTML. 35 of the 56 components are client components, small islands such as the audio player, the table of contents and the database labs.
 - **One stylesheet serves two themes.** Colours are CSS variables, and the dark theme redefines the variables, not the components.
 - **The build is the test.** A broken post fails `next build`, and CI also runs lint, type checks, 13 Node tests, 138 Python tests and a public-safety scan on every push.
@@ -53,7 +53,7 @@ The features were built in working sessions with Claude Code, an AI coding assis
 | Content | MDX and Markdown files, read with `gray-matter`, rendered by `next-mdx-remote` | `content/`, `src/lib/blog.ts` |
 | Markdown plugins | `remark-gfm` for tables, `rehype-slug` for heading ids, `rehype-highlight` for code | `src/components/MdxContent.tsx` |
 | Fonts | Bricolage Grotesque for headings, Atkinson Hyperlegible Next and Mono for text and code | `src/app/layout.tsx` |
-| Storage outside git | Vercel Blob for the Second brain files | `scripts/upload-second-brain.mjs` |
+| Storage outside git | Vercel Blob for the Memex files | `scripts/upload-second-brain.mjs` |
 | Hosting and CI | Vercel, and GitHub Actions | `.github/workflows/ci.yml` |
 
 <Callout type="info" title="Not the Next.js of older tutorials">
@@ -64,15 +64,15 @@ The repository's `AGENTS.md` warns that this version has breaking changes and sa
 
 ## How does a page get to a reader?
 
-![Two ways a page reaches a reader. At build time, a git push starts next build on Vercel, which prerenders every page to static HTML that a CDN serves to readers. At request time, only the Second brain page does work: its cached render fetches signed files from Vercel Blob at most every 15 minutes.](/images/build-logs/building-this-site/site-architecture/two-paths.svg)
+![Two ways a page reaches a reader. At build time, a git push starts next build on Vercel, which prerenders every page to static HTML that a CDN serves to readers. At request time, only the Memex page does work: its cached render fetches signed files from Vercel Blob at most every 15 minutes.](/images/build-logs/building-this-site/site-architecture/two-paths.svg)
 
 There are two paths, and the first one carries almost all the traffic.
 
 **Build time.** A push to `main` starts a build on Vercel. `next build` reads every content file, renders every page with the data it needs, and writes the result as static HTML and JavaScript that a CDN serves. A reader asking for a post gets a file that was finished minutes or days earlier. Nothing runs on a server for them.
 
-**Request time.** The [Second brain page](/blog/site-second-brain-page) shows a feed the owner publishes from a separate pipeline, so its data changes without a push. Its data function is marked `'use cache'` with a 15-minute revalidation ([cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife)), so the page fetches and verifies the files at most four times an hour and serves the cached result in between.
+**Request time.** The [Memex page](/blog/site-second-brain-page) shows a feed the owner publishes from a separate pipeline, so its data changes without a push. Its data function is marked `'use cache'` with a 15-minute revalidation ([cacheLife](https://nextjs.org/docs/app/api-reference/functions/cacheLife)), so the page fetches and verifies the files at most four times an hour and serves the cached result in between.
 
-✅ The production build on 2026-11-18 generated 80 pages (fewer than the 90 of 2026-11-13, because the podcast pages were removed). Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
+✅ The production build on 2026-11-18 (re-run after the Memex rename) generated 80 pages (fewer than the 90 of 2026-11-13, because the podcast pages were removed). Its route table marks each route as **static** (`○`), **partially prerendered** (`◐`, a static shell with a part that is filled in later) or **dynamic** (`ƒ`, rendered on each request):
 
 ```text title="Output: next build, route table (trimmed)"
 Route (app)                            Revalidate  Expire
@@ -86,9 +86,9 @@ Route (app)                            Revalidate  Expire
 │ ├ ○ /blog/series/agentic-ai                 15m      1y
 │ ├ ○ /blog/series/building-this-site         15m      1y
 │ └ ◐ [+4 more paths]
-├ ○ /notes/feed.xml
-├ ○ /second-brain                             15m      1d
-└ ƒ /second-brain/feed.xml
+├ ○ /memex                                    15m      1d
+├ ƒ /memex/feed.xml
+└ ○ /notes/feed.xml
 
 ○  (Static)             prerendered as static content
 ◐  (Partial Prerender)  prerendered as static HTML with dynamic server-streamed content
@@ -99,7 +99,7 @@ Four things in that table are worth reading closely:
 - The dynamic routes (`[slug]`, `[series]`, `[section]`) are still prerendered, because each one lists its pages with [`generateStaticParams`](https://nextjs.org/docs/app/api-reference/functions/generate-static-params). A post that isn't returned by it would be rendered on first request instead.
 - **Revalidate 15m** comes from the `default` cache profile, which the [cacheLife docs](https://nextjs.org/docs/app/api-reference/functions/cacheLife) give as stale after 5 minutes, revalidated after 15, and never expiring; the build prints that last one as `1y`. For pages built from files that only change with a push, it changes nothing in practice: the next push replaces the whole build.
 - `/notes/feed.xml` is a [route handler](https://nextjs.org/docs/app/getting-started/route-handlers), and it is static too: it returns the same XML until the next build.
-- `/second-brain` is prerendered at build time like everything else, but its own `cacheLife` (revalidate 15 minutes, expire 1 day) shows in its row, so it is refreshed in the background after the build. Its RSS route, `/second-brain/feed.xml`, is dynamic: it runs on each request, reading from the same cached, verified data.
+- `/memex` is prerendered at build time like everything else, but its own `cacheLife` (revalidate 15 minutes, expire 1 day) shows in its row, so it is refreshed in the background after the build. Its RSS route, `/memex/feed.xml`, is dynamic: it runs on each request, reading from the same cached, verified data.
 
 <Callout type="warn" title="A dev-only warning that is still open">
 
@@ -119,17 +119,17 @@ content/
   flashcards/      one .json file per home page deck
   sql-traces/      generated step-throughs for the SQL posts
   db-lab/          recorded database runs for the Database Engineering posts
-  reads.json       hand-picked reads shown on the Second brain page
+  reads.json       hand-picked reads shown on the Memex page
 public/images/     diagrams and screenshots, by section / series / post
 scripts/           generators, recorders, upload scripts, checks and tests
-second-brain/      the Python pipeline behind the Second brain page
+second-brain/      the Python pipeline behind the Memex page
 src/
-  app/             routes: /, /blog/..., /notes, /projects, /about, /second-brain
+  app/             routes: /, /blog/..., /notes, /projects, /about, /memex
   components/      the page parts, and folders for charts, flow, db, sql, home
   lib/             readers and parsers: blog, notes, sections, speech, dbLab, flashcards, secondBrain
 ```
 
-Two rules keep this manageable. **Generated content is never edited by hand**: the SQL posts come from `scripts/sql-bank/`, and the database recordings from `scripts/db-lab/` ([part 6](/blog/site-generated-content)). **Files that change outside a deploy stay out of git**: the Second brain files live in Vercel Blob, and the site holds only their address and the public key that verifies them ([part 8](/blog/site-second-brain-page)).
+Two rules keep this manageable. **Generated content is never edited by hand**: the SQL posts come from `scripts/sql-bank/`, and the database recordings from `scripts/db-lab/` ([part 6](/blog/site-generated-content)). **Files that change outside a deploy stay out of git**: the Memex files live in Vercel Blob, and the site holds only their address and the public key that verifies them ([part 8](/blog/site-second-brain-page)).
 
 ## From a file to a page
 
@@ -155,7 +155,7 @@ The **table of contents** has one subtle job: its links must point at the ids th
 
 ## Which code runs in the browser?
 
-![Which code runs where. Server components run at build time and send only HTML: the pages, MdxContent with its diagram inliner, the post and lab readers, and the Second brain verifier. Client components are small islands that ship JavaScript: the audio players, the table of contents, diagram motion and flow animation, live charts, the database labs and the flash cards.](/images/build-logs/building-this-site/site-architecture/server-and-client.svg)
+![Which code runs where. Server components run at build time and send only HTML: the pages, MdxContent with its diagram inliner, the post and lab readers, and the Memex verifier. Client components are small islands that ship JavaScript: the audio players, the table of contents, diagram motion and flow animation, live charts, the database labs and the flash cards.](/images/build-logs/building-this-site/site-architecture/server-and-client.svg)
 
 In the App Router every component is a [Server Component](https://nextjs.org/docs/app/getting-started/server-and-client-components) unless its file starts with `'use client'`. A server component can read files and runs once, at build time, so it is where all the content reading happens. A client component is also rendered to HTML on the server, then **hydrated** in the browser, which attaches its event handlers and state.
 
@@ -180,7 +180,7 @@ The `try` matters: reading storage can throw when cookies are blocked, and the p
 
 ## What stops a bad change from shipping?
 
-![The checks every push and pull request runs on GitHub Actions: a public-safety job that fails if a private file or secret is tracked, a site job that lints, runs the Node tests, type-checks and builds, and a pipeline job that runs the Python tests for the Second brain.](/images/build-logs/building-this-site/site-architecture/ci-jobs.svg)
+![The checks every push and pull request runs on GitHub Actions: a public-safety job that fails if a private file or secret is tracked, a site job that lints, runs the Node tests, type-checks and builds, and a pipeline job that runs the Python tests for the Memex.](/images/build-logs/building-this-site/site-architecture/ci-jobs.svg)
 
 The first guard is the build itself: `next build` type-checks the code and renders every page, so a post with broken MDX, a missing recording or a malformed flash card fails it. Several readers fail on purpose rather than show something wrong: `labItem` throws when a post points at a recording that doesn't exist, and the flash card reader rejects a deck that doesn't have exactly 50 cards, a card without four different options, an answer index outside 0 to 3, or a card that points at a post that doesn't exist.
 
@@ -257,7 +257,7 @@ It is not prerendered. The route still exists, so the page is rendered on its fi
 </details>
 
 <details>
-<summary>Why does the Second brain page fetch at request time when nothing else does?</summary>
+<summary>Why does the Memex page fetch at request time when nothing else does?</summary>
 
 Its data is published from a separate pipeline and changes without a push, so a build-time snapshot would go stale. A 15-minute `'use cache'` keeps it fresh without fetching on every visit.
 
@@ -349,11 +349,12 @@ Every change to the site is logged here under the day it was made, oldest first.
 | **Removal** | **AI podcasts removed.** The `/podcasts` pages, the shared player, the episode link on each post, `content/audio.json`, the upload scripts and the 14 recordings in Vercel Blob are gone; [part 3](/blog/site-audio) keeps a short history. Every post keeps the browser voice |
 | **Content** | **[Inventory Agent](/projects) project card**, linking its GitHub repo |
 | **Change** | **Nuggets moved into the hero.** The header lost its Nuggets link; the nuggets now scroll in a card under the intro on the home page, filling the space beside the flash cards and the chart, and the card links to `/notes`. The phone header no longer overflows ([part 4](/blog/site-notes-and-feeds)) |
+| **Change** | **Second brain renamed to Memex.** The page moved to `/memex`, with a line at the top on where the name comes from; `/second-brain` and its feed answer 308 to the new addresses. Code names (`second-brain/`, `SECOND_BRAIN_*`, the Blob folder) are unchanged ([part 8](/blog/site-second-brain-page)) |
 
 ## What's next
 
 - Tags are still free-form and a little inconsistent. A small fixed list would make them a better filter.
-- No sitemap, search or RSS feed for blog posts yet. The nuggets and the Second brain already have feeds.
+- No sitemap, search or RSS feed for blog posts yet. The nuggets and the Memex already have feeds.
 - The dev-only `instant` validation error on post pages is unresolved (see above).
 - The browser voice can be sent a sentence longer than its 180-character target ([part 3](/blog/site-audio) shows the measurement).
 

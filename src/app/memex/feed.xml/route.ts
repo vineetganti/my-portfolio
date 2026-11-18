@@ -31,8 +31,8 @@ ${i.tags.map((t) => `      <category>${escape(t)}</category>\n`).join("")}      
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
-    <title>Vineet Ganti: Second brain (Good reads)</title>
-    <link>${SITE}/second-brain</link>
+    <title>Vineet Ganti: Memex (Good reads)</title>
+    <link>${SITE}/memex</link>
     <description>Posts worth keeping, picked by me. Summaries are written by an AI model; follow each link for the original.</description>
 ${items}
   </channel>

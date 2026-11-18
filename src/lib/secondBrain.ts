@@ -2,7 +2,7 @@ import { cacheLife, cacheTag } from "next/cache";
 import { publicKeyFromRaw, verifyAndParse } from "./secondBrainCore.mjs";
 
 /**
- * The Second brain page's data. Everything here comes from files the owner's pipeline signs with a private key that never
+ * The Memex page's data (the page was called Second brain; the code keeps that name). Everything here comes from files the owner's pipeline signs with a private key that never
  * leaves the owner's machine. This module fetches them, verifies the signature on the raw bytes BEFORE parsing, validates the
  * content, and returns plain data. It never returns anything unverified, and there is no code path that writes anything.
  *

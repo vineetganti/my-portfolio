@@ -128,7 +128,7 @@ def run_health(
     # 6. the rendered page really shows it
     if fetch_page and site_url:
         try:
-            page = unescape(fetch_page(site_url.rstrip("/") + "/second-brain"))
+            page = unescape(fetch_page(site_url.rstrip("/") + "/memex"))
         except Exception as ex:  # noqa: BLE001
             out.append(Finding("FAIL", "page", f"the page could not be fetched ({type(ex).__name__}: {str(ex)[:80]})"))
         else:

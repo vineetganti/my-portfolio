@@ -21,8 +21,8 @@ By late October the blog was one list sorted by date: an essay about writing sat
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
 7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
-8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
-9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+8. [The Memex page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Memex pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
 
 Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
 
@@ -193,7 +193,7 @@ The **series list at the top of each post** is generated too. Hand-written lists
 
 ## Renames and redirects
 
-![Three kinds of redirect in next.config.ts. Renamed posts, such as mentiforce01, answer 308 Permanent Redirect to their new slug. The retired build-log post how-this-site-is-built answers 308 to the series page. The old Good reads page /reads answers 307 Temporary Redirect to the Second brain page, because that page is a beta.](/images/build-logs/building-this-site/site-sections-and-series/redirects.svg)
+![Four redirects in next.config.ts. Renamed posts, such as mentiforce01, answer 308 Permanent Redirect to their new slug. The retired build-log post how-this-site-is-built answers 308 to the series page. The old Good reads page /reads answers 307 Temporary Redirect to the Memex page, because that page is a beta. The Memex page's old address /second-brain answers 308 to /memex, and its feed likewise, so feed readers move the subscription.](/images/build-logs/building-this-site/site-sections-and-series/redirects.svg)
 
 With shelves in place, the old names stopped making sense. The six LLM posts were `mentiforce01` to `mentiforce06`, the name of the person the series credits, not a description. They got readable slugs, and their titles lost the "LLM Architectures - 0N -" prefix that the section and the part label now show.
 
@@ -214,25 +214,30 @@ async redirects() {
     })),
     // The single build-log post became this series.
     { source: "/blog/how-this-site-is-built", destination: "/blog/series/building-this-site", permanent: true },
-    // The old Good reads page lives inside the Second brain page now. Temporary while that page is a beta.
-    { source: "/reads", destination: "/second-brain#good-reads", permanent: false },
+    // The old Good reads page lives inside the Memex page now. Temporary while that page is a beta.
+    { source: "/reads", destination: "/memex#good-reads", permanent: false },
+    // The Memex page was called Second brain until 2026-11-18. Permanent, so feed readers move the subscription.
+    { source: "/second-brain", destination: "/memex", permanent: true },
+    { source: "/second-brain/feed.xml", destination: "/memex/feed.xml", permanent: true },
   ];
 },
 ```
 
 **Permanent or temporary is a real decision.** `permanent: true` sends [308 Permanent Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/308): browsers and search engines remember it and stop asking for the old address. That is right for a rename that will never be undone. `/reads` uses `permanent: false`, a [307 Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307), because the page it points at is a beta. If the beta is withdrawn, a remembered 308 would keep sending people to a page that no longer exists.
 
-✅ Checked on a production server on 2026-11-13:
+✅ Checked on a production server on 2026-11-18 (first on 2026-11-13, re-run after the Memex rename):
 
 ```bash title="Command"
 for p in mentiforce01 how-this-site-is-built; do curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://localhost:3000/blog/$p; done
-curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://localhost:3000/reads
+for p in reads second-brain second-brain/feed.xml; do curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://localhost:3000/$p; done
 ```
 
 ```text title="Output"
 308 http://localhost:3000/blog/python-internals-for-llms
 308 http://localhost:3000/blog/series/building-this-site
-307 http://localhost:3000/second-brain#good-reads
+307 http://localhost:3000/memex#good-reads
+308 http://localhost:3000/memex
+308 http://localhost:3000/memex/feed.xml
 ```
 
 ## Images: a folder per post

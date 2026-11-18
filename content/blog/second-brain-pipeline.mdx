@@ -1,5 +1,5 @@
 ---
-title: "Building the Second brain pipeline with Claude Code"
+title: "Building the Memex pipeline with Claude Code"
 description: "Part 9 of the build log for this site. How a newsletter fetcher became a curated, signed reading feed in twelve days of work with an AI coding agent: a Gmail quota error, a global Python install that broke another tool, tracking links that hid their destinations, a language model kept away from tools and secrets, relevance scores that wouldn't sit still, a Save button that worked in every test but not for me, and a signature that CI broke by changing line endings. Every dead end kept."
 date: "2026-11-13"
 section: "build-logs"
@@ -8,7 +8,7 @@ seriesOrder: 9
 tags: ["Agentic AI", "Claude Code", "Python", "LLM", "Security", "Gmail API"]
 ---
 
-The Second brain page from [part 8](/blog/site-second-brain-page) shows a reading list. This part is about where that list comes from: a Python pipeline on my own machine that reads newsletters and engineering blogs, has a language model triage them, lets me rate what it found, and publishes a signed snapshot. I built it over twelve days with Claude Code, and kept a rolling build log of every command, output, error and fix, 33 entries in all. This post is that log turned into a story, failures included, because the failures are where I learned the most.
+The Memex page from [part 8](/blog/site-second-brain-page) shows a reading list. This part is about where that list comes from: a Python pipeline on my own machine that reads newsletters and engineering blogs, has a language model triage them, lets me rate what it found, and publishes a signed snapshot. I built it over twelve days with Claude Code, and kept a rolling build log of every command, output, error and fix, 33 entries in all. This post is that log turned into a story, failures included, because the failures are where I learned the most.
 
 {/* series:start */}
 
@@ -21,8 +21,8 @@ The Second brain page from [part 8](/blog/site-second-brain-page) shows a readin
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
 7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
-8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
-9. **Building the Second brain pipeline** (this post): from a Gmail 403 to signed files, with Claude Code.
+8. [The Memex page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. **Building the Memex pipeline** (this post): from a Gmail 403 to signed files, with Claude Code.
 
 Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
 
@@ -346,7 +346,7 @@ Public-safety check passed (702 files).
 
 ## Summary
 
-The Second brain pipeline reads newsletters through an allowlist and dozens of feeds and watched pages, unwraps tracking links without clicking them, triages each document with a tool-less `claude -p` behind a schema and checks in code, stores everything in SQLite, lets me rate it on a local page, learns from those ratings through in-context examples measured against gates written in advance, and publishes a whitelisted, signed snapshot that the site verifies. It was built in an agent loop with Claude Code, and its build log kept the failures: a quota hit at exactly its limit, a global install that broke another tool, scores that moved between identical runs, a Save that passed every test but not mine, and line endings that broke every signature in CI.
+The Memex pipeline reads newsletters through an allowlist and dozens of feeds and watched pages, unwraps tracking links without clicking them, triages each document with a tool-less `claude -p` behind a schema and checks in code, stores everything in SQLite, lets me rate it on a local page, learns from those ratings through in-context examples measured against gates written in advance, and publishes a whitelisted, signed snapshot that the site verifies. It was built in an agent loop with Claude Code, and its build log kept the failures: a quota hit at exactly its limit, a global install that broke another tool, scores that moved between identical runs, a Save that passed every test but not mine, and line endings that broke every signature in CI.
 
 ![A map of the pipeline post. Ingest: an allowlist, feeds, sitemaps and page polls, polite and cached. Judge: claude -p with no tools, a schema and checks in code. Curate: ratings, labels that beat the model, Good reads. Publish: signed files, a merge into the site repo, and CI that caught a line-ending bug.](/images/build-logs/building-this-site/second-brain-pipeline/summary-map.svg)
 

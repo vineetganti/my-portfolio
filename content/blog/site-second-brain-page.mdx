@@ -1,5 +1,5 @@
 ---
-title: "The Second brain page: signed snapshots and no write path"
+title: "The Memex page: signed snapshots and no write path"
 description: "Part 8 of the build log for this site. A page that shows data from outside the repository without trusting it: files signed with Ed25519 on the owner's machine, verified on their raw bytes before anything is parsed, validated field by field, cached for 15 minutes, and refused if anything is off. Five explicit states, a signed kill switch, an upload script that refuses early, and the first real upload, which failed on a missing file."
 date: "2026-11-13"
 section: "build-logs"
@@ -8,7 +8,13 @@ seriesOrder: 8
 tags: ["Security", "Ed25519", "Next.js", "Vercel Blob", "Caching"]
 ---
 
-Every other page on this site is built from files in the repository, which only I can change. The Second brain page is different: it shows a reading list that a separate pipeline publishes every few days, from my own machine, without a push. So the site has to show data it didn't build, and the question this part answers is how to do that without the page becoming something anyone can write to.
+<Callout type="updated" title="Renamed on 2026-11-18: Second brain is now Memex">
+
+The page was called **Second brain** at `/second-brain` when this part was written; it is now **Memex** at [`/memex`](/memex), named after Vannevar Bush's 1945 idea of a desk that stores what you read. The old address and its feed answer 308 Permanent Redirect to the new ones. The code keeps the old name where it is plumbing: the `second-brain/` pipeline folder, the `SECOND_BRAIN_*` settings and the Blob folder, so nothing that publishes to the page had to change. Commands below that were run before the rename show the old address.
+
+</Callout>
+
+Every other page on this site is built from files in the repository, which only I can change. The Memex page is different: it shows a reading list that a separate pipeline publishes every few days, from my own machine, without a push. So the site has to show data it didn't build, and the question this part answers is how to do that without the page becoming something anyone can write to.
 
 {/* series:start */}
 
@@ -21,8 +27,8 @@ Every other page on this site is built from files in the repository, which only 
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
 7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
-8. **The Second brain page** (this post): signed snapshots, verification before parsing, and no write path.
-9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+8. **The Memex page** (this post): signed snapshots, verification before parsing, and no write path.
+9. [Building the Memex pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
 
 Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
 
@@ -144,7 +150,7 @@ export async function getSecondBrain(): Promise<SecondBrainSnapshot> {
 
 ## Five states, one that shows data
 
-![The five states the Second brain page can be in. Off: SECOND_BRAIN_ENABLED is false, the page is a 404 and the nav link is hidden. Not configured: no base URL or public key, the page says not set up yet. Paused: the signed status says enabled false, the page shows the note. Unavailable: the status did not verify, or no list did. OK: verified lists are shown, with a notice if they are older than 7 days.](/images/build-logs/building-this-site/site-second-brain-page/page-states.svg)
+![The five states the Memex page can be in. Off: SECOND_BRAIN_ENABLED is false, the page is a 404 and the nav link is hidden. Not configured: no base URL or public key, the page says not set up yet. Paused: the signed status says enabled false, the page shows the note. Unavailable: the status did not verify, or no list did. OK: verified lists are shown, with a notice if they are older than 7 days.](/images/build-logs/building-this-site/site-second-brain-page/page-states.svg)
 
 `getSecondBrain` returns a tagged union, and the page renders each case explicitly:
 
@@ -160,7 +166,7 @@ export async function getSecondBrain(): Promise<SecondBrainSnapshot> {
 
 Rendering is plain text only: titles, summaries and notes are React text, never HTML, so nothing in a file can inject markup. Links open with `rel="noopener noreferrer nofollow"`, the summaries are labelled as written by an AI model, and the page carries `robots: { index: false }` while it is a beta. The RSS route is built from the same verified data ([part 4](/blog/site-notes-and-feeds)).
 
-✅ The live page on 2026-11-13:
+✅ The live page on 2026-11-13, at its address then (it now redirects to `/memex`, so add `-L` to repeat this):
 
 ```bash title="Command"
 curl -s -o /dev/null -w "%{http_code}\n" https://www.vineetganti.com/second-brain
@@ -252,9 +258,9 @@ The kill switch and the way back are written down before they are needed:
 
 ## Summary
 
-The Second brain page shows data the site didn't build, without giving anyone a way to write to it. Files are signed on my machine; the site holds only the public key, verifies each file's raw bytes before parsing, validates every field into a fresh object, falls back to the previous verified copy, caches the result for 15 minutes, and turns every outcome into one of five named states, failing closed when the signed status can't be checked. The upload script verifies everything with the same code before it touches the network and uploads the status last. The first real upload stopped safely on a missing file, and the live page now verifies and shows its empty lists.
+The Memex page shows data the site didn't build, without giving anyone a way to write to it. Files are signed on my machine; the site holds only the public key, verifies each file's raw bytes before parsing, validates every field into a fresh object, falls back to the previous verified copy, caches the result for 15 minutes, and turns every outcome into one of five named states, failing closed when the signed status can't be checked. The upload script verifies everything with the same code before it touches the network and uploads the status last. The first real upload stopped safely on a missing file, and the live page now verifies and shows its empty lists.
 
-![A map of the Second brain page post. Boundary: no write path, the private key stays local. Verify: signature on raw bytes first, then validation. Fail safe: a previous copy, closed failure, five explicit states. Operate: verified upload, a kill switch and a rollback ladder.](/images/build-logs/building-this-site/site-second-brain-page/summary-map.svg)
+![A map of the Memex page post. Boundary: no write path, the private key stays local. Verify: signature on raw bytes first, then validation. Fail safe: a previous copy, closed failure, five explicit states. Operate: verified upload, a kill switch and a rollback ladder.](/images/build-logs/building-this-site/site-second-brain-page/summary-map.svg)
 
 ### Key takeaways
 

@@ -22,9 +22,12 @@ const nextConfig: NextConfig = {
       })),
       // The single build-log post was split into the "Building this site" series.
       { source: "/blog/how-this-site-is-built", destination: "/blog/series/building-this-site", permanent: true },
-      // The old placeholder "Good reads" page now lives inside the Second brain page. Temporary (307) while it is a beta,
+      // The old placeholder "Good reads" page now lives inside the Memex page. Temporary (307) while it is a beta,
       // so withdrawing the beta does not leave a permanent redirect cached in browsers.
-      { source: "/reads", destination: "/second-brain#good-reads", permanent: false },
+      { source: "/reads", destination: "/memex#good-reads", permanent: false },
+      // The Memex page was called Second brain until 2026-11-18. Permanent, so feed readers move the subscription.
+      { source: "/second-brain", destination: "/memex", permanent: true },
+      { source: "/second-brain/feed.xml", destination: "/memex/feed.xml", permanent: true },
     ];
   },
   experimental: {

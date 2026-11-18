@@ -45,19 +45,19 @@ src/
     sections.ts    the list of sections and series (edit this to add one)
     speech.ts      turns the rendered post into chunks for the audio player
     projects.ts    reads project files
-    secondBrain.ts       fetches and verifies the Second brain snapshot (server only)
+    secondBrain.ts       fetches and verifies the Memex snapshot (server only)
     secondBrainCore.mjs  signature check and validation, shared by the site, the upload script and the tests
-next.config.ts     redirects for renamed posts, and /reads to /second-brain
-second-brain/      the Python pipeline behind the Second brain page (its own README); PRIVATE DATA LIVES IN second-brain/data/, IGNORED
+next.config.ts     redirects for renamed posts, and /reads to /memex
+second-brain/      the Python pipeline behind the Memex page (its own README); PRIVATE DATA LIVES IN second-brain/data/, IGNORED
 scripts/
   check-public-safety.mjs     fails if a database, token, key or personal path is tracked (CI runs it on every push)
   upload-second-brain.mjs     verifies, then uploads the signed snapshot to Vercel Blob
   second-brain.test.mjs       tests, with a fixture signed by the Python code (npm run test:second-brain)
 ```
 
-## Second brain (beta)
+## Memex (beta)
 
-`/second-brain` shows a shelf of good reads and a short daily list. The owner picks what is on it; an AI writes the summaries. The Python pipeline in `second-brain/` signs a small snapshot with a private key that stays on the owner's machine; the page verifies it before showing anything and has no write path. Details, the file contract, the beta exit criteria and the rollback steps are in [second-brain/docs/second-brain-contract.md](second-brain/docs/second-brain-contract.md).
+`/memex` (called Second brain at `/second-brain` until 2026-11-18; the old address redirects) shows a shelf of good reads and a short daily list. The owner picks what is on it; an AI writes the summaries. The Python pipeline in `second-brain/` signs a small snapshot with a private key that stays on the owner's machine; the page verifies it before showing anything and has no write path. Details, the file contract, the beta exit criteria and the rollback steps are in [second-brain/docs/second-brain-contract.md](second-brain/docs/second-brain-contract.md).
 
 | Environment variable | Purpose |
 | --- | --- |
@@ -137,6 +137,7 @@ Everything done so far, newest first. Dates are from the git history.
 
 | Date | What changed |
 | --- | --- |
+| 2026-11-18 | **Memex and a Nuggets card.** Second brain is now Memex at `/memex`, with a line on Vannevar Bush's 1945 memex at the top of the page; `/second-brain` and its feed redirect permanently, and the pipeline's links point at the new address. Nuggets left the header and became a scrollable card under the home page intro. |
 | 2026-11-18 | **Agentic AI series replanned, podcasts removed.** The series grew from 9 to 14 posts in four groups, from Shivank Agarwal's (Future with Shivank) bootcamp modules and lecture explainers for Scaler Academy: new posts on retrieval (embeddings, reranking, chunking, HyDE), long-term memory, observability, guardrails and an inventory agent; the memory, MCP, tools and evaluation posts rewritten or extended. Every lab was re-run on Groq and on Claude (through Claude Code on a subscription, `llm.py` in the lab repos), with the differences measured. New `updated` callout for things that changed after a course; `scripts/build-log/agentic-callouts.mjs` writes the series list. The AI podcast pages, player, lists, upload scripts and the 14 recordings in Vercel Blob were removed; every post keeps the browser voice. New project card: Inventory Agent. |
 | 2026-11-17 | **Agentic AI part 9 and titled code blocks.** *A bug-fixing agent*: a LangGraph loop that repairs crashing Python, from Shivank Agarwal's (Future with Shivank) explainer for Scaler Academy, ported to Groq. Its failures were re-run and measured (a stray bracket in about 3 of 10 replies, a retry that resends the same prompt, 5,003 calls without the brake), with nine diagrams and a new project card linking the GitHub repo. Code fences now take `title="…"` and `output` (`src/lib/rehypeCodeMeta.ts`): a file-and-lines title in the bar, and an output panel joined to its command. `scripts/build-log/draw.mjs` also draws diagrams for `scripts/build-log/diagrams/agentic-ai/`. The first post of the series now credits Shivank's AI Bootcamp for the whole series. |
 | 2026-11-13 | **Podcasts on their own pages.** The AI podcasts moved to `/podcasts` and `/podcasts/<slug>` with one shared player, so every post keeps the browser voice (they had replaced it on the 14 posts with a recording) and links to its episode. A new Podcasts chip on `/blog` leads to the list. Episode lengths are measured with `ffprobe` into `content/audio-durations.json`. Testing leaving a page found that Next keeps the old page hidden, so audio kept playing with its controls hidden; the podcast player now pauses when hidden, and the browser voice resets its state. |
@@ -167,7 +168,7 @@ Everything done so far, newest first. Dates are from the git history.
 - `building-my-first-llm-scheduler` (dated 2024) overlaps with the LLM Architectures post on the queue-scheduler project. Decide whether to merge or retire it.
 - Tags are free-form and a bit inconsistent (AI, LLMs, AI Engineering). A small fixed vocabulary would make them useful as a filter.
 - The `llm-scheduler` project card still has a placeholder GitHub URL.
-- There is no sitemap, search or RSS feed for blog posts yet (the nuggets and the Second brain have feeds).
+- There is no sitemap, search or RSS feed for blog posts yet (the nuggets and the Memex have feeds).
 - The header doesn't fit a phone: at 390 px wide it is 483 px, so About and the theme toggle are off-screen and every page scrolls sideways.
 - The browser voice can send a sentence longer than its 180-character target (327 measured), because the limit only applies when joining sentences.
 - Nugget dates have a time but no time zone, so the RSS `pubDate` depends on the build machine's time zone.

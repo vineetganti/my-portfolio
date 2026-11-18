@@ -11,8 +11,8 @@ const POSTS = [
   ["site-diagrams-that-move", "Diagrams that move", "inlined SVGs, theme tokens, message-flow animation and live charts."],
   ["site-generated-content", "Content generated from real runs", "the DuckDB SQL bank and the database recording harness."],
   ["site-live-postgres", "Real PostgreSQL in the browser", "PGlite on demand, a schema per box, and a download cut by 42%."],
-  ["site-second-brain-page", "The Second brain page", "signed snapshots, verification before parsing, and no write path."],
-  ["second-brain-pipeline", "Building the Second brain pipeline", "from a Gmail 403 to signed files, with Claude Code."],
+  ["site-second-brain-page", "The Memex page", "signed snapshots, verification before parsing, and no write path."],
+  ["second-brain-pipeline", "Building the Memex pipeline", "from a Gmail 403 to signed files, with Claude Code."],
 ];
 
 const START = "{/* series:start */}";

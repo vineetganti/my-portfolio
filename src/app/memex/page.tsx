@@ -6,13 +6,14 @@ import { getSecondBrain, type SecondBrainFeed, type SecondBrainItem } from "@/li
 import { isSafeHttpsUrl } from "@/lib/secondBrainCore.mjs";
 
 export const metadata = {
-  title: "Second brain (beta)",
+  title: "Memex (beta)",
   description: "What I am reading: a shelf of good reads and a short daily list, picked by me and summarised by an AI.",
   // Beta: reachable by link, not yet offered to search engines. Remove when the beta ends.
   robots: { index: false, follow: true },
 };
 
-const REPORT_LINK = "mailto:vineetganti@gmail.com?subject=Second%20brain%20beta%3A%20";
+const REPORT_LINK = "mailto:vineetganti@gmail.com?subject=Memex%20beta%3A%20";
+const AS_WE_MAY_THINK = "https://www.theatlantic.com/magazine/archive/1945/07/as-we-may-think/303881/";
 
 interface HandPicked {
   title: string;
@@ -88,11 +89,20 @@ export default async function SecondBrainPage() {
     <div className="max-w-content mx-auto">
       <header>
         <h1 className="font-heading font-extrabold text-4xl sm:text-5xl tracking-[-0.03em] text-ink">
-          Second brain{" "}
+          Memex{" "}
           <span className="align-middle rounded-full bg-accent-tint px-2.5 py-1 text-xs font-extrabold uppercase tracking-wide text-ink-strong">
             Beta
           </span>
         </h1>
+        {/* Why the name: the first thing a visitor reads. */}
+        <p className="mt-3 border-l-2 border-accent pl-3 text-ink-muted leading-relaxed">
+          In 1945 Vannevar Bush imagined the <em>memex</em>, a desk that would store a person&rsquo;s books, records and communications as
+          &ldquo;an enlarged intimate supplement to his memory&rdquo; (
+          <a href={AS_WE_MAY_THINK} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4 hover:text-accent">
+            As We May Think
+          </a>
+          ). This is my small one: what I read, kept so I can find it again.
+        </p>
         <p className="mt-4 text-lg text-ink-2 leading-relaxed">
           What I am reading and learning from. <a href="#good-reads" className="underline underline-offset-4 hover:text-accent">Good reads</a> is
           the shelf of posts worth keeping; <a href="#daily" className="underline underline-offset-4 hover:text-accent">Daily</a> is a short list
@@ -108,7 +118,7 @@ export default async function SecondBrainPage() {
             <>
               {" · "}Updated <time dateTime={snapshot.updatedAt}>{format(new Date(snapshot.updatedAt), "MMM d, yyyy")}</time>
               {" · "}
-              <a href="/second-brain/feed.xml" className="underline underline-offset-4 hover:text-accent">
+              <a href="/memex/feed.xml" className="underline underline-offset-4 hover:text-accent">
                 RSS
               </a>
             </>

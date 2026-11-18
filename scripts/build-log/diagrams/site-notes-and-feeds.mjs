@@ -26,14 +26,14 @@ const post = {
     },
 
     "two-feeds": {
-      alt: "The site's two RSS feeds come from different places. The notes feed is built from files in the repository at build time. The Second brain feed is built at request time from data that has already passed signature verification, never by copying the uploaded XML file.",
+      alt: "The site's two RSS feeds come from different places. The notes feed is built from files in the repository at build time. The Memex feed is built at request time from data that has already passed signature verification, never by copying the uploaded XML file.",
       draw(c) {
         c.size(720, 250).title("Two RSS routes, two levels of trust");
         c.text(20, 60, "Notes: from the repository", { size: 12.5, weight: 700, fill: AMBER });
         const a = c.box(20, 72, 150, 50, "markdown files", { tone: "plain", lines: "in git, reviewed" });
         const b = c.box(220, 72, 150, 50, "route handler", { tone: "amber", lines: "escapes, builds XML" });
         c.arrow(a.right, b.left);
-        c.text(20, 160, "Second brain: from verified data", { size: 12.5, weight: 700, fill: GREEN });
+        c.text(20, 160, "Memex: from verified data", { size: 12.5, weight: 700, fill: GREEN });
         const d = c.box(20, 172, 150, 50, "signed JSON", { tone: "cream", lines: "from Blob" });
         const e = c.box(220, 172, 150, 50, "verify + validate", { tone: "green", lines: "secondBrainCore" });
         const f = c.box(420, 172, 150, 50, "feed.xml route", { tone: "raised", lines: "builds XML from it" });

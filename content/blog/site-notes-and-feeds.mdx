@@ -21,8 +21,8 @@ Not everything is worth a blog post. A thought about a navigation app, a one-lin
 5. [Diagrams that move](/blog/site-diagrams-that-move): inlined SVGs, theme tokens, message-flow animation and live charts.
 6. [Content generated from real runs](/blog/site-generated-content): the DuckDB SQL bank and the database recording harness.
 7. [Real PostgreSQL in the browser](/blog/site-live-postgres): PGlite on demand, a schema per box, and a download cut by 42%.
-8. [The Second brain page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
-9. [Building the Second brain pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
+8. [The Memex page](/blog/site-second-brain-page): signed snapshots, verification before parsing, and no write path.
+9. [Building the Memex pipeline](/blog/second-brain-pipeline): from a Gmail 403 to signed files, with Claude Code.
 
 Each part explains one feature from its code, and marks where every result comes from: ✅ ran here (re-run for this series on 2026-11-13), 📜 from the build log at the time, or 📘 from the code or docs only. The code is on [GitHub](https://github.com/vineetganti/my-portfolio).
 
@@ -35,7 +35,7 @@ Each part explains one feature from its code, and marks where every result comes
 - **A nugget is one Markdown file** in `content/notes/` with a date and plain text: no title, tags or images.
 - **One reader, one component, three places.** `notes.ts` filters and sorts the files; `NoteList` renders them on `/notes` and in a scrolling box on the home page; a route handler turns the same list into RSS at `/notes/feed.xml`.
 - **The feed is static.** ✅ The build lists `/notes/feed.xml` as prerendered, so it is a file until the next push.
-- **The site's second feed is built from verified data.** The Second brain's RSS is generated from JSON that passed a signature check, never by serving the uploaded XML, and it answers 503 when nothing verifies.
+- **The site's second feed is built from verified data.** The Memex's RSS is generated from JSON that passed a signature check, never by serving the uploaded XML, and it answers 503 when nothing verifies.
 - ✅ **A trap found while re-checking:** a date with a time but no time zone is read as local time, so the feed's `pubDate` depends on the time zone of the machine that builds it.
 
 ## What a nugget is
@@ -143,11 +143,11 @@ Nothing is broken today, because only one nugget exists and the order between nu
 
 ## The site's other feed: built from verified data
 
-![The site's two RSS feeds come from different places. The notes feed is built from files in the repository at build time. The Second brain feed is built at request time from data that has already passed signature verification, never by copying the uploaded XML file.](/images/build-logs/building-this-site/site-notes-and-feeds/two-feeds.svg)
+![The site's two RSS feeds come from different places. The notes feed is built from files in the repository at build time. The Memex feed is built at request time from data that has already passed signature verification, never by copying the uploaded XML file.](/images/build-logs/building-this-site/site-notes-and-feeds/two-feeds.svg)
 
-The [Second brain page](/blog/site-second-brain-page) has an RSS feed of its Good reads shelf at `/second-brain/feed.xml`. Its data comes from outside the repository, so the route does more than the nuggets feed:
+The [Memex page](/blog/site-second-brain-page) has an RSS feed of its Good reads shelf at `/memex/feed.xml`. Its data comes from outside the repository, so the route does more than the nuggets feed:
 
-```ts title="src/app/second-brain/feed.xml/route.ts (shortened)"
+```ts title="src/app/memex/feed.xml/route.ts (shortened)"
 export async function GET() {
   const snapshot = await getSecondBrain(); // fetched, signature-checked, validated, cached 15 min
   if (snapshot.state === "off") return new Response("Not found", { status: 404 });
@@ -158,7 +158,7 @@ export async function GET() {
 }
 ```
 
-The pipeline uploads a signed `good-reads.xml` too, and the route ignores it. It rebuilds the XML from the JSON that passed verification, so a feed reader only ever receives whitelisted, escaped text and https links. When nothing verifies, it answers [503 Service Unavailable](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/503) with `Retry-After: 900`, telling a feed reader to try again in 15 minutes, the length of the cache. ✅ On the dev server, which has no Second brain settings, that is exactly what it returned: `503 text/plain`.
+The pipeline uploads a signed `good-reads.xml` too, and the route ignores it. It rebuilds the XML from the JSON that passed verification, so a feed reader only ever receives whitelisted, escaped text and https links. When nothing verifies, it answers [503 Service Unavailable](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/503) with `Retry-After: 900`, telling a feed reader to try again in 15 minutes, the length of the cache. ✅ On the dev server, which has no Memex settings, that is exactly what it returned: `503 text/plain`.
 
 ## Things that can trip you up
 
@@ -171,12 +171,12 @@ The pipeline uploads a signed `good-reads.xml` too, and the route ignores it. It
 
 1. ✅ **Add a nugget.** Create `content/notes/<date>-<name>.md` with a `date` and some text. It appears on `/notes` and on the home page.
 2. ✅ **Read the feed.** `curl -s http://localhost:3000/notes/feed.xml` on a running site. Check the `pubDate` against the date in your file and your machine's time zone.
-3. ✅ **See the 503.** Without `SECOND_BRAIN_BASE_URL` and `SECOND_BRAIN_PUBLIC_KEY` set, `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/second-brain/feed.xml` prints `503`.
+3. ✅ **See the 503.** Without `SECOND_BRAIN_BASE_URL` and `SECOND_BRAIN_PUBLIC_KEY` set, `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/memex/feed.xml` prints `503`.
 4. 📘 **Validate a feed.** Paste the XML into the [W3C Feed Validation Service](https://validator.w3.org/feed/). ⚠️ I have only checked the XML by eye and with `curl`, not with a validator or a feed reader.
 
 ## Summary
 
-A nugget is one dated Markdown file. `notes.ts` drops bad ones and sorts the rest, `NoteList` renders the same list on two pages, and a static route handler turns it into RSS with escaped text, stable ids and RFC 822 dates. The Second brain feed follows the same shape but is built only from data that passed a signature check, and says 503 when there is none. Re-checking the first feed found a time-zone trap: a time without an offset means whatever the build machine thinks it means.
+A nugget is one dated Markdown file. `notes.ts` drops bad ones and sorts the rest, `NoteList` renders the same list on two pages, and a static route handler turns it into RSS with escaped text, stable ids and RFC 822 dates. The Memex feed follows the same shape but is built only from data that passed a signature check, and says 503 when there is none. Re-checking the first feed found a time-zone trap: a time without an offset means whatever the build machine thinks it means.
 
 ![A map of the notes post. Writing: one Markdown file with a date. Reading: notes.ts filters and sorts. Showing: /notes, the home page box and NoteList. Feeding: RSS 2.0 built by a route handler.](/images/build-logs/building-this-site/site-notes-and-feeds/summary-map.svg)
 
@@ -215,7 +215,7 @@ If `<` were replaced first, its replacement `&lt;` would contain an `&` that the
 </details>
 
 <details>
-<summary>Why doesn't the Second brain feed just serve the signed good-reads.xml?</summary>
+<summary>Why doesn't the Memex feed just serve the signed good-reads.xml?</summary>
 
 The site validates the JSON field by field and whitelists what it shows. Rebuilding the XML from that data guarantees the feed contains nothing the page wouldn't show; serving the received file would skip those checks.
 

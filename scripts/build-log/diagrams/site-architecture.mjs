@@ -5,7 +5,7 @@ const post = {
   slug: "site-architecture",
   diagrams: {
     "two-paths": {
-      alt: "Two ways a page reaches a reader. At build time, a git push starts next build on Vercel, which prerenders every page to static HTML that a CDN serves to readers. At request time, only the Second brain page does work: its cached render fetches signed files from Vercel Blob at most every 15 minutes.",
+      alt: "Two ways a page reaches a reader. At build time, a git push starts next build on Vercel, which prerenders every page to static HTML that a CDN serves to readers. At request time, only the Memex page does work: its cached render fetches signed files from Vercel Blob at most every 15 minutes.",
       draw(c) {
         c.size(720, 300).title("Almost everything happens before anyone visits");
         c.text(20, 62, "Build time: once per push", { size: 12.5, weight: 700, fill: AMBER });
@@ -17,7 +17,7 @@ const post = {
         c.arrow(build.right, cdn.left);
         c.arrow(cdn.right, reader.left);
         c.text(20, 182, "Request time: one page, at most every 15 minutes", { size: 12.5, weight: 700, fill: GREEN });
-        const visitor = c.box(20, 194, 120, 56, "visitor", { tone: "plain", lines: "/second-brain" });
+        const visitor = c.box(20, 194, 120, 56, "visitor", { tone: "plain", lines: "/memex" });
         const cached = c.box(190, 194, 150, 56, "cached render", { tone: "green", lines: "'use cache', 15 min" });
         const blob = c.box(390, 194, 130, 56, "Vercel Blob", { tone: "cream", lines: "signed files" });
         c.arrow(visitor.right, cached.left);
@@ -34,7 +34,7 @@ const post = {
     },
 
     "server-and-client": {
-      alt: "Which code runs where. Server components run at build time and send only HTML: the pages, MdxContent with its diagram inliner, the post and lab readers, and the Second brain verifier. Client components are small islands that ship JavaScript: the audio players, the table of contents, diagram motion and flow animation, live charts, the database labs and the flash cards.",
+      alt: "Which code runs where. Server components run at build time and send only HTML: the pages, MdxContent with its diagram inliner, the post and lab readers, and the Memex verifier. Client components are small islands that ship JavaScript: the audio players, the table of contents, diagram motion and flow animation, live charts, the database labs and the flash cards.",
       draw(c) {
         c.size(720, 330).title("Server components send HTML, client islands send JavaScript");
         c.rect(20, 46, 330, 262, { tone: "neutral" });
@@ -60,7 +60,7 @@ const post = {
     },
 
     "ci-jobs": {
-      alt: "The checks every push and pull request runs on GitHub Actions: a public-safety job that fails if a private file or secret is tracked, a site job that lints, runs the Node tests, type-checks and builds, and a pipeline job that runs the Python tests for the Second brain.",
+      alt: "The checks every push and pull request runs on GitHub Actions: a public-safety job that fails if a private file or secret is tracked, a site job that lints, runs the Node tests, type-checks and builds, and a pipeline job that runs the Python tests for the Memex.",
       draw(c) {
         c.size(720, 250).title("Three independent CI jobs");
         const trigger = c.box(20, 104, 130, 60, "push or PR", { tone: "plain", lines: "GitHub Actions" });
@@ -71,7 +71,7 @@ const post = {
         c.arrow(trigger.right, site.left);
         c.arrow([150, 146], [228, 201]);
         c.para(470, 70, "A job that fails blocks the merge. The safety job needs no install, so it reports first.", { width: 230 });
-        c.para(470, 150, "The site job builds with no Second brain settings on purpose: the page must still build when it is not set up.", { width: 230 });
+        c.para(470, 150, "The site job builds with no Memex settings on purpose: the page must still build when it is not set up.", { width: 230 });
         c.flow("push or PR", "public-safety", "", "request");
         c.flow("push or PR", "site", "", "request");
         c.flow("push or PR", "second-brain", "", "request");

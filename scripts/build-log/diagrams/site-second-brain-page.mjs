@@ -18,7 +18,7 @@ const post = {
         c.rect(520, 46, 180, 220, { tone: "green" });
         c.text(536, 70, "Website (public)", { size: 12.5, weight: 700, fill: GREEN });
         const site = c.box(536, 84, 148, 52, "secondBrain.ts", { tone: "plain", lines: "public key only" });
-        c.box(536, 150, 148, 52, "/second-brain", { tone: "plain", lines: "text only, no form" });
+        c.box(536, 150, 148, 52, "/memex", { tone: "plain", lines: "text only, no form" });
         c.arrow(pub.bottom, up.top);
         c.arrow([254, 176], [318, 155]);
         c.arrow([470, 140], [534, 110], { color: GREEN });
@@ -49,7 +49,7 @@ const post = {
     },
 
     "page-states": {
-      alt: "The five states the Second brain page can be in. Off: SECOND_BRAIN_ENABLED is false, the page is a 404 and the nav link is hidden. Not configured: no base URL or public key, the page says not set up yet. Paused: the signed status says enabled false, the page shows the note. Unavailable: the status did not verify, or no list did. OK: verified lists are shown, with a notice if they are older than 7 days.",
+      alt: "The five states the Memex page can be in. Off: SECOND_BRAIN_ENABLED is false, the page is a 404 and the nav link is hidden. Not configured: no base URL or public key, the page says not set up yet. Paused: the signed status says enabled false, the page shows the note. Unavailable: the status did not verify, or no list did. OK: verified lists are shown, with a notice if they are older than 7 days.",
       draw(c) {
         c.size(720, 230).title("Every outcome has a state, and only one shows data");
         const states = [
@@ -81,11 +81,11 @@ const post = {
     },
 
     "summary-map": {
-      alt: "A map of the Second brain page post. Boundary: no write path, the private key stays local. Verify: signature on raw bytes first, then validation. Fail safe: a previous copy, closed failure, five explicit states. Operate: verified upload, a kill switch and a rollback ladder.",
+      alt: "A map of the Memex page post. Boundary: no write path, the private key stays local. Verify: signature on raw bytes first, then validation. Fail safe: a previous copy, closed failure, five explicit states. Operate: verified upload, a kill switch and a rollback ladder.",
       draw(c) {
         summaryMap(
           c,
-          "The Second brain page",
+          "The Memex page",
           [
             { name: "Boundary", lines: ["no write path", "public key only", "token stays local"] },
             { name: "Verify", lines: ["Ed25519 on bytes", "then parse", "then validate"] },

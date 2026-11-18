@@ -19,7 +19,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: "About", href: "/about" },
 ];
 
-const SECOND_BRAIN_ITEM: NavItem = { label: "Second brain", shortLabel: "Brain", href: "/second-brain", beta: true };
+// The page was called "Second brain" until 2026-11-18; /second-brain redirects here (next.config.ts).
+const SECOND_BRAIN_ITEM: NavItem = { label: "Memex", href: "/memex", beta: true };
 
 /** `secondBrain` is decided on the server (SECOND_BRAIN_ENABLED), because this component runs in the browser. */
 export default function Header({ secondBrain = true }: { secondBrain?: boolean }) {

@@ -41,13 +41,14 @@ const post = {
     },
 
     redirects: {
-      alt: "Three kinds of redirect in next.config.ts. Renamed posts, such as mentiforce01, answer 308 Permanent Redirect to their new slug. The retired build-log post how-this-site-is-built answers 308 to the series page. The old Good reads page /reads answers 307 Temporary Redirect to the Second brain page, because that page is a beta.",
+      alt: "Four redirects in next.config.ts. Renamed posts, such as mentiforce01, answer 308 Permanent Redirect to their new slug. The retired build-log post how-this-site-is-built answers 308 to the series page. The old Good reads page /reads answers 307 Temporary Redirect to the Memex page, because that page is a beta. The Memex page's old address /second-brain answers 308 to /memex, and its feed likewise, so feed readers move the subscription.",
       draw(c) {
-        c.size(720, 280).title("Old URLs keep working");
+        c.size(720, 350).title("Old URLs keep working");
         const rows = [
           ["/blog/mentiforce01", "308", "/blog/python-internals-…", GREEN, "renamed post"],
           ["/blog/how-this-site-is-built", "308", "/blog/series/building-…", GREEN, "post split into a series"],
-          ["/reads", "307", "/second-brain#good-reads", AMBER, "beta, so not permanent"],
+          ["/reads", "307", "/memex#good-reads", AMBER, "beta, so not permanent"],
+          ["/second-brain", "308", "/memex", GREEN, "page renamed; feed too"],
         ];
         rows.forEach(([from, code, to, color, why], i) => {
           const y = 54 + i * 70;
@@ -58,7 +59,7 @@ const post = {
           c.arrow([320, y + 23], [348, y + 23], { color });
           c.para(572, y + 20, why, { width: 130, size: 10.5 });
         });
-        c.text(20, 268, "308 is cached by browsers and search engines; 307 can be withdrawn without leaving a stale redirect behind.", { size: 11, fill: FAINT });
+        c.text(20, 338, "308 is cached by browsers and search engines; 307 can be withdrawn without leaving a stale redirect behind.", { size: 11, fill: FAINT });
       },
     },
 

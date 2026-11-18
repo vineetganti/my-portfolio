@@ -5,7 +5,7 @@ const post = {
   slug: "second-brain-pipeline",
   diagrams: {
     pipeline: {
-      alt: "The Second brain pipeline end to end. Sources: Gmail newsletters through an allowlist, RSS and Atom feeds, sitemaps and listing pages, NITI PDFs and SEC EDGAR filings. Parse: HTML to text, tracking links unwrapped or resolved, paywalled stories dropped. Triage: claude -p with no tools and a JSON schema scores each document. SQLite stores items, the seen-set and the owner's labels. The local curator page collects ratings. nb publish signs the public files, and the upload script sends them to the website.",
+      alt: "The Memex pipeline end to end. Sources: Gmail newsletters through an allowlist, RSS and Atom feeds, sitemaps and listing pages, NITI PDFs and SEC EDGAR filings. Parse: HTML to text, tracking links unwrapped or resolved, paywalled stories dropped. Triage: claude -p with no tools and a JSON schema scores each document. SQLite stores items, the seen-set and the owner's labels. The local curator page collects ratings. nb publish signs the public files, and the upload script sends them to the website.",
       draw(c) {
         c.size(720, 330).title("From a newsletter to a signed public file");
         const src = [["Gmail", "allowlist"], ["RSS / Atom", "feeds by topic"], ["sitemaps, pages", "watched"], ["NITI, EDGAR", "PDFs, filings"]];
@@ -163,7 +163,7 @@ const post = {
       draw(c) {
         summaryMap(
           c,
-          "The Second brain pipeline",
+          "The Memex pipeline",
           [
             { name: "Ingest", lines: ["Gmail allowlist", "60+ sources", "watched pages", "polite, cached"] },
             { name: "Judge", lines: ["claude -p", "no tools", "JSON schema", "checks in code"] },
